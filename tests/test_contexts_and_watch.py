@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -125,6 +126,37 @@ def test_watch_derives_only_config_and_provider_files(
     }
 
 
+def test_sync_json_lists_watch_targets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(home))
+    project = tmp_path / "project"
+    project.mkdir()
+    config = default_project_config("prod")
+    write_config(project / "sftpwarden.yaml", config)
+    (project / "users.yaml").write_text(empty_provider_text(config.provider.type), encoding="utf-8")
+    entry = remote_context(
+        name="prod",
+        provider=config.provider.type,
+        remote_url="deploy@example.com:/opt/sftpwarden",
+        local_root=project,
+        remote_root="~/sftpwarden",
+        remote_only=False,
+        ssh_key=None,
+        critical=True,
+    )
+    save_registry(ContextRegistry(default="prod", contexts={"prod": entry}))
+
+    result = CliRunner().invoke(app, ["sync", "--json", "--dry-run"])
+    data = json.loads(result.output)
+
+    assert result.exit_code == 0, result.output
+    assert data["dry_run"] is True
+    assert {target["remote_path"] for target in data["targets"]} == {
+        "/opt/sftpwarden/sftpwarden.yaml",
+        "/opt/sftpwarden/users.yaml",
+    }
+
+
 def test_watch_uses_provider_path_from_context_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -208,6 +240,23 @@ def test_refresh_all_resolves_registered_contexts(
     targets = resolve_refresh_targets(all_contexts=True)
 
     assert [target.name for target in targets] == ["one", "two"]
+
+
+def test_refresh_json_reports_dry_run_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(home))
+    context = local_context("dev", tmp_path / "dev-project", ProviderType.YAML)
+    save_registry(ContextRegistry(default="dev", contexts={"dev": context}))
+
+    result = CliRunner().invoke(app, ["refresh", "--dry-run", "--json"])
+    data = json.loads(result.output)
+
+    assert result.exit_code == 0, result.output
+    assert data["dry_run"] is True
+    assert data["targets"][0]["context"] == "dev"
+    assert "docker compose" in data["targets"][0]["result"]
 
 
 def test_refresh_all_requires_registered_contexts(
@@ -336,6 +385,22 @@ def test_watcher_install_is_idempotent_and_can_replace(
     assert "Watcher mode: docker" in status.output
     watcher_path = Path(load_global_config().watcher.path or "")
     assert "/var/run/docker.sock" not in watcher_path.read_text(encoding="utf-8")
+
+
+def test_watcher_status_json_reports_state_and_targets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    runner = CliRunner()
+    runner.invoke(app, ["watcher", "install", "--watcher", "systemd", "--yes", "--no-activate"])
+
+    result = runner.invoke(app, ["watcher", "status", "--json"])
+    data = json.loads(result.output)
+
+    assert result.exit_code == 0, result.output
+    assert data["installed"] is True
+    assert data["mode"] == "systemd"
+    assert data["targets"] == []
 
 
 def test_watcher_uninstall_clears_global_metadata(

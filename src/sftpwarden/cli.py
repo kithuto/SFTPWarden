@@ -67,6 +67,7 @@ from sftpwarden.watcher import (
     installed_watcher_mode,
     poll_watch,
     uninstall_watcher,
+    watcher_status_data,
     watcher_status_text,
 )
 
@@ -127,6 +128,13 @@ def runtime_plan_to_json(runtime_plan: RuntimePlan) -> str:
         indent=2,
         sort_keys=True,
     )
+
+
+def print_json(data) -> None:
+    text = data if isinstance(data, str) else json.dumps(data, indent=2, sort_keys=True)
+    console.file.write(text)
+    console.file.write("\n")
+    console.file.flush()
 
 
 def print_runtime_plan(runtime_plan: RuntimePlan) -> None:
@@ -375,7 +383,7 @@ def info(
     try:
         entry = resolve_context(config_path=config, context_name=context)
         if json_output:
-            console.print(entry.model_dump_json(indent=2))
+            print_json(entry.model_dump_json(indent=2))
             return
         table = Table(title=f"Context {entry.name}")
         table.add_column("Field")
@@ -390,10 +398,23 @@ def info(
 @app.command()
 def validate(
     config: Annotated[str, typer.Option("--config", help="Config file path.")] = "sftpwarden.yaml",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     try:
-        loaded = load_config(config)
-        provider_path = provider_local_path(Path(config).parent, loaded)
+        config_path = expand_path(config)
+        loaded = load_config(config_path)
+        provider_path = provider_local_path(config_path.parent, loaded)
+        if json_output:
+            print_json(
+                {
+                    "valid": True,
+                    "project": loaded.project.name,
+                    "provider": loaded.provider.type.value,
+                    "config_path": str(config_path),
+                    "provider_path": str(provider_path),
+                }
+            )
+            return
         console.print(
             f"[green]Valid config[/green] for project [bold]{loaded.project.name}[/bold]."
         )
@@ -437,7 +458,7 @@ def plan(
         state = RuntimeState.load(Path(entry.root) / "state" / "state.json")
         runtime_plan = build_runtime_plan(loaded, users, state)
         if json_output:
-            console.print(runtime_plan_to_json(runtime_plan))
+            print_json(runtime_plan_to_json(runtime_plan))
             return
         console.print(f"Context: [bold]{entry.name}[/bold]")
         console.print(f"Provider users: {len(users.users)}")
@@ -453,21 +474,46 @@ def refresh(
     config: Annotated[str | None, typer.Option("--config")] = None,
     all_contexts: Annotated[bool, typer.Option("--all")] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     try:
         targets = resolve_refresh_targets(
             all_contexts=all_contexts, context_name=context, config_path=config
         )
+        results = []
         for target in targets:
-            console.print(refresh_context(target, dry_run=dry_run))
+            output = refresh_context(target, dry_run=dry_run)
+            results.append({"context": target.name, "result": output})
+            if not json_output:
+                console.print(output)
+        if json_output:
+            print_json({"dry_run": dry_run, "targets": results})
     except SFTPWardenError as exc:
         handle_error(exc)
 
 
 @app.command()
-def sync(dry_run: Annotated[bool, typer.Option("--dry-run")] = False) -> None:
+def sync(
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
     try:
         targets = derive_watch_targets()
+        if json_output:
+            print_json(
+                {
+                    "dry_run": dry_run,
+                    "targets": [
+                        {
+                            "context": target.context,
+                            "local_path": str(target.local_path),
+                            "remote_path": target.remote_path,
+                        }
+                        for target in targets
+                    ],
+                }
+            )
+            return
         for target in targets:
             console.print(f"{target.context}: {target.local_path} -> {target.remote_path}")
         if dry_run:
@@ -509,20 +555,28 @@ def deploy(
 
 
 @app.command()
-def doctor() -> None:
+def doctor(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
+    checks = [
+        {"name": binary, "available": shutil.which(binary) is not None}
+        for binary in ("docker", "ssh", "rsync")
+    ]
+    if json_output:
+        print_json({"checks": checks})
+        return
     console.print("SFTPWarden doctor")
-    for binary in ("docker", "ssh", "rsync"):
-        status = "available" if shutil.which(binary) else "check PATH"
-        console.print(f"- {binary}: {status}")
+    for check in checks:
+        status = "available" if check["available"] else "check PATH"
+        console.print(f"- {check['name']}: {status}")
 
 
 @config_app.command("show")
 def config_show(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
     try:
         data = global_config_data()
-        console.print(
-            json.dumps(data, indent=2) if json_output else yaml.safe_dump(data, sort_keys=False)
-        )
+        if json_output:
+            print_json(data)
+            return
+        console.print(yaml.safe_dump(data, sort_keys=False))
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -545,7 +599,7 @@ def config_default_provider(provider: Annotated[str | None, typer.Argument()] = 
 def context_ls(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
     registry = load_registry()
     if json_output:
-        console.print(registry.model_dump_json(indent=2))
+        print_json(registry.model_dump_json(indent=2))
         return
     table = Table(title="SFTPWarden contexts")
     table.add_column("Default")
@@ -600,7 +654,7 @@ def context_clear() -> None:
 def context_show(name: str | None = None) -> None:
     try:
         entry = resolve_context(context_name=name)
-        console.print(entry.model_dump_json(indent=2))
+        print_json(entry.model_dump_json(indent=2))
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -695,7 +749,10 @@ def context_add(
 
 
 @watcher_app.command("status")
-def watcher_status() -> None:
+def watcher_status(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
+    if json_output:
+        print_json(watcher_status_data())
+        return
     console.print(watcher_status_text())
 
 
@@ -761,7 +818,7 @@ def users_list(
         loaded = load_config(entry.config)
         users = load_users_from_project(entry.root, loaded)
         if json_output:
-            console.print(users.model_dump_json(indent=2))
+            print_json(users.model_dump_json(indent=2))
             return
         table = Table(title=f"Users in {entry.name}")
         table.add_column("Username")
@@ -786,13 +843,15 @@ def users_list(
 
 @user_app.command("show")
 def user_show(
-    username: str, context: Annotated[str | None, typer.Option("--context", "-c")] = None
+    username: str,
+    context: Annotated[str | None, typer.Option("--context", "-c")] = None,
+    config: Annotated[str | None, typer.Option("--config")] = None,
 ) -> None:
     try:
-        entry = resolve_context(context_name=context)
+        entry = resolve_context(config_path=config, context_name=context)
         loaded = load_config(entry.config)
         user = find_user(load_users_from_project(entry.root, loaded), username)
-        console.print(user.model_dump_json(indent=2))
+        print_json(user.model_dump_json(indent=2))
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -932,7 +991,7 @@ def runtime_plan(
         loaded, users, state = load_runtime_inputs(config)
         sync_plan = build_runtime_plan(loaded, users, state)
         if json_output:
-            console.print(runtime_plan_to_json(sync_plan))
+            print_json(runtime_plan_to_json(sync_plan))
             return
         console.print(sync_plan.summary())
         print_runtime_plan(sync_plan)

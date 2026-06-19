@@ -96,16 +96,33 @@ def derive_watch_targets() -> list[WatchTarget]:
 
 
 def watcher_status_text() -> str:
+    data = watcher_status_data()
+    lines = [
+        f"Watcher installed: {data['installed']}",
+        f"Watcher mode: {data['mode'] or ''}",
+        f"Watcher path: {data['path'] or ''}",
+        f"Remote local-sync targets: {len(data['targets'])}",
+    ]
+    lines.extend(f"- {target['context']}: {target['local_path']}" for target in data["targets"])
+    return "\n".join(lines)
+
+
+def watcher_status_data() -> dict:
     state = load_global_config().watcher
     targets = derive_watch_targets()
-    lines = [
-        f"Watcher installed: {state.installed}",
-        f"Watcher mode: {state.mode or ''}",
-        f"Watcher path: {state.path or ''}",
-        f"Remote local-sync targets: {len(targets)}",
-    ]
-    lines.extend(f"- {target.context}: {target.local_path}" for target in targets)
-    return "\n".join(lines)
+    return {
+        "installed": state.installed,
+        "mode": state.mode,
+        "path": state.path,
+        "targets": [
+            {
+                "context": target.context,
+                "local_path": str(target.local_path),
+                "remote_path": target.remote_path,
+            }
+            for target in targets
+        ],
+    }
 
 
 def default_watcher_mode() -> WatcherInstallMode:

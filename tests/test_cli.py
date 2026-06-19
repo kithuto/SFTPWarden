@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import yaml
@@ -22,6 +23,30 @@ def test_init_named_context_creates_project_name(tmp_path: Path, monkeypatch) ->
     assert config.project.name == "dev"
     assert (root / "users.yaml").exists()
     assert (root / "docker-compose.yml").exists()
+
+
+def test_validate_json_reports_config_and_provider(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "dev-project"
+    runner = CliRunner()
+    runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
+
+    result = runner.invoke(app, ["validate", "--config", str(root / "sftpwarden.yaml"), "--json"])
+    data = json.loads(result.output)
+
+    assert result.exit_code == 0, result.output
+    assert data["valid"] is True
+    assert data["project"] == "dev"
+    assert data["provider"] == "yaml"
+    assert data["provider_path"] == str(root / "users.yaml")
+
+
+def test_doctor_json_reports_checks() -> None:
+    result = CliRunner().invoke(app, ["doctor", "--json"])
+    data = json.loads(result.output)
+
+    assert result.exit_code == 0, result.output
+    assert {check["name"] for check in data["checks"]} == {"docker", "ssh", "rsync"}
 
 
 def test_user_add_hashes_plaintext_password(tmp_path: Path, monkeypatch) -> None:
@@ -106,6 +131,35 @@ def test_user_add_stores_comment(tmp_path: Path, monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     assert provider["users"][0]["comment"] == "Finance dropbox"
+
+
+def test_user_show_accepts_config_path(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "dev-project"
+    runner = CliRunner()
+    runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
+    runner.invoke(
+        app,
+        [
+            "user",
+            "add",
+            "heidi",
+            "--password-hash",
+            "$6$rounds=500000$saltstring$hashvalue",
+            "--context",
+            "dev",
+            "--no-refresh",
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        ["user", "show", "heidi", "--config", str(root / "sftpwarden.yaml")],
+    )
+    data = json.loads(result.output)
+
+    assert result.exit_code == 0, result.output
+    assert data["username"] == "heidi"
 
 
 def test_user_add_runs_real_refresh_by_default(tmp_path: Path, monkeypatch) -> None:
