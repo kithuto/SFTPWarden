@@ -23,6 +23,8 @@ This repository currently implements the foundation for package structure, CLI, 
 
 Remote deployment automation, watcher service installation, SQL write strategies, image publishing, and CI publishing are intentionally staged for later milestones.
 
+The canonical runtime Dockerfile lives at `docker/runtime/Dockerfile`. The top-level `Dockerfile` remains for compatibility while the project structure settles.
+
 ## Install for Development
 
 ```bash
@@ -138,6 +140,17 @@ sftpwarden refresh -c prod --dry-run
 ## Documentation
 
 - [Configuration](docs/configuration.md)
+- [CLI](docs/cli.md)
 - [Contexts](docs/contexts.md)
+- [Remote Contexts](docs/remote-contexts.md)
+- [Watcher](docs/watcher.md)
+- [Refresh](docs/refresh.md)
+- [Users](docs/users.md)
+- [Providers](docs/providers.md)
 - [Runtime](docs/runtime.md)
+- [Isolation Model](docs/isolation-model.md)
 - [Security](docs/security.md)
+- [Operations](docs/operations.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Architecture](docs/architecture.md)
+- [Roadmap](docs/roadmap.md)

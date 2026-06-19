@@ -10,14 +10,14 @@ import tomli_w
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from sftpwarden.config import ProviderType
-from sftpwarden.constants import (
+from sftpwarden.utils.errors import ConfigError
+from sftpwarden.utils.constants import (
     DEFAULT_LOCAL_ROOT,
     DEFAULT_PROVIDER,
     DEFAULT_REMOTE_ROOT,
     DEFAULT_SSH_PORT,
 )
-from sftpwarden.errors import ConfigError
-from sftpwarden.paths import app_home, global_config_path
+from sftpwarden.utils.paths import app_home, global_config_path
 
 
 class DefaultsConfig(BaseModel):

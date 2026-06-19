@@ -12,9 +12,9 @@ import tomli_w
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from sftpwarden.config import ProviderType, RemoteStorage, load_config
-from sftpwarden.constants import CONFIG_FILENAME, DEFAULT_SSH_PORT, PRODUCTION_NAMES
-from sftpwarden.errors import ContextError
-from sftpwarden.paths import contexts_path, expand_path
+from sftpwarden.utils.errors import ContextError
+from sftpwarden.utils.constants import CONFIG_FILENAME, DEFAULT_SSH_PORT, PRODUCTION_NAMES
+from sftpwarden.utils.paths import contexts_path, expand_path
 
 
 class ContextType(StrEnum):
@@ -57,12 +57,12 @@ class ContextRegistry(BaseModel):
 
 @dataclass(frozen=True)
 class ParsedRemoteURL:
-    user: str
+    user: str | None
     host: str
     path: str | None
 
 
-REMOTE_RE = re.compile(r"^(?P<user>[^@\s:]+)@(?P<host>[^:\s]+)(?::(?P<path>.+))?$")
+REMOTE_RE = re.compile(r"^(?:(?P<user>[^@\s:]+)@)?(?P<host>[^:\s]+)(?::(?P<path>.+))?$")
 
 
 def is_production_like(name: str) -> bool:
@@ -74,7 +74,7 @@ def parse_remote_url(value: str) -> ParsedRemoteURL:
     if not match:
         raise ContextError(
             f"Invalid remote URL: {value}",
-            suggestion="Use the form user@host:/absolute/path.",
+            suggestion="Use the form [user@]host[:/absolute/path].",
         )
     return ParsedRemoteURL(
         user=match.group("user"),
@@ -207,10 +207,28 @@ def remote_context(
     remote_only: bool,
     ssh_key: str | None,
     critical: bool,
+    remote_user: str | None = None,
+    explicit_remote_root: str | None = None,
     port: int = DEFAULT_SSH_PORT,
 ) -> ContextEntry:
     parsed = parse_remote_url(remote_url)
-    final_remote_root = parsed.path or remote_root
+    if parsed.user and remote_user and parsed.user != remote_user:
+        raise ContextError(
+            "Remote URL user and --user do not match.",
+            suggestion="Use either the URL user or --user, or make both values equal.",
+        )
+    final_user = parsed.user or remote_user
+    if not final_user:
+        raise ContextError(
+            "Remote user is required.",
+            suggestion="Use user@host:/path or pass --user.",
+        )
+    if parsed.path and explicit_remote_root and parsed.path != explicit_remote_root:
+        raise ContextError(
+            "Remote URL path and --remote-root do not match.",
+            suggestion="Use either the URL path or --remote-root, or make both values equal.",
+        )
+    final_remote_root = parsed.path or explicit_remote_root or remote_root
     storage = RemoteStorage.REMOTE_ONLY if remote_only else RemoteStorage.LOCAL_SYNC
     root = "" if remote_only else str(expand_path(local_root or f"~/sftpwarden-{name}"))
     config = "" if remote_only else str(Path(root) / CONFIG_FILENAME)
@@ -225,7 +243,7 @@ def remote_context(
         watcher_required=storage == RemoteStorage.LOCAL_SYNC,
         remote=RemoteEndpoint(
             host=parsed.host,
-            user=parsed.user,
+            user=final_user,
             port=port,
             remote_root=final_remote_root,
             remote_config=f"{final_remote_root.rstrip('/')}/{CONFIG_FILENAME}",

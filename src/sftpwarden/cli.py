@@ -12,7 +12,6 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from sftpwarden import __version__
-from sftpwarden.compose import compose_text, write_compose
 from sftpwarden.config import (
     ProviderType,
     default_project_config,
@@ -20,7 +19,13 @@ from sftpwarden.config import (
     provider_local_path,
     write_config,
 )
-from sftpwarden.console import console
+from sftpwarden.config.global_config import (
+    ensure_home,
+    global_config_data,
+    load_global_config,
+    resolve_provider,
+    save_global_config,
+)
 from sftpwarden.contexts import (
     is_production_like,
     load_registry,
@@ -31,28 +36,17 @@ from sftpwarden.contexts import (
     resolve_context,
     set_default_context,
 )
-from sftpwarden.errors import SFTPWardenError
-from sftpwarden.global_config import (
-    ensure_home,
-    global_config_data,
-    load_global_config,
-    resolve_provider,
-    save_global_config,
-)
-from sftpwarden.passwords import resolve_password_hash
-from sftpwarden.paths import expand_path
+from sftpwarden.utils.errors import SFTPWardenError
 from sftpwarden.providers import (
     SFTPUser,
     empty_provider_text,
     find_user,
     load_users_from_project,
-    save_users,
-    upsert_user,
-)
-from sftpwarden.providers import (
-    remove_user as remove_provider_user,
+    provider_from_config,
 )
 from sftpwarden.refresh import refresh_context, resolve_refresh_targets
+from sftpwarden.remote.checks import verify_remote_runtime_requirements
+from sftpwarden.render.compose import compose_text, write_compose
 from sftpwarden.runtime import (
     RuntimePlan,
     RuntimeState,
@@ -61,6 +55,9 @@ from sftpwarden.runtime import (
     load_runtime_inputs,
     run_sync_loop,
 )
+from sftpwarden.security.passwords import resolve_password_hash
+from sftpwarden.utils.console import console
+from sftpwarden.utils.paths import expand_path
 from sftpwarden.watcher import derive_watch_targets, poll_watch
 
 app = typer.Typer(help="Container-native SFTP gateway powered by OpenSSH.")
@@ -496,9 +493,13 @@ def context_add(
     ] = None,
     root: Annotated[str | None, typer.Option("--root")] = None,
     provider: Annotated[str | None, typer.Option("--provider")] = None,
+    remote_user: Annotated[str | None, typer.Option("--user")] = None,
+    port: Annotated[int | None, typer.Option("--port")] = None,
+    remote_root: Annotated[str | None, typer.Option("--remote-root")] = None,
     remote_only: Annotated[bool, typer.Option("--remote-only")] = False,
     ssh_key: Annotated[str | None, typer.Option("--ssh-key")] = None,
     critical: Annotated[bool, typer.Option("--critical")] = False,
+    skip_checks: Annotated[bool, typer.Option("--skip-checks")] = False,
     yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
 ) -> None:
     try:
@@ -523,8 +524,12 @@ def context_add(
                 remote_only=remote_only,
                 ssh_key=ssh_key,
                 critical=critical,
-                port=defaults.ssh_port,
+                remote_user=remote_user,
+                explicit_remote_root=remote_root,
+                port=port or defaults.ssh_port,
             )
+            if entry.remote and not skip_checks:
+                verify_remote_runtime_requirements(entry.remote)
         else:
             selected_root = expand_path(root or ".")
             loaded = load_config(selected_root / "sftpwarden.yaml")
@@ -620,8 +625,7 @@ def user_add(
     try:
         entry = resolve_context(context_name=context)
         loaded = load_config(entry.config)
-        provider_path = provider_local_path(entry.root, loaded)
-        users = load_users_from_project(entry.root, loaded)
+        provider = provider_from_config(entry.root, loaded)
         resolved_password_hash = prompt_password_hash(
             password=password,
             password_hash=password_hash,
@@ -635,7 +639,7 @@ def user_add(
             uid=uid,
             gid=gid,
         )
-        save_users(loaded.provider.type, provider_path, upsert_user(users, user))
+        provider.upsert_user(user)
         console.print(f"[green]Saved[/green] user [bold]{username}[/bold].")
         if not no_refresh:
             console.print(refresh_context(entry, dry_run=True))
@@ -658,8 +662,8 @@ def user_update(
     try:
         entry = resolve_context(context_name=context)
         loaded = load_config(entry.config)
-        provider_path = provider_local_path(entry.root, loaded)
-        users = load_users_from_project(entry.root, loaded)
+        provider = provider_from_config(entry.root, loaded)
+        users = provider.read()
         existing = find_user(users, username)
         resolved_password_hash = prompt_password_hash(
             password=password,
@@ -674,7 +678,7 @@ def user_update(
                 "disabled": disabled if disabled is not None else existing.disabled,
             }
         )
-        save_users(loaded.provider.type, provider_path, upsert_user(users, updated))
+        provider.upsert_user(updated)
         console.print(f"[green]Updated[/green] user [bold]{username}[/bold].")
         console.print(refresh_context(entry, dry_run=True))
     except SFTPWardenError as exc:
@@ -694,9 +698,7 @@ def user_remove(
             raise typer.Exit(1)
         entry = resolve_context(context_name=context)
         loaded = load_config(entry.config)
-        provider_path = provider_local_path(entry.root, loaded)
-        users = remove_provider_user(load_users_from_project(entry.root, loaded), username)
-        save_users(loaded.provider.type, provider_path, users)
+        provider_from_config(entry.root, loaded).remove_user(username)
         console.print(f"[green]Removed[/green] user [bold]{username}[/bold].")
         console.print(refresh_context(entry, dry_run=True))
     except SFTPWardenError as exc:

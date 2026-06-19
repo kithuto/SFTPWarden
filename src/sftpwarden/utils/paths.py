@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from sftpwarden.constants import CONFIG_FILENAME, DEFAULT_HOME
+from sftpwarden.utils.constants import CONFIG_FILENAME, DEFAULT_HOME
 
 
 def expand_path(value: str | Path) -> Path:

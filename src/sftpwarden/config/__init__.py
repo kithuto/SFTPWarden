@@ -1,21 +1,24 @@
 from __future__ import annotations
 
 import json
+import re
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from sftpwarden.constants import (
+from sftpwarden.utils.errors import ConfigError
+from sftpwarden.utils.constants import (
     CONFIG_FILENAME,
     CONTAINER_PROVIDER_DIR,
     DEFAULT_GROUP,
     HOST_SSH_PORT,
 )
-from sftpwarden.errors import ConfigError
-from sftpwarden.paths import expand_path
+from sftpwarden.utils.paths import expand_path
+
+SQL_TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
 
 
 class ProviderType(StrEnum):
@@ -88,6 +91,12 @@ class IsolationConfig(BaseModel):
     root_permissions: str = "755"
     upload_permissions: str = "750"
 
+    @field_validator("upload_dir")
+    @classmethod
+    def validate_upload_dir(cls, value: str) -> str:
+        validate_relative_safe_path(value, field_name="isolation.upload_dir")
+        return value
+
 
 class UidGidConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -111,14 +120,28 @@ class ProviderConfig(BaseModel):
     path: str = f"{CONTAINER_PROVIDER_DIR}/users.yaml"
     dsn: str | None = None
     query: str | None = None
+    table: str = "sftp_users"
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        validate_provider_path(value)
+        return value
+
+    @field_validator("table")
+    @classmethod
+    def validate_table(cls, value: str) -> str:
+        if not SQL_TABLE_RE.fullmatch(value):
+            raise ValueError("provider.table must be a table name or schema-qualified table name.")
+        return value
 
     @model_validator(mode="after")
     def validate_provider(self) -> ProviderConfig:
         if self.type in {ProviderType.MYSQL, ProviderType.POSTGRESQL}:
             if not self.dsn:
                 raise ValueError(f"{self.type.value} provider requires dsn.")
-        elif self.dsn or self.query:
-            raise ValueError("dsn/query are only supported for SQL providers.")
+        elif self.dsn or self.query or self.table != "sftp_users":
+            raise ValueError("dsn/query/table are only supported for SQL providers.")
         return self
 
 
@@ -243,7 +266,9 @@ def provider_local_path(project_root: str | Path, config: SFTPWardenConfig) -> P
     root = expand_path(project_root)
     provider_path = Path(config.provider.path)
     if provider_path.is_absolute():
+        validate_provider_path(provider_path.name)
         return root / provider_path.name
+    validate_relative_safe_path(str(provider_path), field_name="provider.path")
     return root / provider_path
 
 
@@ -257,3 +282,17 @@ def validate_raw_config_keys(data: dict[str, Any]) -> None:
             "server.container_port is not supported. The container SSH port is always 22.",
             suggestion="Use server.port to configure the host port exposed by Docker.",
         )
+
+
+def validate_relative_safe_path(value: str, *, field_name: str) -> None:
+    path = Path(value)
+    if path.is_absolute():
+        raise ValueError(f"{field_name} must be relative.")
+    if not value or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError(f"{field_name} must not contain empty, current, or parent segments.")
+
+
+def validate_provider_path(value: str | Path) -> None:
+    path = Path(value)
+    if any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError("provider.path must not contain empty, current, or parent segments.")

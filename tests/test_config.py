@@ -7,7 +7,7 @@ import yaml
 from pydantic import ValidationError
 
 from sftpwarden.config import SFTPWardenConfig, WatcherConfig, WatcherMode, load_config
-from sftpwarden.errors import ConfigError
+from sftpwarden.utils.errors import ConfigError
 from sftpwarden.runtime import render_sshd_config_text
 
 
@@ -100,3 +100,39 @@ def test_password_authentication_can_be_disabled_for_key_only() -> None:
 
     assert "PasswordAuthentication no" in rendered
     assert "PubkeyAuthentication yes" in rendered
+
+
+def test_provider_path_rejects_traversal() -> None:
+    with pytest.raises(ValidationError):
+        SFTPWardenConfig.model_validate(
+            {
+                "version": 1,
+                "project": {"name": "dev"},
+                "provider": {"type": "yaml", "path": "../users.yaml"},
+            }
+        )
+
+
+def test_upload_dir_rejects_traversal() -> None:
+    with pytest.raises(ValidationError):
+        SFTPWardenConfig.model_validate(
+            {
+                "version": 1,
+                "project": {"name": "dev"},
+                "isolation": {"upload_dir": "../upload"},
+                "provider": {"type": "yaml", "path": "/etc/sftpwarden/users.yaml"},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        Path("examples/yaml/sftpwarden.yaml"),
+        Path("examples/csv/sftpwarden.yaml"),
+        Path("examples/mysql/sftpwarden.yaml"),
+        Path("examples/postgres/sftpwarden.yaml"),
+    ],
+)
+def test_examples_validate(path: Path) -> None:
+    assert load_config(path).project.name

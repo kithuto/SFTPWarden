@@ -87,3 +87,5 @@ watcher:
 ```
 
 `watcher.include` and `watcher.exclude` are not valid project config. The CLI derives watched files from context and provider configuration.
+
+Provider paths and upload directories reject parent-directory traversal. Usernames are restricted to OpenSSH-safe account names.

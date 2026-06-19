@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-
 import yaml
 
 from sftpwarden.config import SFTPWardenConfig, provider_local_path
-from sftpwarden.constants import CONTAINER_CONFIG_PATH
-from sftpwarden.paths import expand_path
+from sftpwarden.utils.constants import CONTAINER_CONFIG_PATH
+from sftpwarden.utils.paths import expand_path
 
 
 def compose_model(config: SFTPWardenConfig, project_root: str | Path = ".") -> dict:

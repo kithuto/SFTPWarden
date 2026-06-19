@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from sftpwarden.config import load_config, provider_local_path
-from sftpwarden.constants import IGNORED_WATCH_PARTS, WATCHED_FILENAMES
 from sftpwarden.contexts import ContextEntry, ContextType, load_registry
-from sftpwarden.errors import ContextError
-from sftpwarden.ssh import uses_default_ssh_identity
+from sftpwarden.utils.errors import ContextError
+from sftpwarden.remote.ssh import uses_default_ssh_identity
+from sftpwarden.utils.constants import IGNORED_WATCH_PARTS, WATCHED_FILENAMES
 
 
 @dataclass(frozen=True)

@@ -10,8 +10,8 @@ from sftpwarden.contexts import (
     load_registry,
     resolve_context,
 )
-from sftpwarden.errors import ContextError, RuntimeError
-from sftpwarden.ssh import uses_default_ssh_identity
+from sftpwarden.utils.errors import ContextError, RuntimeError
+from sftpwarden.remote.ssh import uses_default_ssh_identity
 
 
 def docker_compose_command(context: ContextEntry) -> list[str]:

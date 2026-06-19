@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from sftpwarden.config import ProjectConfig, SFTPWardenConfig
-from sftpwarden.errors import RuntimeError
+from sftpwarden.utils.errors import RuntimeError
 from sftpwarden.providers import ProviderUsers, SFTPUser
 from sftpwarden.runtime import (
     RuntimeState,

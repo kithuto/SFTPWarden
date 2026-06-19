@@ -9,10 +9,11 @@ from sftpwarden.contexts import (
     ContextRegistry,
     ContextType,
     local_context,
+    parse_remote_url,
     remote_context,
     save_registry,
 )
-from sftpwarden.errors import ContextError
+from sftpwarden.utils.errors import ContextError
 from sftpwarden.providers import empty_provider_text
 from sftpwarden.refresh import refresh_context, resolve_refresh_targets
 from sftpwarden.watcher import derive_watch_targets, should_watch
@@ -37,6 +38,47 @@ def test_remote_only_context_has_empty_top_level_paths() -> None:
     assert entry.watcher_required is False
     assert entry.remote is not None
     assert entry.remote.remote_config == "/opt/sftpwarden/sftpwarden.yaml"
+
+
+def test_remote_url_allows_missing_user_with_flag() -> None:
+    entry = remote_context(
+        name="prod",
+        provider=ProviderType.YAML,
+        remote_url="example.com:/opt/sftpwarden",
+        local_root=None,
+        remote_root="~/sftpwarden",
+        remote_only=True,
+        ssh_key=None,
+        critical=True,
+        remote_user="deploy",
+    )
+
+    assert entry.remote is not None
+    assert entry.remote.user == "deploy"
+    assert entry.remote.host == "example.com"
+
+
+def test_remote_url_rejects_user_conflict() -> None:
+    with pytest.raises(ContextError, match="do not match"):
+        remote_context(
+            name="prod",
+            provider=ProviderType.YAML,
+            remote_url="deploy@example.com:/opt/sftpwarden",
+            local_root=None,
+            remote_root="~/sftpwarden",
+            remote_only=True,
+            ssh_key=None,
+            critical=True,
+            remote_user="other",
+        )
+
+
+def test_remote_url_parser_accepts_host_only() -> None:
+    parsed = parse_remote_url("example.com")
+
+    assert parsed.user is None
+    assert parsed.host == "example.com"
+    assert parsed.path is None
 
 
 def test_watch_derives_only_config_and_provider_files(

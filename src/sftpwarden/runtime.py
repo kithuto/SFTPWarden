@@ -11,9 +11,9 @@ from pathlib import Path
 from typing import Any, Literal
 
 from sftpwarden.config import SFTPWardenConfig, load_config
-from sftpwarden.constants import CONTAINER_CONFIG_PATH
-from sftpwarden.errors import RuntimeError
+from sftpwarden.utils.errors import RuntimeError
 from sftpwarden.providers import ProviderUsers, SFTPUser, load_users, users_fingerprint
+from sftpwarden.utils.constants import CONTAINER_CONFIG_PATH
 
 SSHD_CONFIG_PATH = Path("/etc/ssh/sshd_config")
 DISABLED_PASSWORD_HASH = "!"
@@ -466,7 +466,13 @@ def load_runtime_inputs(
 ) -> tuple[SFTPWardenConfig, ProviderUsers, RuntimeState]:
     config = load_config(config_path)
     provider_path = Path(config.provider.path)
-    users = load_users(config.provider.type, provider_path)
+    users = load_users(
+        config.provider.type,
+        provider_path,
+        dsn=config.provider.dsn,
+        query=config.provider.query,
+        table=config.provider.table,
+    )
     state = RuntimeState.load(state_path(config))
     return config, users, state
 

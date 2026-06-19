@@ -13,6 +13,7 @@ SFTPWarden follows conservative defaults for an SFTP gateway.
 - Core workflows do not manage host firewall rules and do not require `sudo`.
 - Remote watcher design does not require Docker socket access.
 - SSH private keys should be mounted read-only when a Docker watcher is used.
+- Provider paths, usernames, and upload directories are validated to prevent traversal and unsafe account names.
 
 ## SSH Restrictions
 
