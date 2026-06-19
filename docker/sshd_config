@@ -4,7 +4,6 @@ HostKey /etc/sftpwarden/host_keys/ssh_host_ed25519_key
 HostKey /etc/sftpwarden/host_keys/ssh_host_rsa_key
 
 PidFile /run/sshd.pid
-UsePAM no
 PermitRootLogin no
 PermitEmptyPasswords no
 PasswordAuthentication yes
@@ -12,7 +11,6 @@ PubkeyAuthentication yes
 AuthorizedKeysFile /etc/sftpwarden/authorized_keys/%u
 KbdInteractiveAuthentication no
 ChallengeResponseAuthentication no
-GSSAPIAuthentication no
 X11Forwarding no
 AllowAgentForwarding no
 AllowTcpForwarding no

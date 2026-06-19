@@ -11,3 +11,5 @@ def test_dockerfile_keeps_runtime_lightweight() -> None:
     assert "build-base" not in dockerfile
     assert "gcc" not in dockerfile
     assert "apt-get" not in dockerfile
+    assert "tini" in dockerfile
+    assert "--no-cache-dir" in dockerfile

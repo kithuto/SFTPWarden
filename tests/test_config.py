@@ -82,6 +82,8 @@ def test_password_authentication_is_enabled_by_default() -> None:
     assert config.auth.allow_password is True
     assert config.auth.recommended == "password"
     assert "PasswordAuthentication yes" in render_sshd_config_text(config)
+    assert "UsePAM" not in render_sshd_config_text(config)
+    assert "GSSAPIAuthentication" not in render_sshd_config_text(config)
 
 
 def test_password_authentication_can_be_disabled_for_key_only() -> None:

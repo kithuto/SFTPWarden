@@ -8,6 +8,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from sftpwarden.config import SFTPWardenConfig, load_config
 from sftpwarden.constants import CONTAINER_CONFIG_PATH
@@ -15,29 +16,52 @@ from sftpwarden.errors import RuntimeError
 from sftpwarden.providers import ProviderUsers, SFTPUser, load_users, users_fingerprint
 
 SSHD_CONFIG_PATH = Path("/etc/ssh/sshd_config")
+DISABLED_PASSWORD_HASH = "!"
+NO_PASSWORD_HASH = "*"
+
+
+@dataclass
+class RuntimeUserState:
+    uid: int
+    gid: int
+    disabled: bool = False
 
 
 @dataclass
 class RuntimeState:
-    uid_map: dict[str, int]
+    users: dict[str, RuntimeUserState]
     fingerprint: str | None = None
 
     @classmethod
     def load(cls, path: Path) -> RuntimeState:
         if not path.exists():
-            return cls(uid_map={})
+            return cls(users={})
         data = json.loads(path.read_text(encoding="utf-8"))
-        return cls(
-            uid_map={str(k): int(v) for k, v in data.get("uid_map", {}).items()},
-            fingerprint=data.get("fingerprint"),
-        )
+        return cls(users=parse_state_users(data), fingerprint=data.get("fingerprint"))
+
+    @property
+    def uid_map(self) -> dict[str, int]:
+        return {username: state.uid for username, state in self.users.items()}
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(
             json.dumps(
-                {"uid_map": self.uid_map, "fingerprint": self.fingerprint}, indent=2, sort_keys=True
+                {
+                    "version": 2,
+                    "users": {
+                        username: {
+                            "uid": user_state.uid,
+                            "gid": user_state.gid,
+                            "disabled": user_state.disabled,
+                        }
+                        for username, user_state in sorted(self.users.items())
+                    },
+                    "fingerprint": self.fingerprint,
+                },
+                indent=2,
+                sort_keys=True,
             ),
             encoding="utf-8",
         )
@@ -49,6 +73,22 @@ class ResolvedUser:
     spec: SFTPUser
     uid: int
     gid: int
+
+
+def parse_state_users(data: dict[str, Any]) -> dict[str, RuntimeUserState]:
+    if isinstance(data.get("users"), dict):
+        return {
+            str(username): RuntimeUserState(
+                uid=int(values["uid"]),
+                gid=int(values.get("gid", values["uid"])),
+                disabled=bool(values.get("disabled", False)),
+            )
+            for username, values in data["users"].items()
+        }
+    return {
+        str(username): RuntimeUserState(uid=int(uid), gid=int(uid))
+        for username, uid in data.get("uid_map", {}).items()
+    }
 
 
 def run_command(args: list[str]) -> None:
@@ -73,7 +113,6 @@ HostKey {config.server.host_keys_dir}/ssh_host_ed25519_key
 HostKey {config.server.host_keys_dir}/ssh_host_rsa_key
 
 PidFile /run/sshd.pid
-UsePAM no
 PermitRootLogin no
 PermitEmptyPasswords no
 PasswordAuthentication {password_auth}
@@ -81,7 +120,6 @@ PubkeyAuthentication {public_key_auth}
 AuthorizedKeysFile /etc/sftpwarden/authorized_keys/%u
 KbdInteractiveAuthentication no
 ChallengeResponseAuthentication no
-GSSAPIAuthentication no
 X11Forwarding no
 AllowAgentForwarding no
 AllowTcpForwarding no
@@ -113,33 +151,74 @@ def state_path(config: SFTPWardenConfig) -> Path:
     return Path(config.server.state_dir) / "state.json"
 
 
+def validate_runtime_users(config: SFTPWardenConfig, users: ProviderUsers) -> None:
+    for user in users.users:
+        if user.disabled:
+            continue
+        has_password = has_usable_password_hash(user)
+        has_key = bool(user.public_keys)
+        if has_password and config.auth.allow_password:
+            continue
+        if has_key and config.auth.allow_public_key:
+            continue
+        raise RuntimeError(
+            f"User {user.username} has no enabled authentication method.",
+            suggestion=(
+                "Add a password hash, add a public key, or enable the matching auth method "
+                "in sftpwarden.yaml."
+            ),
+        )
+
+
+def has_usable_password_hash(user: SFTPUser) -> bool:
+    return bool(user.password_hash and not user.password_hash.startswith(("!", "*")))
+
+
 def allocate_users(
     config: SFTPWardenConfig, users: ProviderUsers, state: RuntimeState
 ) -> list[ResolvedUser]:
-    used_ids = set(state.uid_map.values())
+    explicit_uids: dict[int, str] = {}
+    explicit_gids: dict[int, str] = {}
     for user in users.users:
+        if user.uid is not None and user.uid in explicit_uids:
+            raise RuntimeError(
+                f"UID {user.uid} is assigned to both {explicit_uids[user.uid]} and {user.username}."
+            )
+        if user.gid is not None and user.gid in explicit_gids:
+            raise RuntimeError(
+                f"GID {user.gid} is assigned to both {explicit_gids[user.gid]} and {user.username}."
+            )
         if user.uid is not None:
-            used_ids.add(user.uid)
+            explicit_uids[user.uid] = user.username
         if user.gid is not None:
-            used_ids.add(user.gid)
+            explicit_gids[user.gid] = user.username
+
+    used_ids = {
+        user_state.uid
+        for username, user_state in state.users.items()
+        if any(user.username == username for user in users.users)
+    }
+    used_ids.update(user.uid for user in users.users if user.uid is not None)
+    used_ids.update(user.gid for user in users.users if user.gid is not None)
 
     next_id = config.uid_gid.start
     resolved: list[ResolvedUser] = []
     seen_ids: set[int] = set()
     for user in users.users:
-        uid = user.uid or state.uid_map.get(user.username)
+        existing_state = state.users.get(user.username)
+        uid = user.uid or (existing_state.uid if existing_state else None)
         if uid is None:
             while next_id in used_ids:
                 next_id += 1
             if next_id > config.uid_gid.end:
                 raise RuntimeError("No UID/GID values remain in the configured allocation range.")
             uid = next_id
-            state.uid_map[user.username] = uid
             used_ids.add(uid)
-        gid = user.gid or uid
+        gid = user.gid or (existing_state.gid if existing_state else uid)
         if uid in seen_ids:
             raise RuntimeError(f"Duplicate UID after allocation: {uid}")
         seen_ids.add(uid)
+        state.users[user.username] = RuntimeUserState(uid=uid, gid=gid, disabled=user.disabled)
         resolved.append(ResolvedUser(spec=user, uid=uid, gid=gid))
     return resolved
 
@@ -147,7 +226,13 @@ def allocate_users(
 def ensure_group(name: str, gid: int | None = None) -> None:
     if (
         shutil.which("getent")
-        and subprocess.run(["getent", "group", name], check=False).returncode == 0
+        and subprocess.run(
+            ["getent", "group", name],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        ).returncode
+        == 0
     ):
         return
     args = ["groupadd"]
@@ -204,10 +289,12 @@ def ensure_system_user(config: SFTPWardenConfig, resolved: ResolvedUser) -> None
                 user.username,
             ]
         )
-    if user.password_hash:
-        run_command(["usermod", "-p", user.password_hash, user.username])
+    if has_usable_password_hash(user):
+        run_command(["usermod", "-p", user.password_hash, user.username]) # type: ignore
+    else:
+        run_command(["usermod", "-p", NO_PASSWORD_HASH, user.username])
     if user.disabled:
-        run_command(["usermod", "-L", user.username])
+        run_command(["usermod", "-p", DISABLED_PASSWORD_HASH, user.username])
     else:
         run_command(["usermod", "-U", user.username])
 
@@ -238,15 +325,19 @@ def disable_missing(config: SFTPWardenConfig, desired: ProviderUsers, state: Run
     if not config.sync.disable_missing_users:
         return
     desired_names = {user.username for user in desired.users}
-    for username in list(state.uid_map):
+    for username, user_state in list(state.users.items()):
         if username not in desired_names and user_exists(username):
-            run_command(["usermod", "-L", username])
+            run_command(["usermod", "-p", DISABLED_PASSWORD_HASH, username])
+            state.users[username] = RuntimeUserState(
+                uid=user_state.uid, gid=user_state.gid, disabled=True
+            )
 
 
 def apply_once(config_path: str | Path = CONTAINER_CONFIG_PATH, *, force: bool = False) -> str:
     config = load_config(config_path)
     provider_path = Path(config.provider.path)
     users = load_users(config.provider.type, provider_path)
+    validate_runtime_users(config, users)
     render_sshd_config(config)
     fingerprint = users_fingerprint(users)
     state_file = state_path(config)

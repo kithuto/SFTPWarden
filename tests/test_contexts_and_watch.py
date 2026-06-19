@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from sftpwarden.config import default_project_config, write_config
+from sftpwarden.config import default_project_config, write_config, ProviderType
 from sftpwarden.contexts import (
     ContextRegistry,
     ContextType,
@@ -20,7 +20,7 @@ from sftpwarden.watcher import derive_watch_targets, should_watch
 def test_remote_only_context_has_empty_top_level_paths() -> None:
     entry = remote_context(
         name="archive",
-        provider="csv",
+        provider=ProviderType.CSV,
         remote_url="deploy@example.com:/opt/sftpwarden",
         local_root=None,
         remote_root="~/sftpwarden",
@@ -74,8 +74,8 @@ def test_refresh_all_resolves_registered_contexts(
 ) -> None:
     home = tmp_path / "home"
     monkeypatch.setenv("SFTPWARDEN_HOME", str(home))
-    one = local_context("one", tmp_path / "one", "yaml")
-    two = local_context("two", tmp_path / "two", "yaml")
+    one = local_context("one", tmp_path / "one", ProviderType.YAML)
+    two = local_context("two", tmp_path / "two", ProviderType.YAML)
     save_registry(ContextRegistry(default="one", contexts={"one": one, "two": two}))
 
     targets = resolve_refresh_targets(all_contexts=True)
@@ -86,7 +86,7 @@ def test_refresh_all_resolves_registered_contexts(
 def test_remote_default_ssh_key_uses_ssh_defaults() -> None:
     entry = remote_context(
         name="prod",
-        provider="yaml",
+        provider=ProviderType.YAML,
         remote_url="deploy@example.com:/opt/sftpwarden",
         local_root=None,
         remote_root="~/sftpwarden",

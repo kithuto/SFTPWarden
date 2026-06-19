@@ -50,11 +50,12 @@ def refresh_context(context: ContextEntry, *, dry_run: bool = False) -> str:
 
     if not context.remote:
         raise ContextError(f"Remote context {context.name} is missing remote settings.")
+    
     command = " ".join(shlex.quote(part) for part in docker_compose_command(context))
     remote_command = f"cd {shlex.quote(context.remote.remote_root)} && {command}"
     ssh = ["ssh", "-p", str(context.remote.port)]
     if not uses_default_ssh_identity(context.remote.ssh_key):
-        ssh.extend(["-i", context.remote.ssh_key])
+        ssh.extend(["-i", context.remote.ssh_key]) # type: ignore
     ssh.append(f"{context.remote.user}@{context.remote.host}")
     ssh.append(remote_command)
     if dry_run:
