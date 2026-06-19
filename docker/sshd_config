@@ -1,0 +1,34 @@
+Port 22
+Protocol 2
+HostKey /etc/sftpwarden/host_keys/ssh_host_ed25519_key
+HostKey /etc/sftpwarden/host_keys/ssh_host_rsa_key
+
+PidFile /run/sshd.pid
+UsePAM no
+PermitRootLogin no
+PermitEmptyPasswords no
+PasswordAuthentication yes
+PubkeyAuthentication yes
+AuthorizedKeysFile /etc/sftpwarden/authorized_keys/%u
+KbdInteractiveAuthentication no
+ChallengeResponseAuthentication no
+GSSAPIAuthentication no
+X11Forwarding no
+AllowAgentForwarding no
+AllowTcpForwarding no
+PermitTunnel no
+AllowStreamLocalForwarding no
+GatewayPorts no
+PermitUserEnvironment no
+PrintMotd no
+Subsystem sftp internal-sftp
+
+Match Group sftpwarden_users
+  ChrootDirectory /data/%u
+  ForceCommand internal-sftp
+  PasswordAuthentication yes
+  PubkeyAuthentication yes
+  PermitTunnel no
+  AllowAgentForwarding no
+  AllowTcpForwarding no
+  X11Forwarding no

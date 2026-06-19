@@ -1,0 +1,81 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sftpwarden"
+version = "0.1.0"
+description = "Container-native SFTP gateway with OpenSSH, chroot isolation, and declarative user provisioning."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "Ignasi Rovira", email = "nacho.rovira94@gmail.com" }]
+keywords = ["sftp", "openssh", "docker", "devops", "platform-engineering"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: System Administrators",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: System :: Systems Administration",
+]
+dependencies = [
+  "pydantic",
+  "pyyaml",
+  "rich",
+  "tomli-w",
+  "typer",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "pytest-cov",
+  "ruff",
+]
+watch = [
+  "watchdog",
+]
+mysql = [
+  "pymysql",
+]
+postgres = [
+  "psycopg[binary]",
+]
+
+[project.urls]
+Homepage = "https://github.com/kithuto/sftpwarden"
+Documentation = "https://github.com/kithuto/sftpwarden#readme"
+Issues = "https://github.com/kithuto/sftpwarden/issues"
+
+[project.scripts]
+sftpwarden = "sftpwarden.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sftpwarden"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = ["old"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S", "SIM"]
+ignore = [
+  "S101",
+  "S104",
+  "S105",
+  "S603",
+  "S607",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
