@@ -32,7 +32,12 @@ def find_user(users: ProviderUsers, username: str) -> SFTPUser:
 
 def users_fingerprint(users: ProviderUsers) -> str:
     canonical = yaml.safe_dump(
-        {"users": [user.model_dump(mode="json", exclude_none=True) for user in users.users]},
+        {
+            "users": [
+                user.model_dump(mode="json", exclude_none=True, exclude={"comment"})
+                for user in users.users
+            ]
+        },
         sort_keys=True,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

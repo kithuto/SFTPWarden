@@ -27,6 +27,7 @@ class SFTPUser(BaseModel):
     uid: int | None = Field(default=None, ge=1000)
     gid: int | None = Field(default=None, ge=1000)
     upload_dir: str = "upload"
+    comment: str | None = None
     disabled: bool = False
 
     @field_validator("username")

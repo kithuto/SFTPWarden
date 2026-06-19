@@ -12,12 +12,3 @@ DEFAULT_REMOTE_ROOT = "~/sftpwarden"
 DEFAULT_SSH_PORT = 22
 HOST_SSH_PORT = 2222
 PRODUCTION_NAMES = {"prod", "production", "prd", "live", "main"}
-WATCHED_FILENAMES = {CONFIG_FILENAME, "users.yaml", "users.yml", "users.csv"}
-IGNORED_WATCH_PARTS = {
-    ".git",
-    "__pycache__",
-    "data",
-    "host_keys",
-    "old",
-    "state",
-}

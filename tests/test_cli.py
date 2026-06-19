@@ -5,6 +5,7 @@ from pathlib import Path
 import yaml
 from typer.testing import CliRunner
 
+import sftpwarden.cli as cli_module
 from sftpwarden.cli import app
 from sftpwarden.config import load_config
 
@@ -77,6 +78,158 @@ def test_user_add_accepts_existing_password_hash(tmp_path: Path, monkeypatch) ->
 
     assert result.exit_code == 0, result.output
     assert provider["users"][0]["password_hash"] == password_hash
+
+
+def test_user_add_stores_comment(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "dev-project"
+    runner = CliRunner()
+    runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
+
+    result = runner.invoke(
+        app,
+        [
+            "user",
+            "add",
+            "erin",
+            "--password-hash",
+            "$6$rounds=500000$saltstring$hashvalue",
+            "--comment",
+            "Finance dropbox",
+            "--context",
+            "dev",
+            "--no-refresh",
+        ],
+    )
+
+    provider = yaml.safe_load((root / "users.yaml").read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0, result.output
+    assert provider["users"][0]["comment"] == "Finance dropbox"
+
+
+def test_user_add_runs_real_refresh_by_default(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "dev-project"
+    runner = CliRunner()
+    runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
+    calls: list[bool] = []
+
+    def fake_refresh_context(entry, *, dry_run=False):
+        calls.append(dry_run)
+        return f"refreshed {entry.name}"
+
+    monkeypatch.setattr(cli_module, "refresh_context", fake_refresh_context)
+
+    result = runner.invoke(
+        app,
+        [
+            "user",
+            "add",
+            "erin",
+            "--password-hash",
+            "$6$rounds=500000$saltstring$hashvalue",
+            "--context",
+            "dev",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [False]
+    assert "refreshed dev" in result.output
+
+
+def test_user_update_changes_uid_gid_and_upload_dir(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "dev-project"
+    runner = CliRunner()
+    runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
+    password_hash = "$6$rounds=500000$saltstring$hashvalue"
+    runner.invoke(
+        app,
+        [
+            "user",
+            "add",
+            "frank",
+            "--password-hash",
+            password_hash,
+            "--context",
+            "dev",
+            "--no-refresh",
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "user",
+            "update",
+            "frank",
+            "--uid",
+            "12001",
+            "--gid",
+            "12002",
+            "--upload-dir",
+            "dropbox",
+            "--context",
+            "dev",
+            "--no-refresh",
+        ],
+    )
+
+    provider = yaml.safe_load((root / "users.yaml").read_text(encoding="utf-8"))
+    frank = provider["users"][0]
+
+    assert result.exit_code == 0, result.output
+    assert frank["uid"] == 12001
+    assert frank["gid"] == 12002
+    assert frank["upload_dir"] == "dropbox"
+
+
+def test_user_update_comment_only_does_not_refresh(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "dev-project"
+    runner = CliRunner()
+    runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
+    runner.invoke(
+        app,
+        [
+            "user",
+            "add",
+            "grace",
+            "--password-hash",
+            "$6$rounds=500000$saltstring$hashvalue",
+            "--context",
+            "dev",
+            "--no-refresh",
+        ],
+    )
+    calls: list[bool] = []
+
+    def fake_refresh_context(entry, *, dry_run=False):
+        calls.append(dry_run)
+        return f"refreshed {entry.name}"
+
+    monkeypatch.setattr(cli_module, "refresh_context", fake_refresh_context)
+
+    result = runner.invoke(
+        app,
+        [
+            "user",
+            "update",
+            "grace",
+            "--comment",
+            "Archive account",
+            "--context",
+            "dev",
+        ],
+    )
+
+    provider = yaml.safe_load((root / "users.yaml").read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0, result.output
+    assert calls == []
+    assert provider["users"][0]["comment"] == "Archive account"
 
 
 def test_user_add_rejects_password_and_hash_together(tmp_path: Path, monkeypatch) -> None:

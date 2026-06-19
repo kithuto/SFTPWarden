@@ -17,6 +17,7 @@ CSV_FIELDNAMES = [
     "uid",
     "gid",
     "upload_dir",
+    "comment",
     "disabled",
 ]
 
@@ -53,6 +54,7 @@ class CSVProvider(BaseProvider):
                         uid=int(row["uid"]) if row.get("uid") else None,
                         gid=int(row["gid"]) if row.get("gid") else None,
                         upload_dir=row.get("upload_dir") or "upload",
+                        comment=row.get("comment") or None,
                         disabled=(row.get("disabled") or "").lower() in {"1", "true", "yes"},
                     )
                 )

@@ -2,16 +2,22 @@ from __future__ import annotations
 
 import pytest
 
-from sftpwarden.config import ProviderType
+from sftpwarden.config import ProviderConfig, ProviderType
 from sftpwarden.providers import (
+    CSVProvider,
     MySQLProvider,
+    PostgreSQLProvider,
     ProviderUsers,
     YAMLProvider,
     mysql_connect_kwargs,
     provider_class,
     users_from_sql_rows,
 )
-from sftpwarden.providers.sql import delete_missing_sql_users, upsert_sql_users
+from sftpwarden.providers.sql import (
+    delete_missing_sql_users,
+    sql_select_users_query,
+    upsert_sql_users,
+)
 from sftpwarden.users import SFTPUser
 from sftpwarden.utils.errors import ProviderError
 
@@ -26,6 +32,7 @@ def test_users_from_sql_rows() -> None:
                 "uid": 10000,
                 "gid": 10000,
                 "upload_dir": "upload",
+                "comment": "Finance dropbox",
                 "disabled": False,
             }
         ]
@@ -33,6 +40,7 @@ def test_users_from_sql_rows() -> None:
 
     assert users.users[0].username == "alice"
     assert users.users[0].uid == 10000
+    assert users.users[0].comment == "Finance dropbox"
 
 
 def test_mysql_connect_kwargs_parses_url() -> None:
@@ -47,7 +55,42 @@ def test_mysql_connect_kwargs_parses_url() -> None:
 
 def test_provider_registry_returns_registered_classes() -> None:
     assert provider_class("yaml") is YAMLProvider
+    assert provider_class(ProviderType.CSV) is CSVProvider
     assert provider_class(ProviderType.MYSQL) is MySQLProvider
+    assert provider_class(ProviderType.POSTGRESQL) is PostgreSQLProvider
+
+
+def test_csv_provider_round_trip(tmp_path) -> None:
+    path = tmp_path / "users.csv"
+    provider = CSVProvider(config=ProviderConfig(type=ProviderType.CSV), path=path)
+    users = ProviderUsers(
+        users=[
+            SFTPUser(
+                username="alice",
+                password_hash="$6$rounds=500000$saltstring$hashvalue",  # noqa: S106
+                uid=10001,
+                gid=10002,
+                upload_dir="dropbox",
+                comment="Finance dropbox",
+            )
+        ]
+    )
+
+    provider.write(users)
+    loaded = provider.read()
+
+    assert loaded.users[0].username == "alice"
+    assert loaded.users[0].uid == 10001
+    assert loaded.users[0].gid == 10002
+    assert loaded.users[0].upload_dir == "dropbox"
+    assert loaded.users[0].comment == "Finance dropbox"
+
+
+def test_sql_default_read_query_uses_users_table() -> None:
+    assert sql_select_users_query() == (
+        "select username, public_keys, password_hash, uid, gid, upload_dir, comment, disabled "
+        "from sftp_users order by username"
+    )
 
 
 class RecordingCursor:

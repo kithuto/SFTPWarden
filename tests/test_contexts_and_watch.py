@@ -6,7 +6,14 @@ import pytest
 from typer.testing import CliRunner
 
 from sftpwarden.cli import app
-from sftpwarden.config import ProviderType, default_project_config, write_config
+from sftpwarden.config import (
+    ProjectConfig,
+    ProviderConfig,
+    ProviderType,
+    SFTPWardenConfig,
+    default_project_config,
+    write_config,
+)
 from sftpwarden.config.global_config import load_global_config
 from sftpwarden.contexts import (
     ContextRegistry,
@@ -20,7 +27,7 @@ from sftpwarden.contexts import (
 from sftpwarden.providers import empty_provider_text
 from sftpwarden.refresh import refresh_context, resolve_refresh_targets
 from sftpwarden.utils.errors import ContextError
-from sftpwarden.watcher import derive_watch_targets, should_watch
+from sftpwarden.watcher import derive_watch_targets
 
 
 def test_remote_only_context_has_empty_top_level_paths() -> None:
@@ -112,8 +119,81 @@ def test_watch_derives_only_config_and_provider_files(
     targets = derive_watch_targets()
 
     assert {target.local_path.name for target in targets} == {"sftpwarden.yaml", "users.yaml"}
-    assert not should_watch(project / "docker-compose.yml")
-    assert not should_watch(project / "old" / "users.yaml")
+    assert {target.remote_path for target in targets} == {
+        "/opt/sftpwarden/sftpwarden.yaml",
+        "/opt/sftpwarden/users.yaml",
+    }
+
+
+def test_watch_uses_provider_path_from_context_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(home))
+    project = tmp_path / "project"
+    project.mkdir()
+    config = SFTPWardenConfig(
+        project=ProjectConfig(name="prod"),
+        provider=ProviderConfig(type=ProviderType.CSV, path="/etc/sftpwarden/accounts.csv"),
+    )
+    write_config(project / "sftpwarden.yaml", config)
+    (project / "accounts.csv").write_text(
+        empty_provider_text(config.provider.type), encoding="utf-8"
+    )
+    (project / "users.yaml").write_text("users: []\n", encoding="utf-8")
+
+    entry = remote_context(
+        name="prod",
+        provider=config.provider.type,
+        remote_url="deploy@example.com:/opt/sftpwarden",
+        local_root=project,
+        remote_root="~/sftpwarden",
+        remote_only=False,
+        ssh_key=None,
+        critical=True,
+    )
+    save_registry(ContextRegistry(default="prod", contexts={"prod": entry}))
+
+    targets = derive_watch_targets()
+
+    assert {target.local_path.name for target in targets} == {"sftpwarden.yaml", "accounts.csv"}
+    assert {target.remote_path for target in targets} == {
+        "/opt/sftpwarden/sftpwarden.yaml",
+        "/opt/sftpwarden/accounts.csv",
+    }
+
+
+def test_watch_sql_provider_syncs_only_context_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(home))
+    project = tmp_path / "project"
+    project.mkdir()
+    config = SFTPWardenConfig(
+        project=ProjectConfig(name="prod"),
+        provider=ProviderConfig(type=ProviderType.MYSQL, dsn="mysql://user:pass@db/sftp"),
+    )
+    write_config(project / "sftpwarden.yaml", config)
+    (project / "users.yaml").write_text("users: []\n", encoding="utf-8")
+
+    entry = remote_context(
+        name="prod",
+        provider=config.provider.type,
+        remote_url="deploy@example.com:/opt/sftpwarden",
+        local_root=project,
+        remote_root="~/sftpwarden",
+        remote_only=False,
+        ssh_key=None,
+        critical=True,
+    )
+    save_registry(ContextRegistry(default="prod", contexts={"prod": entry}))
+
+    targets = derive_watch_targets()
+
+    assert [(target.local_path.name, target.remote_path) for target in targets] == [
+        ("sftpwarden.yaml", "/opt/sftpwarden/sftpwarden.yaml")
+    ]
 
 
 def test_refresh_all_resolves_registered_contexts(

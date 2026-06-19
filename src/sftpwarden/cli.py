@@ -341,6 +341,10 @@ def remote_url_from_parts(*, host: str, remote_root: str, remote_user: str | Non
     return f"{prefix}{host}:{remote_root}"
 
 
+def print_refresh_after_user_change(entry) -> None:
+    console.print(refresh_context(entry))
+
+
 def install_context_watcher(
     entry,
     *,
@@ -764,6 +768,7 @@ def users_list(
         table.add_column("Keys")
         table.add_column("UID")
         table.add_column("GID")
+        table.add_column("Comment")
         table.add_column("Disabled")
         for user in users.users:
             table.add_row(
@@ -771,6 +776,7 @@ def users_list(
                 str(len(user.public_keys)),
                 str(user.uid or ""),
                 str(user.gid or ""),
+                user.comment or "",
                 str(user.disabled),
             )
         console.print(table)
@@ -801,6 +807,7 @@ def user_add(
     ] = None,
     password_hash: Annotated[str | None, typer.Option("--password-hash")] = None,
     upload_dir: Annotated[str, typer.Option("--upload-dir")] = "upload",
+    comment: Annotated[str | None, typer.Option("--comment")] = None,
     uid: Annotated[int | None, typer.Option("--uid")] = None,
     gid: Annotated[int | None, typer.Option("--gid")] = None,
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
@@ -820,13 +827,14 @@ def user_add(
             public_keys=public_key or [],
             password_hash=resolved_password_hash,
             upload_dir=upload_dir,
+            comment=comment,
             uid=uid,
             gid=gid,
         )
         provider.upsert_user(user)
         console.print(f"[green]Saved[/green] user [bold]{username}[/bold].")
         if not no_refresh:
-            console.print(refresh_context(entry, dry_run=True))
+            print_refresh_after_user_change(entry)
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -840,8 +848,13 @@ def user_update(
         typer.Option("--password", help="Plaintext password to hash before saving."),
     ] = None,
     password_hash: Annotated[str | None, typer.Option("--password-hash")] = None,
+    upload_dir: Annotated[str | None, typer.Option("--upload-dir")] = None,
+    comment: Annotated[str | None, typer.Option("--comment")] = None,
+    uid: Annotated[int | None, typer.Option("--uid")] = None,
+    gid: Annotated[int | None, typer.Option("--gid")] = None,
     disabled: Annotated[bool | None, typer.Option("--disabled/--enabled")] = None,
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
+    no_refresh: Annotated[bool, typer.Option("--no-refresh")] = False,
 ) -> None:
     try:
         entry = resolve_context(context_name=context)
@@ -853,18 +866,27 @@ def user_update(
             password=password,
             password_hash=password_hash,
         )
+        runtime_changed = any(
+            value is not None
+            for value in (public_key, resolved_password_hash, upload_dir, uid, gid, disabled)
+        )
         updated = existing.model_copy(
             update={
                 "public_keys": public_key if public_key is not None else existing.public_keys,
                 "password_hash": resolved_password_hash
                 if resolved_password_hash is not None
                 else existing.password_hash,
+                "upload_dir": upload_dir if upload_dir is not None else existing.upload_dir,
+                "comment": comment if comment is not None else existing.comment,
+                "uid": uid if uid is not None else existing.uid,
+                "gid": gid if gid is not None else existing.gid,
                 "disabled": disabled if disabled is not None else existing.disabled,
             }
         )
         provider.upsert_user(updated)
         console.print(f"[green]Updated[/green] user [bold]{username}[/bold].")
-        console.print(refresh_context(entry, dry_run=True))
+        if not no_refresh and runtime_changed:
+            print_refresh_after_user_change(entry)
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -874,6 +896,7 @@ def user_remove(
     username: str,
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
     yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
+    no_refresh: Annotated[bool, typer.Option("--no-refresh")] = False,
 ) -> None:
     try:
         if not yes and not Confirm.ask(
@@ -884,7 +907,8 @@ def user_remove(
         loaded = load_config(entry.config)
         provider_from_config(entry.root, loaded).remove_user(username)
         console.print(f"[green]Removed[/green] user [bold]{username}[/bold].")
-        console.print(refresh_context(entry, dry_run=True))
+        if not no_refresh:
+            print_refresh_after_user_change(entry)
     except SFTPWardenError as exc:
         handle_error(exc)
 

@@ -14,6 +14,7 @@ from sftpwarden.runtime import (
     parse_state_users,
     validate_runtime_users,
 )
+from sftpwarden.users import users_fingerprint
 from sftpwarden.utils.errors import RuntimeError
 
 TEST_SHADOW_HASH = "$6$rounds=500000$saltstring$hashvalue"
@@ -27,6 +28,7 @@ def user(
     gid: int | None = None,
     public_keys: list[str] | None = None,
     disabled: bool = False,
+    comment: str | None = None,
 ) -> SFTPUser:
     return SFTPUser(
         username=username,
@@ -35,6 +37,7 @@ def user(
         gid=gid,
         public_keys=public_keys or [],
         disabled=disabled,
+        comment=comment,
     )
 
 
@@ -132,6 +135,13 @@ def test_runtime_plan_noops_when_fingerprint_matches() -> None:
 
     assert plan.changed is False
     assert plan.actions == []
+
+
+def test_users_fingerprint_ignores_comment() -> None:
+    first = ProviderUsers(users=[user("alice", comment="Finance dropbox")])
+    second = ProviderUsers(users=[user("alice", comment="Old archive account")])
+
+    assert users_fingerprint(first) == users_fingerprint(second)
 
 
 def test_runtime_plan_force_updates_existing_user() -> None:

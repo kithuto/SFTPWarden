@@ -9,13 +9,14 @@ from pathlib import Path
 
 import yaml
 
-from sftpwarden.config import load_config, provider_local_path
+from sftpwarden.config import ProviderType, SFTPWardenConfig, load_config, provider_local_path
 from sftpwarden.config.global_config import load_global_config, save_global_config
 from sftpwarden.contexts import ContextEntry, ContextType, load_registry
 from sftpwarden.remote.ssh import uses_default_ssh_identity
-from sftpwarden.utils.constants import IGNORED_WATCH_PARTS, WATCHED_FILENAMES
 from sftpwarden.utils.errors import ContextError
 from sftpwarden.utils.paths import app_home, contexts_path
+
+FILE_PROVIDER_TYPES = {ProviderType.YAML, ProviderType.CSV}
 
 
 class WatcherInstallMode(StrEnum):
@@ -42,10 +43,36 @@ class WatcherInstallPlan:
         return "\n".join(rendered)
 
 
-def should_watch(path: Path) -> bool:
-    if any(part in IGNORED_WATCH_PARTS for part in path.parts):
-        return False
-    return path.name in WATCHED_FILENAMES
+def remote_root_path(context: ContextEntry, local_path: Path) -> str:
+    if not context.remote:
+        raise ContextError(f"Context {context.name} is missing remote settings.")
+    if not context.root:
+        raise ContextError(f"Context {context.name} is missing local root.")
+    relative_path = local_path.resolve().relative_to(Path(context.root).resolve())
+    return f"{context.remote.remote_root.rstrip('/')}/{relative_path.as_posix()}"
+
+
+def editable_sync_targets(context: ContextEntry, config: SFTPWardenConfig) -> list[WatchTarget]:
+    if not context.remote:
+        return []
+    config_path = Path(context.config)
+    candidates = [
+        WatchTarget(
+            context=context.name,
+            local_path=config_path,
+            remote_path=context.remote.remote_config,
+        )
+    ]
+    if config.provider.type in FILE_PROVIDER_TYPES:
+        provider_path = provider_local_path(context.root, config)
+        candidates.append(
+            WatchTarget(
+                context=context.name,
+                local_path=provider_path,
+                remote_path=remote_root_path(context, provider_path),
+            )
+        )
+    return [target for target in candidates if target.local_path.exists()]
 
 
 def derive_watch_targets() -> list[WatchTarget]:
@@ -64,16 +91,8 @@ def derive_watch_targets() -> list[WatchTarget]:
         if not config_path.exists():
             continue
         config = load_config(config_path)
-        provider_path = provider_local_path(context.root, config)
-        for local_path in {config_path, provider_path}:
-            if should_watch(local_path):
-                remote_path = f"{context.remote.remote_root.rstrip('/')}/{local_path.name}"
-                targets.append(
-                    WatchTarget(
-                        context=context.name, local_path=local_path, remote_path=remote_path
-                    )
-                )
-    return targets
+        targets.extend(editable_sync_targets(context, config))
+    return sorted(targets, key=lambda target: (target.context, str(target.local_path)))
 
 
 def watcher_status_text() -> str:
@@ -277,14 +296,15 @@ def sync_target(
 
 
 def poll_watch(*, interval_seconds: int = 2, dry_run: bool = False) -> None:
-    seen: dict[Path, float] = {}
+    seen: dict[tuple[str, Path, str], float] = {}
     while True:
         registry = load_registry()
         by_name = registry.contexts
         for target in derive_watch_targets():
             mtime = target.local_path.stat().st_mtime
-            if seen.get(target.local_path) != mtime:
-                seen[target.local_path] = mtime
+            key = (target.context, target.local_path, target.remote_path)
+            if seen.get(key) != mtime:
+                seen[key] = mtime
                 sync_target(
                     by_name[target.context], target.local_path, target.remote_path, dry_run=dry_run
                 )

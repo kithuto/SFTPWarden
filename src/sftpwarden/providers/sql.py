@@ -15,6 +15,7 @@ SQL_USER_COLUMNS = (
     "uid",
     "gid",
     "upload_dir",
+    "comment",
     "disabled",
 )
 
@@ -45,6 +46,7 @@ def users_from_sql_rows(rows: list[dict[str, Any]]) -> ProviderUsers:
                 uid=int(row["uid"]) if row.get("uid") is not None else None,
                 gid=int(row["gid"]) if row.get("gid") is not None else None,
                 upload_dir=str(row.get("upload_dir") or "upload"),
+                comment=row.get("comment") or None,
                 disabled=parse_sql_bool(row.get("disabled", False)),
             )
         )
@@ -65,6 +67,7 @@ def sql_user_row(user: SFTPUser) -> tuple[Any, ...]:
         user.uid,
         user.gid,
         user.upload_dir,
+        user.comment,
         user.disabled,
     )
 
