@@ -60,7 +60,15 @@ from sftpwarden.security.passwords import resolve_password_hash
 from sftpwarden.utils.console import console
 from sftpwarden.utils.errors import SFTPWardenError
 from sftpwarden.utils.paths import expand_path
-from sftpwarden.watcher import derive_watch_targets, poll_watch
+from sftpwarden.watcher import (
+    derive_watch_targets,
+    ensure_watcher,
+    install_watcher,
+    installed_watcher_mode,
+    poll_watch,
+    uninstall_watcher,
+    watcher_status_text,
+)
 
 app = typer.Typer(help="Container-native SFTP gateway powered by OpenSSH.")
 config_app = typer.Typer(help="Global CLI configuration.")
@@ -173,6 +181,7 @@ def init(
     port: Annotated[int | None, typer.Option("--port", help="Remote SSH port.")] = None,
     remote_root: Annotated[str | None, typer.Option("--remote-root", help="Remote root.")] = None,
     ssh_key: Annotated[str | None, typer.Option("--ssh-key", help="Remote SSH key.")] = None,
+    watcher_mode: Annotated[str | None, typer.Option("--watcher", help="Watcher mode.")] = None,
     remote_only: Annotated[bool, typer.Option("--remote-only")] = False,
     skip_checks: Annotated[bool, typer.Option("--skip-checks")] = False,
     critical: Annotated[
@@ -193,6 +202,7 @@ def init(
                 port=port,
                 remote_root=remote_root,
                 ssh_key=ssh_key,
+                watcher_mode=watcher_mode,
                 remote_only=remote_only,
                 skip_checks=skip_checks,
                 critical=critical,
@@ -256,6 +266,7 @@ def init_remote_context(
     port: int | None,
     remote_root: str | None,
     ssh_key: str | None,
+    watcher_mode: str | None,
     remote_only: bool,
     skip_checks: bool,
     critical: bool,
@@ -321,12 +332,34 @@ def init_remote_context(
     if entry.remote and not skip_checks:
         verify_remote_runtime_requirements(entry.remote)
     register_context(entry)
+    install_context_watcher(entry, requested_mode=watcher_mode, yes=yes)
     console.print(f"[green]Initialized[/green] remote context [bold]{context_name}[/bold].")
 
 
 def remote_url_from_parts(*, host: str, remote_root: str, remote_user: str | None) -> str:
     prefix = f"{remote_user}@" if remote_user else ""
     return f"{prefix}{host}:{remote_root}"
+
+
+def install_context_watcher(
+    entry,
+    *,
+    requested_mode: str | None,
+    yes: bool,
+) -> None:
+    if not entry.watcher_required:
+        return
+    existing = installed_watcher_mode()
+    replace = False
+    if existing and requested_mode and existing.value != requested_mode:
+        replace = yes or Confirm.ask(
+            f"Replace existing {existing.value} watcher with {requested_mode}?", default=False
+        )
+        if not replace:
+            console.print(f"Using existing [bold]{existing.value}[/bold] watcher.")
+            return
+    result = ensure_watcher(requested_mode=requested_mode, yes=yes or replace)
+    console.print(result)
 
 
 @app.command()
@@ -613,6 +646,7 @@ def context_add(
     remote_root: Annotated[str | None, typer.Option("--remote-root")] = None,
     remote_only: Annotated[bool, typer.Option("--remote-only")] = False,
     ssh_key: Annotated[str | None, typer.Option("--ssh-key")] = None,
+    watcher_mode: Annotated[str | None, typer.Option("--watcher", help="Watcher mode.")] = None,
     critical: Annotated[bool, typer.Option("--critical")] = False,
     skip_checks: Annotated[bool, typer.Option("--skip-checks")] = False,
     yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
@@ -650,6 +684,7 @@ def context_add(
             loaded = load_config(selected_root / "sftpwarden.yaml")
             entry = local_context(name, selected_root, loaded.provider.type, critical)
         register_context(entry)
+        install_context_watcher(entry, requested_mode=watcher_mode, yes=yes)
         console.print(f"Registered context [bold]{name}[/bold].")
     except SFTPWardenError as exc:
         handle_error(exc)
@@ -657,24 +692,58 @@ def context_add(
 
 @watcher_app.command("status")
 def watcher_status() -> None:
-    targets = derive_watch_targets()
-    console.print(f"Remote local-sync targets: {len(targets)}")
-    for target in targets:
-        console.print(f"- {target.context}: {target.local_path}")
+    console.print(watcher_status_text())
 
 
 @watcher_app.command("install")
-def watcher_install() -> None:
-    raise typer.BadParameter(
-        "Watcher installation is scaffolded; use `sftpwarden watch` in a user service for now."
-    )
+def watcher_install(
+    watcher_mode: Annotated[
+        str | None, typer.Option("--watcher", "--mode", help="Watcher mode.")
+    ] = None,
+    image: Annotated[str | None, typer.Option("--image", help="Docker watcher image.")] = None,
+    activate: Annotated[
+        bool,
+        typer.Option(
+            "--activate/--no-activate",
+            help="Start/enable the watcher after writing its files.",
+        ),
+    ] = True,
+    yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    try:
+        existing = installed_watcher_mode()
+        if existing and watcher_mode and existing.value != watcher_mode and not yes:
+            if not Confirm.ask(
+                f"Replace existing {existing.value} watcher with {watcher_mode}?",
+                default=False,
+            ):
+                raise typer.Exit(1)
+            yes = True
+        console.print(
+            install_watcher(
+                mode=watcher_mode,
+                yes=yes,
+                dry_run=dry_run,
+                image=image,
+                activate=activate,
+            )
+        )
+    except SFTPWardenError as exc:
+        handle_error(exc)
 
 
 @watcher_app.command("uninstall")
-def watcher_uninstall() -> None:
-    raise typer.BadParameter(
-        "Watcher uninstall is scaffolded; remove the user service you installed."
-    )
+def watcher_uninstall(
+    yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+) -> None:
+    try:
+        if not yes and not dry_run and not Confirm.ask("Uninstall watcher?", default=False):
+            raise typer.Exit(1)
+        console.print(uninstall_watcher(dry_run=dry_run))
+    except SFTPWardenError as exc:
+        handle_error(exc)
 
 
 @app.command("users")

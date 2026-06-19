@@ -1,15 +1,26 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
+import yaml
+
 from sftpwarden.config import load_config, provider_local_path
+from sftpwarden.config.global_config import load_global_config, save_global_config
 from sftpwarden.contexts import ContextEntry, ContextType, load_registry
 from sftpwarden.remote.ssh import uses_default_ssh_identity
 from sftpwarden.utils.constants import IGNORED_WATCH_PARTS, WATCHED_FILENAMES
 from sftpwarden.utils.errors import ContextError
+from sftpwarden.utils.paths import app_home, contexts_path
+
+
+class WatcherInstallMode(StrEnum):
+    SYSTEMD = "systemd"
+    DOCKER = "docker"
 
 
 @dataclass(frozen=True)
@@ -17,6 +28,18 @@ class WatchTarget:
     context: str
     local_path: Path
     remote_path: str
+
+
+@dataclass(frozen=True)
+class WatcherInstallPlan:
+    mode: WatcherInstallMode
+    path: Path
+    commands: list[list[str]]
+
+    def text(self) -> str:
+        rendered = [f"{self.mode.value} watcher: {self.path}"]
+        rendered.extend(" ".join(command) for command in self.commands)
+        return "\n".join(rendered)
 
 
 def should_watch(path: Path) -> bool:
@@ -51,6 +74,188 @@ def derive_watch_targets() -> list[WatchTarget]:
                     )
                 )
     return targets
+
+
+def watcher_status_text() -> str:
+    state = load_global_config().watcher
+    targets = derive_watch_targets()
+    lines = [
+        f"Watcher installed: {state.installed}",
+        f"Watcher mode: {state.mode or ''}",
+        f"Watcher path: {state.path or ''}",
+        f"Remote local-sync targets: {len(targets)}",
+    ]
+    lines.extend(f"- {target.context}: {target.local_path}" for target in targets)
+    return "\n".join(lines)
+
+
+def default_watcher_mode() -> WatcherInstallMode:
+    mode = load_global_config().defaults.watcher_mode
+    return WatcherInstallMode(mode)
+
+
+def installed_watcher_mode() -> WatcherInstallMode | None:
+    state = load_global_config().watcher
+    if not state.installed or not state.mode:
+        return None
+    return WatcherInstallMode(state.mode)
+
+
+def install_watcher(
+    *,
+    mode: str | WatcherInstallMode | None = None,
+    yes: bool = False,
+    dry_run: bool = False,
+    image: str | None = None,
+    activate: bool = False,
+) -> str:
+    selected_mode = WatcherInstallMode(mode or default_watcher_mode())
+    config = load_global_config()
+    existing = config.watcher
+    if existing.installed and existing.mode == selected_mode.value:
+        return f"Watcher already installed in {selected_mode.value} mode."
+    if existing.installed and existing.mode != selected_mode.value and not yes:
+        raise ContextError(
+            f"Watcher is already installed in {existing.mode} mode.",
+            suggestion="Re-run with --yes to replace it.",
+        )
+    plan = watcher_install_plan(selected_mode, image=image)
+    if dry_run:
+        return plan.text()
+    write_watcher_files(plan, image=image)
+    if activate:
+        run_watcher_commands(plan.commands)
+    config.watcher.installed = True
+    config.watcher.mode = selected_mode.value
+    config.watcher.path = str(plan.path)
+    save_global_config(config)
+    return f"Installed {selected_mode.value} watcher at {plan.path}."
+
+
+def run_watcher_commands(commands: list[list[str]]) -> None:
+    for command in commands:
+        result = subprocess.run(command, check=False)
+        if result.returncode != 0:
+            raise ContextError(
+                f"Watcher command failed: {' '.join(command)}",
+                suggestion="Check sudo permissions and systemd or Docker availability.",
+            )
+
+
+def uninstall_watcher(*, dry_run: bool = False) -> str:
+    config = load_global_config()
+    state = config.watcher
+    if not state.installed:
+        return "Watcher is not installed."
+    path = Path(state.path) if state.path else None
+    if dry_run:
+        return f"Would uninstall {state.mode} watcher at {path or ''}."
+    if path and path.exists():
+        path.unlink()
+    config.watcher.installed = False
+    config.watcher.mode = None
+    config.watcher.path = None
+    save_global_config(config)
+    return "Watcher uninstalled."
+
+
+def ensure_watcher(
+    *,
+    requested_mode: str | None = None,
+    yes: bool = False,
+    image: str | None = None,
+) -> str:
+    config = load_global_config()
+    state = config.watcher
+    if state.installed and not requested_mode:
+        return f"Using existing {state.mode} watcher."
+    selected_mode = requested_mode or config.defaults.watcher_mode
+    return install_watcher(mode=selected_mode, yes=yes, image=image)
+
+
+def watcher_install_plan(
+    mode: WatcherInstallMode,
+    *,
+    image: str | None = None,
+) -> WatcherInstallPlan:
+    if mode == WatcherInstallMode.SYSTEMD:
+        return WatcherInstallPlan(
+            mode=mode,
+            path=systemd_unit_path(),
+            commands=[
+                [
+                    "sudo",
+                    "install",
+                    "-m",
+                    "0644",
+                    str(systemd_unit_path()),
+                    "/etc/systemd/system/sftpwarden-watch.service",
+                ],
+                ["sudo", "systemctl", "daemon-reload"],
+                ["sudo", "systemctl", "enable", "--now", "sftpwarden-watch.service"],
+            ],
+        )
+    return WatcherInstallPlan(
+        mode=mode,
+        path=docker_watcher_compose_path(),
+        commands=[
+            ["docker", "compose", "-f", str(docker_watcher_compose_path()), "up", "-d"],
+        ],
+    )
+
+
+def write_watcher_files(plan: WatcherInstallPlan, *, image: str | None = None) -> None:
+    plan.path.parent.mkdir(parents=True, exist_ok=True)
+    if plan.mode == WatcherInstallMode.SYSTEMD:
+        plan.path.write_text(render_systemd_unit(), encoding="utf-8")
+        return
+    plan.path.write_text(render_docker_watcher_compose(image=image), encoding="utf-8")
+
+
+def systemd_unit_path() -> Path:
+    return app_home() / "watcher" / "systemd" / "sftpwarden-watch.service"
+
+
+def docker_watcher_compose_path() -> Path:
+    return app_home() / "watcher" / "docker-compose.yml"
+
+
+def render_systemd_unit() -> str:
+    user = os.environ.get("USER") or os.environ.get("LOGNAME") or "sftpwarden"
+    return f"""[Unit]
+Description=SFTPWarden remote local-sync watcher
+
+[Service]
+Type=simple
+User={user}
+Environment=SFTPWARDEN_HOME={app_home()}
+ExecStart=sftpwarden watch
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+"""
+
+
+def render_docker_watcher_compose(*, image: str | None = None) -> str:
+    model = {
+        "services": {
+            "sftpwarden-watcher": {
+                "image": image or "sftpwarden-watcher:local",
+                "command": ["sftpwarden", "watch"],
+                "volumes": [
+                    f"{app_home()}:{app_home()}:ro",
+                    f"{contexts_path()}:{contexts_path()}:ro",
+                    f"{Path.home() / '.ssh'}:/home/sftpwarden/.ssh:ro",
+                ],
+                "restart": "unless-stopped",
+                "read_only": True,
+                "security_opt": ["no-new-privileges:true"],
+            }
+        }
+    }
+    return yaml.safe_dump(model, sort_keys=False)
 
 
 def sync_target(

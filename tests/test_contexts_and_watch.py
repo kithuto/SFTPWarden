@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 
 from sftpwarden.cli import app
 from sftpwarden.config import ProviderType, default_project_config, write_config
+from sftpwarden.config.global_config import load_global_config
 from sftpwarden.contexts import (
     ContextRegistry,
     ContextType,
@@ -199,6 +200,122 @@ def test_init_remote_creates_local_sync_context(
     assert entry.storage == "local-sync"
     assert entry.remote is not None
     assert entry.remote.remote_root == "/opt/sftpwarden"
+    assert load_global_config().watcher.installed is True
+    assert load_global_config().watcher.mode == "systemd"
+
+
+def test_init_remote_only_does_not_install_watcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "init",
+            "remote",
+            "--context",
+            "archive",
+            "--remote-url",
+            "deploy@example.com:/opt/sftpwarden",
+            "--remote-only",
+            "--critical",
+            "--skip-checks",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert load_global_config().watcher.installed is False
+
+
+def test_watcher_install_is_idempotent_and_can_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    runner = CliRunner()
+
+    first = runner.invoke(
+        app, ["watcher", "install", "--watcher", "systemd", "--yes", "--no-activate"]
+    )
+    second = runner.invoke(
+        app, ["watcher", "install", "--watcher", "systemd", "--yes", "--no-activate"]
+    )
+    replaced = runner.invoke(
+        app, ["watcher", "install", "--watcher", "docker", "--yes", "--no-activate"]
+    )
+    status = runner.invoke(app, ["watcher", "status"])
+
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    assert "already installed" in second.output
+    assert replaced.exit_code == 0, replaced.output
+    assert load_global_config().watcher.mode == "docker"
+    assert "Watcher installed: True" in status.output
+    assert "Watcher mode: docker" in status.output
+    watcher_path = Path(load_global_config().watcher.path or "")
+    assert "/var/run/docker.sock" not in watcher_path.read_text(encoding="utf-8")
+
+
+def test_watcher_uninstall_clears_global_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    runner = CliRunner()
+    runner.invoke(app, ["watcher", "install", "--watcher", "systemd", "--yes", "--no-activate"])
+
+    result = runner.invoke(app, ["watcher", "uninstall", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert load_global_config().watcher.installed is False
+
+
+def test_systemd_watcher_install_plan_uses_sudo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        ["watcher", "install", "--watcher", "systemd", "--dry-run"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "sudo install" in result.output
+    assert "sudo systemctl enable --now sftpwarden-watch.service" in result.output
+
+
+def test_context_add_remote_local_sync_auto_installs_watcher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "prod-project"
+    root.mkdir()
+    config = default_project_config("prod")
+    write_config(root / "sftpwarden.yaml", config)
+    (root / "users.yaml").write_text(empty_provider_text(config.provider.type), encoding="utf-8")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "context",
+            "add",
+            "prod",
+            "deploy@example.com:/opt/sftpwarden",
+            "--root",
+            str(root),
+            "--critical",
+            "--skip-checks",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert load_global_config().watcher.installed is True
+    assert load_global_config().watcher.mode == "systemd"
 
 
 def test_deploy_remote_local_sync_dry_run_includes_sync_and_compose(

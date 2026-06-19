@@ -31,12 +31,22 @@ class DefaultsConfig(BaseModel):
     sync_interval_seconds: int = Field(default=60, ge=5)
 
 
+class WatcherState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    installed: bool = False
+    mode: str | None = None
+    managed_by: str = "sftpwarden"
+    path: str | None = None
+
+
 class GlobalConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     version: int = 1
     default_provider: ProviderType | None = None
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
+    watcher: WatcherState = Field(default_factory=WatcherState)
 
 
 def load_global_config(path: Path | None = None) -> GlobalConfig:
