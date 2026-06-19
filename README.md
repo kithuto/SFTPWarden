@@ -109,6 +109,7 @@ Password authentication is enabled by default. If `user add` does not receive `-
 `sftpwarden refresh` tells a local or remote runtime to reload users immediately:
 
 ```bash
+sftpwarden plan -c dev
 sftpwarden refresh -c dev
 sftpwarden refresh --all
 sftpwarden refresh -c prod --dry-run

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+
 from passlib.hash import sha512_crypt
 
 from sftpwarden.errors import ProviderError

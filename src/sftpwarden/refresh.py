@@ -24,6 +24,7 @@ def docker_compose_command(context: ContextEntry) -> list[str]:
         "-f",
         compose_file,
         "exec",
+        "-T",
         "sftpwarden",
         "sftpwarden",
         "runtime",
@@ -50,12 +51,12 @@ def refresh_context(context: ContextEntry, *, dry_run: bool = False) -> str:
 
     if not context.remote:
         raise ContextError(f"Remote context {context.name} is missing remote settings.")
-    
+
     command = " ".join(shlex.quote(part) for part in docker_compose_command(context))
     remote_command = f"cd {shlex.quote(context.remote.remote_root)} && {command}"
     ssh = ["ssh", "-p", str(context.remote.port)]
     if not uses_default_ssh_identity(context.remote.ssh_key):
-        ssh.extend(["-i", context.remote.ssh_key]) # type: ignore
+        ssh.extend(["-i", context.remote.ssh_key])  # type: ignore
     ssh.append(f"{context.remote.user}@{context.remote.host}")
     ssh.append(remote_command)
     if dry_run:
@@ -79,5 +80,11 @@ def resolve_refresh_targets(
 ) -> list[ContextEntry]:
     if all_contexts:
         registry: ContextRegistry = load_registry()
-        return list(registry.contexts.values())
+        targets = list(registry.contexts.values())
+        if not targets:
+            raise ContextError(
+                "No contexts are registered.",
+                suggestion="Run `sftpwarden init <name>` or `sftpwarden context add <name>`.",
+            )
+        return targets
     return [resolve_context(config_path=config_path, context_name=context_name)]

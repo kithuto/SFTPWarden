@@ -40,6 +40,14 @@ UID/GID allocation preserves existing mappings unless explicit values are provid
 
 ## Refresh
 
+Preview the runtime changes:
+
+```bash
+sftpwarden runtime plan --config /etc/sftpwarden/sftpwarden.yaml
+```
+
+Apply them immediately:
+
 ```bash
 sftpwarden runtime refresh --config /etc/sftpwarden/sftpwarden.yaml
 ```
@@ -50,6 +58,18 @@ The CLI calls this through Docker Compose locally or SSH remotely:
 sftpwarden refresh -c dev
 sftpwarden refresh --all
 ```
+
+## Periodic Sync
+
+The runtime sync loop reloads the provider at `sync.interval_seconds`. It computes a desired-state fingerprint from provider users and skips work when the fingerprint matches the last applied state.
+
+When the fingerprint changes, the runtime builds explicit sync actions:
+
+- `create` for new provider users;
+- `update` for existing provider users when desired state changed;
+- `disable` for disabled users or users missing from the provider when `sync.disable_missing_users` is enabled.
+
+The sync loop logs only applied changes, so idle containers stay quiet.
 
 ## Isolation Layout
 

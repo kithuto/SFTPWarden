@@ -53,7 +53,14 @@ from sftpwarden.providers import (
     remove_user as remove_provider_user,
 )
 from sftpwarden.refresh import refresh_context, resolve_refresh_targets
-from sftpwarden.runtime import apply_once, run_sync_loop
+from sftpwarden.runtime import (
+    RuntimePlan,
+    RuntimeState,
+    apply_once,
+    build_runtime_plan,
+    load_runtime_inputs,
+    run_sync_loop,
+)
 from sftpwarden.watcher import derive_watch_targets, poll_watch
 
 app = typer.Typer(help="Container-native SFTP gateway powered by OpenSSH.")
@@ -92,6 +99,47 @@ def prompt_password_hash(
             raise SFTPWardenError("Passwords do not match.")
         password = first
     return resolve_password_hash(password=password, password_hash=password_hash)
+
+
+def runtime_plan_to_json(runtime_plan: RuntimePlan) -> str:
+    return json.dumps(
+        {
+            "fingerprint": runtime_plan.fingerprint,
+            "changed": runtime_plan.changed,
+            "actions": [
+                {
+                    "action": action.action,
+                    "username": action.username,
+                    "uid": action.uid,
+                    "gid": action.gid,
+                    "reason": action.reason,
+                }
+                for action in runtime_plan.actions
+            ],
+        },
+        indent=2,
+        sort_keys=True,
+    )
+
+
+def print_runtime_plan(runtime_plan: RuntimePlan) -> None:
+    if not runtime_plan.actions:
+        return
+    table = Table(title="Runtime sync actions")
+    table.add_column("Action")
+    table.add_column("Username")
+    table.add_column("UID")
+    table.add_column("GID")
+    table.add_column("Reason")
+    for action in runtime_plan.actions:
+        table.add_row(
+            action.action,
+            action.username,
+            str(action.uid or ""),
+            str(action.gid or ""),
+            action.reason,
+        )
+    console.print(table)
 
 
 def version_callback(value: bool) -> None:
@@ -227,14 +275,26 @@ def compose(
 def plan(
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
     config: Annotated[str | None, typer.Option("--config")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     try:
         entry = resolve_context(config_path=config, context_name=context)
+        if not entry.root or not entry.config:
+            raise SFTPWardenError(
+                f"Context {entry.name} has no local config to plan.",
+                suggestion="Use `sftpwarden refresh --dry-run` for remote-only contexts.",
+            )
         loaded = load_config(entry.config)
         users = load_users_from_project(entry.root, loaded)
+        state = RuntimeState.load(Path(entry.root) / "state" / "state.json")
+        runtime_plan = build_runtime_plan(loaded, users, state)
+        if json_output:
+            console.print(runtime_plan_to_json(runtime_plan))
+            return
         console.print(f"Context: [bold]{entry.name}[/bold]")
         console.print(f"Provider users: {len(users.users)}")
-        console.print("Runtime action: apply create/update/disable user state on refresh.")
+        console.print(runtime_plan.summary())
+        print_runtime_plan(runtime_plan)
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -649,6 +709,23 @@ def runtime_refresh(
 ) -> None:
     try:
         console.print(apply_once(config, force=True))
+    except SFTPWardenError as exc:
+        handle_error(exc)
+
+
+@runtime_app.command("plan")
+def runtime_plan(
+    config: Annotated[str, typer.Option("--config")] = "/etc/sftpwarden/sftpwarden.yaml",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    try:
+        loaded, users, state = load_runtime_inputs(config)
+        sync_plan = build_runtime_plan(loaded, users, state)
+        if json_output:
+            console.print(runtime_plan_to_json(sync_plan))
+            return
+        console.print(sync_plan.summary())
+        print_runtime_plan(sync_plan)
     except SFTPWardenError as exc:
         handle_error(exc)
 

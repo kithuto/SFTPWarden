@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from sftpwarden.config import default_project_config, write_config, ProviderType
+from sftpwarden.config import ProviderType, default_project_config, write_config
 from sftpwarden.contexts import (
     ContextRegistry,
     ContextType,
@@ -12,6 +12,7 @@ from sftpwarden.contexts import (
     remote_context,
     save_registry,
 )
+from sftpwarden.errors import ContextError
 from sftpwarden.providers import empty_provider_text
 from sftpwarden.refresh import refresh_context, resolve_refresh_targets
 from sftpwarden.watcher import derive_watch_targets, should_watch
@@ -83,6 +84,15 @@ def test_refresh_all_resolves_registered_contexts(
     assert [target.name for target in targets] == ["one", "two"]
 
 
+def test_refresh_all_requires_registered_contexts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+
+    with pytest.raises(ContextError, match="No contexts are registered"):
+        resolve_refresh_targets(all_contexts=True)
+
+
 def test_remote_default_ssh_key_uses_ssh_defaults() -> None:
     entry = remote_context(
         name="prod",
@@ -99,3 +109,11 @@ def test_remote_default_ssh_key_uses_ssh_defaults() -> None:
 
     assert " -i " not in command
     assert "deploy@example.com" in command
+
+
+def test_refresh_uses_non_tty_docker_exec(tmp_path: Path) -> None:
+    entry = local_context("dev", tmp_path / "sftpwarden-dev", ProviderType.YAML)
+
+    command = refresh_context(entry, dry_run=True)
+
+    assert "exec -T sftpwarden" in command

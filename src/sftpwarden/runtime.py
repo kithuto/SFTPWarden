@@ -8,7 +8,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from sftpwarden.config import SFTPWardenConfig, load_config
 from sftpwarden.constants import CONTAINER_CONFIG_PATH
@@ -73,6 +73,37 @@ class ResolvedUser:
     spec: SFTPUser
     uid: int
     gid: int
+
+
+@dataclass(frozen=True)
+class RuntimeAction:
+    action: Literal["create", "update", "disable"]
+    username: str
+    uid: int | None = None
+    gid: int | None = None
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class RuntimePlan:
+    fingerprint: str
+    actions: list[RuntimeAction]
+    resolved_users: list[ResolvedUser]
+
+    @property
+    def changed(self) -> bool:
+        return bool(self.actions)
+
+    def summary(self) -> str:
+        if not self.actions:
+            return "No user changes detected."
+        counts = {"create": 0, "update": 0, "disable": 0}
+        for action in self.actions:
+            counts[action.action] += 1
+        return (
+            f"Plan: create={counts['create']}, update={counts['update']}, "
+            f"disable={counts['disable']}."
+        )
 
 
 def parse_state_users(data: dict[str, Any]) -> dict[str, RuntimeUserState]:
@@ -223,6 +254,103 @@ def allocate_users(
     return resolved
 
 
+def copy_runtime_state(state: RuntimeState) -> RuntimeState:
+    return RuntimeState(
+        users={
+            username: RuntimeUserState(
+                uid=user_state.uid,
+                gid=user_state.gid,
+                disabled=user_state.disabled,
+            )
+            for username, user_state in state.users.items()
+        },
+        fingerprint=state.fingerprint,
+    )
+
+
+def build_runtime_plan(
+    config: SFTPWardenConfig,
+    users: ProviderUsers,
+    state: RuntimeState,
+    *,
+    force: bool = False,
+) -> RuntimePlan:
+    validate_runtime_users(config, users)
+    fingerprint = users_fingerprint(users)
+    planning_state = copy_runtime_state(state)
+    resolved_users = allocate_users(config, users, planning_state)
+    desired_names = {resolved.spec.username for resolved in resolved_users}
+    actions: list[RuntimeAction] = []
+
+    if not force and state.fingerprint == fingerprint:
+        for username, user_state in state.users.items():
+            if username not in desired_names and config.sync.disable_missing_users:
+                actions.append(
+                    RuntimeAction(
+                        action="disable",
+                        username=username,
+                        uid=user_state.uid,
+                        gid=user_state.gid,
+                        reason="missing from provider",
+                    )
+                )
+        return RuntimePlan(fingerprint=fingerprint, actions=actions, resolved_users=resolved_users)
+
+    for resolved in resolved_users:
+        username = resolved.spec.username
+        previous = state.users.get(username)
+        if resolved.spec.disabled:
+            actions.append(
+                RuntimeAction(
+                    action="disable",
+                    username=username,
+                    uid=resolved.uid,
+                    gid=resolved.gid,
+                    reason="disabled in provider",
+                )
+            )
+        elif previous is None:
+            actions.append(
+                RuntimeAction(
+                    action="create",
+                    username=username,
+                    uid=resolved.uid,
+                    gid=resolved.gid,
+                    reason="new provider user",
+                )
+            )
+        else:
+            reason = "provider changed"
+            if previous.uid != resolved.uid or previous.gid != resolved.gid:
+                reason = "uid/gid changed"
+            elif previous.disabled:
+                reason = "reenable disabled user"
+            actions.append(
+                RuntimeAction(
+                    action="update",
+                    username=username,
+                    uid=resolved.uid,
+                    gid=resolved.gid,
+                    reason=reason,
+                )
+            )
+
+    if config.sync.disable_missing_users:
+        for username, user_state in state.users.items():
+            if username not in desired_names:
+                actions.append(
+                    RuntimeAction(
+                        action="disable",
+                        username=username,
+                        uid=user_state.uid,
+                        gid=user_state.gid,
+                        reason="missing from provider",
+                    )
+                )
+
+    return RuntimePlan(fingerprint=fingerprint, actions=actions, resolved_users=resolved_users)
+
+
 def ensure_group(name: str, gid: int | None = None) -> None:
     if (
         shutil.which("getent")
@@ -290,7 +418,7 @@ def ensure_system_user(config: SFTPWardenConfig, resolved: ResolvedUser) -> None
             ]
         )
     if has_usable_password_hash(user):
-        run_command(["usermod", "-p", user.password_hash, user.username]) # type: ignore
+        run_command(["usermod", "-p", user.password_hash or NO_PASSWORD_HASH, user.username])
     else:
         run_command(["usermod", "-p", NO_PASSWORD_HASH, user.username])
     if user.disabled:
@@ -333,32 +461,46 @@ def disable_missing(config: SFTPWardenConfig, desired: ProviderUsers, state: Run
             )
 
 
-def apply_once(config_path: str | Path = CONTAINER_CONFIG_PATH, *, force: bool = False) -> str:
+def load_runtime_inputs(
+    config_path: str | Path,
+) -> tuple[SFTPWardenConfig, ProviderUsers, RuntimeState]:
     config = load_config(config_path)
     provider_path = Path(config.provider.path)
     users = load_users(config.provider.type, provider_path)
-    validate_runtime_users(config, users)
+    state = RuntimeState.load(state_path(config))
+    return config, users, state
+
+
+def apply_once(config_path: str | Path = CONTAINER_CONFIG_PATH, *, force: bool = False) -> str:
+    config, users, state = load_runtime_inputs(config_path)
     render_sshd_config(config)
-    fingerprint = users_fingerprint(users)
     state_file = state_path(config)
-    state = RuntimeState.load(state_file)
-    if not force and state.fingerprint == fingerprint:
+    plan = build_runtime_plan(config, users, state, force=force)
+    if not plan.changed:
+        state.fingerprint = plan.fingerprint
+        state.save(state_file)
         return "No user changes detected."
-    resolved_users = allocate_users(config, users, state)
     ensure_group(config.server.group)
-    for resolved in resolved_users:
+    for resolved in plan.resolved_users:
         ensure_system_user(config, resolved)
         ensure_directories(config, resolved)
         write_authorized_keys(config, resolved)
+        state.users[resolved.spec.username] = RuntimeUserState(
+            uid=resolved.uid,
+            gid=resolved.gid,
+            disabled=resolved.spec.disabled,
+        )
     disable_missing(config, users, state)
-    state.fingerprint = fingerprint
+    state.fingerprint = plan.fingerprint
     state.save(state_file)
-    return f"Applied {len(resolved_users)} user(s)."
+    return f"Applied {len(plan.actions)} action(s): {plan.summary()}"
 
 
 def run_sync_loop(config_path: str | Path = CONTAINER_CONFIG_PATH) -> None:
     while True:
         config = load_config(config_path)
         if config.sync.enabled:
-            apply_once(config_path)
+            result = apply_once(config_path)
+            if result != "No user changes detected.":
+                print(result, flush=True)
         time.sleep(config.sync.interval_seconds)
