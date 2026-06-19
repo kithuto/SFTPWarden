@@ -5,8 +5,8 @@ import hmac
 
 import yaml
 
-from sftpwarden.utils.errors import ProviderError
 from sftpwarden.users.models import ProviderUsers, SFTPUser
+from sftpwarden.utils.errors import ProviderError
 
 
 def upsert_user(users: ProviderUsers, user: SFTPUser) -> ProviderUsers:

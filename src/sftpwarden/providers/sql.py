@@ -3,8 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from sftpwarden.utils.errors import ProviderError
 from sftpwarden.users.models import ProviderUsers, SFTPUser
+from sftpwarden.utils.errors import ProviderError
 
 DEFAULT_SQL_USERS_TABLE = "sftp_users"
 SQL_TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")

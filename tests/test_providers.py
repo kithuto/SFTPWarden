@@ -3,7 +3,6 @@ from __future__ import annotations
 import pytest
 
 from sftpwarden.config import ProviderType
-from sftpwarden.utils.errors import ProviderError
 from sftpwarden.providers import (
     MySQLProvider,
     ProviderUsers,
@@ -14,6 +13,7 @@ from sftpwarden.providers import (
 )
 from sftpwarden.providers.sql import delete_missing_sql_users, upsert_sql_users
 from sftpwarden.users import SFTPUser
+from sftpwarden.utils.errors import ProviderError
 
 
 def test_users_from_sql_rows() -> None:

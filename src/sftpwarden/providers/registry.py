@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from sftpwarden.config import ProviderConfig, ProviderType, SFTPWardenConfig, provider_local_path
-from sftpwarden.utils.errors import ProviderError
 from sftpwarden.providers.base import BaseProvider
+from sftpwarden.utils.errors import ProviderError
 
 ProviderClass = type[BaseProvider]
 _PROVIDERS: dict[ProviderType, ProviderClass] = {}

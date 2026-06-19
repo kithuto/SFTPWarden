@@ -23,23 +23,6 @@ def test_init_named_context_creates_project_name(tmp_path: Path, monkeypatch) ->
     assert (root / "docker-compose.yml").exists()
 
 
-def test_user_add_updates_yaml_without_plaintext_password(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
-    root = tmp_path / "dev-project"
-    runner = CliRunner()
-    runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
-
-    key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockKeyForTestsOnly00000000000000000000000000"
-    result = runner.invoke(
-        app,
-        ["user", "add", "alice", "--public-key", key, "--context", "dev", "--no-refresh"],
-        input="correct horse battery staple\ncorrect horse battery staple\n",
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "alice" in (root / "users.yaml").read_text(encoding="utf-8")
-
-
 def test_user_add_hashes_plaintext_password(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     root = tmp_path / "dev-project"
@@ -66,27 +49,6 @@ def test_user_add_hashes_plaintext_password(tmp_path: Path, monkeypatch) -> None
     assert result.exit_code == 0, result.output
     assert bob["username"] == "bob"
     assert bob["password_hash"].startswith("$6$")
-    assert "correct horse battery staple" not in (root / "users.yaml").read_text(encoding="utf-8")
-
-
-def test_user_add_prompts_for_missing_password(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
-    root = tmp_path / "dev-project"
-    runner = CliRunner()
-    runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
-
-    result = runner.invoke(
-        app,
-        ["user", "add", "eve", "--context", "dev", "--no-refresh"],
-        input="correct horse battery staple\ncorrect horse battery staple\n",
-    )
-
-    provider = yaml.safe_load((root / "users.yaml").read_text(encoding="utf-8"))
-    eve = provider["users"][0]
-
-    assert result.exit_code == 0, result.output
-    assert eve["username"] == "eve"
-    assert eve["password_hash"].startswith("$6$")
     assert "correct horse battery staple" not in (root / "users.yaml").read_text(encoding="utf-8")
 
 

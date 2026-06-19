@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 
 from sftpwarden.config import ProjectConfig, SFTPWardenConfig
-from sftpwarden.utils.errors import RuntimeError
 from sftpwarden.providers import ProviderUsers, SFTPUser
 from sftpwarden.runtime import (
     RuntimeState,
@@ -15,6 +14,7 @@ from sftpwarden.runtime import (
     parse_state_users,
     validate_runtime_users,
 )
+from sftpwarden.utils.errors import RuntimeError
 
 TEST_SHADOW_HASH = "$6$rounds=500000$saltstring$hashvalue"
 

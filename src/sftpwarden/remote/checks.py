@@ -3,8 +3,8 @@ from __future__ import annotations
 import subprocess
 
 from sftpwarden.contexts import RemoteEndpoint
-from sftpwarden.utils.errors import ContextError
 from sftpwarden.remote.ssh import uses_default_ssh_identity
+from sftpwarden.utils.errors import ContextError
 
 
 def ssh_base_command(remote: RemoteEndpoint) -> list[str]:

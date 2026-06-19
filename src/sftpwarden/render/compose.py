@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+
 import yaml
 
 from sftpwarden.config import SFTPWardenConfig, provider_local_path

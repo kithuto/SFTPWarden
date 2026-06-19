@@ -9,13 +9,13 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from sftpwarden.utils.errors import ConfigError
 from sftpwarden.utils.constants import (
     CONFIG_FILENAME,
     CONTAINER_PROVIDER_DIR,
     DEFAULT_GROUP,
     HOST_SSH_PORT,
 )
+from sftpwarden.utils.errors import ConfigError
 from sftpwarden.utils.paths import expand_path
 
 SQL_TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")

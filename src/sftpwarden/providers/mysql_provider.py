@@ -5,7 +5,6 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from sftpwarden.config import ProviderType
-from sftpwarden.utils.errors import ProviderError
 from sftpwarden.providers.base import BaseProvider
 from sftpwarden.providers.registry import register_provider
 from sftpwarden.providers.sql import (
@@ -18,6 +17,7 @@ from sftpwarden.providers.sql import (
     validate_sql_table,
 )
 from sftpwarden.users.models import ProviderUsers, SFTPUser
+from sftpwarden.utils.errors import ProviderError
 
 
 @register_provider

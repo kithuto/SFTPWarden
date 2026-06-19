@@ -7,9 +7,9 @@ from pathlib import Path
 
 from sftpwarden.config import load_config, provider_local_path
 from sftpwarden.contexts import ContextEntry, ContextType, load_registry
-from sftpwarden.utils.errors import ContextError
 from sftpwarden.remote.ssh import uses_default_ssh_identity
 from sftpwarden.utils.constants import IGNORED_WATCH_PARTS, WATCHED_FILENAMES
+from sftpwarden.utils.errors import ContextError
 
 
 @dataclass(frozen=True)

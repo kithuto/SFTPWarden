@@ -7,8 +7,8 @@ import yaml
 from pydantic import ValidationError
 
 from sftpwarden.config import SFTPWardenConfig, WatcherConfig, WatcherMode, load_config
-from sftpwarden.utils.errors import ConfigError
 from sftpwarden.runtime import render_sshd_config_text
+from sftpwarden.utils.errors import ConfigError
 
 
 def write_yaml(path: Path, data: dict) -> None:

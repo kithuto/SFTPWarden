@@ -5,10 +5,10 @@ import csv
 from pydantic import ValidationError
 
 from sftpwarden.config import ProviderType
-from sftpwarden.utils.errors import ProviderError
 from sftpwarden.providers.base import BaseProvider
 from sftpwarden.providers.registry import register_provider
 from sftpwarden.users.models import ProviderUsers, SFTPUser
+from sftpwarden.utils.errors import ProviderError
 
 CSV_FIELDNAMES = [
     "username",

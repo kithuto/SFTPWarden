@@ -12,8 +12,8 @@ import tomli_w
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from sftpwarden.config import ProviderType, RemoteStorage, load_config
-from sftpwarden.utils.errors import ContextError
 from sftpwarden.utils.constants import CONFIG_FILENAME, DEFAULT_SSH_PORT, PRODUCTION_NAMES
+from sftpwarden.utils.errors import ContextError
 from sftpwarden.utils.paths import contexts_path, expand_path
 
 
