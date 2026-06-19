@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 import shutil
 from pathlib import Path
@@ -38,6 +39,7 @@ from sftpwarden.global_config import (
     resolve_provider,
     save_global_config,
 )
+from sftpwarden.passwords import resolve_password_hash
 from sftpwarden.paths import expand_path
 from sftpwarden.providers import (
     SFTPUser,
@@ -73,6 +75,23 @@ def handle_error(exc: SFTPWardenError) -> None:
     if exc.suggestion:
         console.print(f"[yellow]Fix:[/yellow] {exc.suggestion}")
     raise typer.Exit(1)
+
+
+def prompt_password_hash(
+    *,
+    password: str | None,
+    password_hash: str | None,
+    prompt_if_missing: bool = False,
+) -> str | None:
+    if password is not None and password_hash is not None:
+        return resolve_password_hash(password=password, password_hash=password_hash)
+    if password is None and password_hash is None and prompt_if_missing:
+        first = Prompt.ask("Password", password=True)
+        second = Prompt.ask("Repeat password", password=True)
+        if not hmac.compare_digest(first, second):
+            raise SFTPWardenError("Passwords do not match.")
+        password = first
+    return resolve_password_hash(password=password, password_hash=password_hash)
 
 
 def version_callback(value: bool) -> None:
@@ -527,6 +546,10 @@ def user_show(
 def user_add(
     username: str,
     public_key: Annotated[list[str] | None, typer.Option("--public-key")] = None,
+    password: Annotated[
+        str | None,
+        typer.Option("--password", help="Plaintext password to hash before saving."),
+    ] = None,
     password_hash: Annotated[str | None, typer.Option("--password-hash")] = None,
     upload_dir: Annotated[str, typer.Option("--upload-dir")] = "upload",
     uid: Annotated[int | None, typer.Option("--uid")] = None,
@@ -539,10 +562,15 @@ def user_add(
         loaded = load_config(entry.config)
         provider_path = provider_local_path(entry.root, loaded)
         users = load_users_from_project(entry.root, loaded)
+        resolved_password_hash = prompt_password_hash(
+            password=password,
+            password_hash=password_hash,
+            prompt_if_missing=loaded.auth.allow_password,
+        )
         user = SFTPUser(
             username=username,
             public_keys=public_key or [],
-            password_hash=password_hash,
+            password_hash=resolved_password_hash,
             upload_dir=upload_dir,
             uid=uid,
             gid=gid,
@@ -559,6 +587,10 @@ def user_add(
 def user_update(
     username: str,
     public_key: Annotated[list[str] | None, typer.Option("--public-key")] = None,
+    password: Annotated[
+        str | None,
+        typer.Option("--password", help="Plaintext password to hash before saving."),
+    ] = None,
     password_hash: Annotated[str | None, typer.Option("--password-hash")] = None,
     disabled: Annotated[bool | None, typer.Option("--disabled/--enabled")] = None,
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
@@ -569,11 +601,15 @@ def user_update(
         provider_path = provider_local_path(entry.root, loaded)
         users = load_users_from_project(entry.root, loaded)
         existing = find_user(users, username)
+        resolved_password_hash = prompt_password_hash(
+            password=password,
+            password_hash=password_hash,
+        )
         updated = existing.model_copy(
             update={
                 "public_keys": public_key if public_key is not None else existing.public_keys,
-                "password_hash": password_hash
-                if password_hash is not None
+                "password_hash": resolved_password_hash
+                if resolved_password_hash is not None
                 else existing.password_hash,
                 "disabled": disabled if disabled is not None else existing.disabled,
             }

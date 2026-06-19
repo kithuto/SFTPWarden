@@ -69,7 +69,7 @@ class AuthConfig(BaseModel):
     allow_public_key: bool = True
     allow_password: bool = True
     recommended: Literal["public_key", "password"] = "password"
-    password_hash_scheme: Literal["yescrypt", "sha512crypt"] = "yescrypt"
+    password_hash_scheme: Literal["sha512crypt"] = "sha512crypt"
 
     @model_validator(mode="after")
     def ensure_auth_method(self) -> AuthConfig:

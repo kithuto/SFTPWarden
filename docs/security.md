@@ -7,7 +7,7 @@ SFTPWarden follows conservative defaults for an SFTP gateway.
 - No users or secrets are baked into the image.
 - The generated `.dockerignore` excludes `.env`, `old/`, runtime data, state, and host keys.
 - Password authentication is enabled by default.
-- Plaintext passwords are rejected in provider data; use system password hashes only.
+- Plaintext passwords are rejected in provider data; `sftpwarden user add --password` hashes the value before saving it.
 - SSH public key auth is optional and can be used for key-only deployments.
 - User data is not deleted when a user is removed from the provider.
 - Core workflows do not manage host firewall rules and do not require `sudo`.

@@ -85,6 +85,10 @@ Remote-only contexts keep top-level `root` and `config` empty in the registry. R
 
 ```bash
 sftpwarden user add alice \
+  --password "correct horse battery staple" \
+  --upload-dir upload
+
+sftpwarden user add bob \
   --password-hash '$y$j9T$...' \
   --upload-dir upload
 
@@ -96,7 +100,7 @@ sftpwarden user show alice
 sftpwarden user remove alice --yes
 ```
 
-Password authentication is enabled by default. Provide only system password hashes in `password_hash`; SFTPWarden rejects plaintext passwords. SSH public keys can be added per user, and password login can be disabled with `auth.allow_password: false` for key-only deployments.
+Password authentication is enabled by default. If `user add` does not receive `--password`, `--password-hash`, or a key-only config, it prompts for the password and hashes it before saving. `--password-hash` stores an existing system password hash. SSH public keys can be added per user, and password login can be disabled with `auth.allow_password: false` for key-only deployments.
 
 ## Watch vs Refresh
 

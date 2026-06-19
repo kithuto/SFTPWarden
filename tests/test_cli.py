@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
 from typer.testing import CliRunner
 
 from sftpwarden.cli import app
@@ -32,7 +33,111 @@ def test_user_add_updates_yaml_without_plaintext_password(tmp_path: Path, monkey
     result = runner.invoke(
         app,
         ["user", "add", "alice", "--public-key", key, "--context", "dev", "--no-refresh"],
+        input="correct horse battery staple\ncorrect horse battery staple\n",
     )
 
     assert result.exit_code == 0, result.output
     assert "alice" in (root / "users.yaml").read_text(encoding="utf-8")
+
+
+def test_user_add_hashes_plaintext_password(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "dev-project"
+    runner = CliRunner()
+    runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
+
+    result = runner.invoke(
+        app,
+        [
+            "user",
+            "add",
+            "bob",
+            "--password",
+            "correct horse battery staple",
+            "--context",
+            "dev",
+            "--no-refresh",
+        ],
+    )
+
+    provider = yaml.safe_load((root / "users.yaml").read_text(encoding="utf-8"))
+    bob = provider["users"][0]
+
+    assert result.exit_code == 0, result.output
+    assert bob["username"] == "bob"
+    assert bob["password_hash"].startswith("$6$")
+    assert "correct horse battery staple" not in (root / "users.yaml").read_text(encoding="utf-8")
+
+
+def test_user_add_prompts_for_missing_password(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "dev-project"
+    runner = CliRunner()
+    runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
+
+    result = runner.invoke(
+        app,
+        ["user", "add", "eve", "--context", "dev", "--no-refresh"],
+        input="correct horse battery staple\ncorrect horse battery staple\n",
+    )
+
+    provider = yaml.safe_load((root / "users.yaml").read_text(encoding="utf-8"))
+    eve = provider["users"][0]
+
+    assert result.exit_code == 0, result.output
+    assert eve["username"] == "eve"
+    assert eve["password_hash"].startswith("$6$")
+    assert "correct horse battery staple" not in (root / "users.yaml").read_text(encoding="utf-8")
+
+
+def test_user_add_accepts_existing_password_hash(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "dev-project"
+    runner = CliRunner()
+    runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
+    password_hash = "$6$rounds=500000$saltstring$hashvalue"
+
+    result = runner.invoke(
+        app,
+        [
+            "user",
+            "add",
+            "carol",
+            "--password-hash",
+            password_hash,
+            "--context",
+            "dev",
+            "--no-refresh",
+        ],
+    )
+
+    provider = yaml.safe_load((root / "users.yaml").read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0, result.output
+    assert provider["users"][0]["password_hash"] == password_hash
+
+
+def test_user_add_rejects_password_and_hash_together(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "dev-project"
+    runner = CliRunner()
+    runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
+
+    result = runner.invoke(
+        app,
+        [
+            "user",
+            "add",
+            "dana",
+            "--password",
+            "correct horse battery staple",
+            "--password-hash",
+            "$6$rounds=500000$saltstring$hashvalue",
+            "--context",
+            "dev",
+            "--no-refresh",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Use either --password or --password-hash" in result.output
