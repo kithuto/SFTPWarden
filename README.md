@@ -63,6 +63,7 @@ runtime that is easy to understand, deploy, and operate.
 
 - [Key Features](#key-features)
 - [Installation](#installation)
+- [Shell Autocomplete](#shell-autocomplete)
 - [5-Minute Quick Start](#5-minute-quick-start)
 - [Deployment Choices](#deployment-choices)
 - [Project Files](#project-files)
@@ -109,6 +110,28 @@ Build the runtime image locally:
 
 ```bash
 docker build -t sftpwarden:local -f docker/runtime/Dockerfile .
+```
+
+## Shell Autocomplete
+
+SFTPWarden can install shell autocomplete through the Typer/Click helpers included
+in the CLI:
+
+```bash
+sftpwarden --install-completion
+```
+
+Open a new terminal, then use `<TAB>` to complete commands and options:
+
+```bash
+sftpwarden con<TAB>
+sftpwarden user add --<TAB>
+```
+
+To inspect the generated completion script without installing it:
+
+```bash
+sftpwarden --show-completion
 ```
 
 ## 5-Minute Quick Start

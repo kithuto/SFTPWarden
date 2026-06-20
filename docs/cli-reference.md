@@ -7,6 +7,7 @@ project. You do not need to know SFTPWarden internals to use these commands.
 
 - [How the CLI Thinks](#how-the-cli-thinks)
 - [Common Flags](#common-flags)
+- [Shell Autocomplete](#shell-autocomplete)
 - [Main Commands](#main-commands)
   - [sftpwarden init](#sftpwarden-init)
   - [SQL init flags](#sql-init-flags)
@@ -87,6 +88,30 @@ sftpwarden users -c prod
 | `--json` | Prints machine-readable JSON. | For automation and CI. |
 | `--dry-run` | Shows what would happen without changing anything. | Before deploys or remote operations. |
 | `--yes`, `-y` | Accepts confirmation prompts. | For CI or scripted workflows. |
+
+## Shell Autocomplete
+
+Typer adds shell completion helpers to the root `sftpwarden` command.
+
+Install autocomplete for your current shell:
+
+```bash
+sftpwarden --install-completion
+```
+
+Then open a new terminal or reload your shell. Completion works for commands and
+options, for example:
+
+```bash
+sftpwarden con<TAB>
+sftpwarden user add --<TAB>
+```
+
+If you want to review or install the shell script manually, print it instead:
+
+```bash
+sftpwarden --show-completion
+```
 
 ## Main Commands
 
