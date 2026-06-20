@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -30,3 +31,21 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 myst_heading_anchors = 3
 myst_enable_extensions = ["colon_fence"]
+
+
+def copy_readme_static_assets(app, exception) -> None:
+    """Copy README-relative assets into the published documentation tree."""
+    if exception is not None:
+        return
+
+    source_dir = Path(app.srcdir) / "_static"
+    target_dir = Path(app.outdir) / "docs" / "_static"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    source = source_dir / "logo-sftpwarden.png"
+    if source.exists():
+        shutil.copy2(source, target_dir / "logo-sftpwarden.png")
+
+
+def setup(app) -> None:
+    app.connect("build-finished", copy_readme_static_assets)
