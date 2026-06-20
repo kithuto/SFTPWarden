@@ -1,6 +1,6 @@
 <p align="center">
   <img
-    src="docs/_static/logo-sftpwarden.png"
+    src="https://raw.githubusercontent.com/kithuto/SFTPWarden/main/docs/_static/logo-sftpwarden.png"
     alt="SFTPWarden - Container-native SFTP management"
     width="760"
   >

@@ -1,11 +1,26 @@
 from __future__ import annotations
 
+from html.parser import HTMLParser
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from urllib.parse import urlparse
 
 import sftpwarden
+
+
+class _ImageSourceParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sources: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "img":
+            return
+        for name, value in attrs:
+            if name == "src" and value:
+                self.sources.append(value)
 
 
 def test_package_version_matches_module_version() -> None:
@@ -23,6 +38,23 @@ def test_package_metadata_is_public_release_ready() -> None:
     assert project["license"] == "Apache-2.0"
     assert project["readme"] == "README.md"
     assert project["urls"]["Documentation"] == "https://kithuto.github.io/sftpwarden/"
+
+
+def test_readme_uses_pypi_safe_logo_url() -> None:
+    readme = Path("README.md").read_text(encoding="utf-8")
+    parser = _ImageSourceParser()
+    parser.feed(readme)
+
+    logo_sources = [source for source in parser.sources if "logo-sftpwarden.png" in source]
+
+    assert logo_sources == [
+        "https://raw.githubusercontent.com/kithuto/SFTPWarden/main/docs/_static/logo-sftpwarden.png"
+    ]
+    parsed = urlparse(logo_sources[0])
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "raw.githubusercontent.com"
+    assert "logo%20sftpwarden" not in readme
+    assert 'src="docs/_static/' not in readme
 
 
 def test_installed_console_script_reports_version() -> None:
