@@ -205,9 +205,7 @@ def has_usable_password_hash(user: SFTPUser) -> bool:
     return bool(user.password_hash and not user.password_hash.startswith(("!", "*")))
 
 
-def allocate_users(
-    config: SFTPWardenConfig, users: ProviderUsers, state: RuntimeState
-) -> list[ResolvedUser]:
+def validate_explicit_ids(users: ProviderUsers) -> None:
     explicit_uids: dict[int, str] = {}
     explicit_gids: dict[int, str] = {}
     for user in users.users:
@@ -224,31 +222,65 @@ def allocate_users(
         if user.gid is not None:
             explicit_gids[user.gid] = user.username
 
+
+def used_identity_ids(users: ProviderUsers, state: RuntimeState) -> set[int]:
+    provider_names = {user.username for user in users.users}
     used_ids = {
-        user_state.uid
-        for username, user_state in state.users.items()
-        if any(user.username == username for user in users.users)
+        user_state.uid for username, user_state in state.users.items() if username in provider_names
     }
     used_ids.update(user.uid for user in users.users if user.uid is not None)
     used_ids.update(user.gid for user in users.users if user.gid is not None)
+    return used_ids
 
+
+def allocate_uid(
+    user: SFTPUser,
+    existing_state: RuntimeUserState | None,
+    *,
+    next_id: int,
+    used_ids: set[int],
+    max_id: int,
+) -> tuple[int, int]:
+    uid = user.uid or (existing_state.uid if existing_state else None)
+    if uid is not None:
+        return uid, next_id
+    while next_id in used_ids:
+        next_id += 1
+    if next_id > max_id:
+        raise RuntimeError("No UID/GID values remain in the configured allocation range.")
+    used_ids.add(next_id)
+    return next_id, next_id
+
+
+def resolved_gid(user: SFTPUser, existing_state: RuntimeUserState | None, uid: int) -> int:
+    return user.gid or (existing_state.gid if existing_state else uid)
+
+
+def assert_unique_resolved_uid(uid: int, seen_ids: set[int]) -> None:
+    if uid in seen_ids:
+        raise RuntimeError(f"Duplicate UID after allocation: {uid}")
+    seen_ids.add(uid)
+
+
+def allocate_users(
+    config: SFTPWardenConfig, users: ProviderUsers, state: RuntimeState
+) -> list[ResolvedUser]:
+    validate_explicit_ids(users)
+    used_ids = used_identity_ids(users, state)
     next_id = config.uid_gid.start
     resolved: list[ResolvedUser] = []
     seen_ids: set[int] = set()
     for user in users.users:
         existing_state = state.users.get(user.username)
-        uid = user.uid or (existing_state.uid if existing_state else None)
-        if uid is None:
-            while next_id in used_ids:
-                next_id += 1
-            if next_id > config.uid_gid.end:
-                raise RuntimeError("No UID/GID values remain in the configured allocation range.")
-            uid = next_id
-            used_ids.add(uid)
-        gid = user.gid or (existing_state.gid if existing_state else uid)
-        if uid in seen_ids:
-            raise RuntimeError(f"Duplicate UID after allocation: {uid}")
-        seen_ids.add(uid)
+        uid, next_id = allocate_uid(
+            user,
+            existing_state,
+            next_id=next_id,
+            used_ids=used_ids,
+            max_id=config.uid_gid.end,
+        )
+        gid = resolved_gid(user, existing_state, uid)
+        assert_unique_resolved_uid(uid, seen_ids)
         state.users[user.username] = RuntimeUserState(uid=uid, gid=gid, disabled=user.disabled)
         resolved.append(ResolvedUser(spec=user, uid=uid, gid=gid))
     return resolved
@@ -268,6 +300,61 @@ def copy_runtime_state(state: RuntimeState) -> RuntimeState:
     )
 
 
+def missing_user_actions(
+    config: SFTPWardenConfig, state: RuntimeState, desired_names: set[str]
+) -> list[RuntimeAction]:
+    if not config.sync.disable_missing_users:
+        return []
+    return [
+        RuntimeAction(
+            action="disable",
+            username=username,
+            uid=user_state.uid,
+            gid=user_state.gid,
+            reason="missing from provider",
+        )
+        for username, user_state in state.users.items()
+        if username not in desired_names
+    ]
+
+
+def runtime_action_for_user(
+    resolved: ResolvedUser, previous: RuntimeUserState | None
+) -> RuntimeAction:
+    username = resolved.spec.username
+    if resolved.spec.disabled:
+        return RuntimeAction(
+            action="disable",
+            username=username,
+            uid=resolved.uid,
+            gid=resolved.gid,
+            reason="disabled in provider",
+        )
+    if previous is None:
+        return RuntimeAction(
+            action="create",
+            username=username,
+            uid=resolved.uid,
+            gid=resolved.gid,
+            reason="new provider user",
+        )
+    return RuntimeAction(
+        action="update",
+        username=username,
+        uid=resolved.uid,
+        gid=resolved.gid,
+        reason=runtime_update_reason(previous, resolved),
+    )
+
+
+def runtime_update_reason(previous: RuntimeUserState, resolved: ResolvedUser) -> str:
+    if previous.uid != resolved.uid or previous.gid != resolved.gid:
+        return "uid/gid changed"
+    if previous.disabled:
+        return "reenable disabled user"
+    return "provider changed"
+
+
 def build_runtime_plan(
     config: SFTPWardenConfig,
     users: ProviderUsers,
@@ -280,73 +367,16 @@ def build_runtime_plan(
     planning_state = copy_runtime_state(state)
     resolved_users = allocate_users(config, users, planning_state)
     desired_names = {resolved.spec.username for resolved in resolved_users}
-    actions: list[RuntimeAction] = []
 
     if not force and state.fingerprint == fingerprint:
-        for username, user_state in state.users.items():
-            if username not in desired_names and config.sync.disable_missing_users:
-                actions.append(
-                    RuntimeAction(
-                        action="disable",
-                        username=username,
-                        uid=user_state.uid,
-                        gid=user_state.gid,
-                        reason="missing from provider",
-                    )
-                )
+        actions = missing_user_actions(config, state, desired_names)
         return RuntimePlan(fingerprint=fingerprint, actions=actions, resolved_users=resolved_users)
 
-    for resolved in resolved_users:
-        username = resolved.spec.username
-        previous = state.users.get(username)
-        if resolved.spec.disabled:
-            actions.append(
-                RuntimeAction(
-                    action="disable",
-                    username=username,
-                    uid=resolved.uid,
-                    gid=resolved.gid,
-                    reason="disabled in provider",
-                )
-            )
-        elif previous is None:
-            actions.append(
-                RuntimeAction(
-                    action="create",
-                    username=username,
-                    uid=resolved.uid,
-                    gid=resolved.gid,
-                    reason="new provider user",
-                )
-            )
-        else:
-            reason = "provider changed"
-            if previous.uid != resolved.uid or previous.gid != resolved.gid:
-                reason = "uid/gid changed"
-            elif previous.disabled:
-                reason = "reenable disabled user"
-            actions.append(
-                RuntimeAction(
-                    action="update",
-                    username=username,
-                    uid=resolved.uid,
-                    gid=resolved.gid,
-                    reason=reason,
-                )
-            )
-
-    if config.sync.disable_missing_users:
-        for username, user_state in state.users.items():
-            if username not in desired_names:
-                actions.append(
-                    RuntimeAction(
-                        action="disable",
-                        username=username,
-                        uid=user_state.uid,
-                        gid=user_state.gid,
-                        reason="missing from provider",
-                    )
-                )
+    actions = [
+        runtime_action_for_user(resolved, state.users.get(resolved.spec.username))
+        for resolved in resolved_users
+    ]
+    actions.extend(missing_user_actions(config, state, desired_names))
 
     return RuntimePlan(fingerprint=fingerprint, actions=actions, resolved_users=resolved_users)
 

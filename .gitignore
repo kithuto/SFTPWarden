@@ -6,6 +6,7 @@
 htmlcov/
 dist/
 build/
+_build/
 *.egg-info/
 __pycache__/
 *.py[cod]

@@ -7,7 +7,6 @@ from sftpwarden.contexts import ContextEntry, resolve_context
 from sftpwarden.providers import (
     SFTPUser,
     find_user,
-    load_users_from_project,
     provider_from_config,
 )
 from sftpwarden.users.models import ProviderUsers
@@ -30,7 +29,7 @@ class UserService:
         return self.entry
 
     def list_users(self) -> ProviderUsers:
-        return load_users_from_project(self.entry.root, self.config)
+        return self.provider.read()
 
     def show_user(self, username: str) -> SFTPUser:
         return find_user(self.list_users(), username)

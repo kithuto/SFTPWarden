@@ -28,79 +28,6 @@ class DeployPlan:
         return "\n".join(command_text(command) for command in self.commands)
 
 
-class DeployStrategy:
-    def build_plan(self, context: ContextEntry) -> DeployPlan:
-        raise NotImplementedError
-
-
-class LocalDeployStrategy(DeployStrategy):
-    def build_plan(self, context: ContextEntry) -> DeployPlan:
-        if not context.root or not context.config:
-            raise ContextError(f"Local context {context.name} is missing local settings.")
-        config = load_config(context.config)
-        write_compose(config, context.root)
-        return DeployPlan(
-            commands=[
-                ["docker", "compose", "-f", config.docker.compose_file, "pull"],
-                ["docker", "compose", "-f", config.docker.compose_file, "up", "-d"],
-                ["docker", "compose", "-f", config.docker.compose_file, "ps", "sftpwarden"],
-            ]
-        )
-
-
-class RemoteLocalSyncDeployStrategy(DeployStrategy):
-    def build_plan(self, context: ContextEntry) -> DeployPlan:
-        if not context.remote:
-            raise ContextError(f"Remote context {context.name} is missing remote settings.")
-        if not context.root or not context.config:
-            raise ContextError(
-                f"Remote local-sync context {context.name} is missing local settings."
-            )
-        config = load_config(context.config)
-        compose_path = write_compose(config, context.root)
-        files = required_sync_files(
-            Path(context.root),
-            config_path=Path(context.config),
-            compose_path=compose_path,
-        )
-        mkdir_command = f"mkdir -p {shlex.quote(context.remote.remote_root)}"
-        return DeployPlan(
-            commands=[
-                remote_shell_command(context.remote, mkdir_command),
-                remote_rsync_command(files, context.remote),
-                remote_shell_command(
-                    context.remote, remote_compose_command(context.remote, "pull")
-                ),
-                remote_shell_command(
-                    context.remote, remote_compose_command(context.remote, "up -d")
-                ),
-                remote_shell_command(
-                    context.remote,
-                    remote_compose_command(context.remote, "ps sftpwarden"),
-                ),
-            ]
-        )
-
-
-class RemoteOnlyDeployStrategy(DeployStrategy):
-    def build_plan(self, context: ContextEntry) -> DeployPlan:
-        if not context.remote:
-            raise ContextError(f"Remote context {context.name} is missing remote settings.")
-        remote = context.remote
-        validate = (
-            f"test -f {shlex.quote(remote.remote_config)} && "
-            f"test -f {shlex.quote(remote.remote_root.rstrip('/') + '/' + remote.compose_file)}"
-        )
-        return DeployPlan(
-            commands=[
-                remote_shell_command(remote, validate),
-                remote_shell_command(remote, remote_compose_command(remote, "pull")),
-                remote_shell_command(remote, remote_compose_command(remote, "up -d")),
-                remote_shell_command(remote, remote_compose_command(remote, "ps sftpwarden")),
-            ]
-        )
-
-
 def remote_shell_command(remote: RemoteEndpoint, command: str) -> list[str]:
     return [*ssh_base_command(remote), command]
 
@@ -127,38 +54,73 @@ def remote_rsync_command(files: list[Path], remote: RemoteEndpoint) -> list[str]
     ]
 
 
-def local_compose_command(context: ContextEntry, command: str) -> list[str]:
-    compose_file = "docker-compose.yml"
-    if context.config:
-        config = load_config(context.config)
-        compose_file = config.docker.compose_file
-    return ["docker", "compose", "-f", compose_file, *shlex.split(command)]
-
-
 def deploy_plan(context: ContextEntry) -> DeployPlan:
-    return deploy_strategy(context).build_plan(context)
-
-
-def deploy_strategy(context: ContextEntry) -> DeployStrategy:
     if context.type == ContextType.LOCAL:
-        return LocalDeployStrategy()
+        return _local_deploy_plan(context)
     if not context.remote:
         raise ContextError(f"Remote context {context.name} is missing remote settings.")
     if context.storage == RemoteStorage.REMOTE_ONLY:
-        return RemoteOnlyDeployStrategy()
-    return RemoteLocalSyncDeployStrategy()
+        return _remote_only_deploy_plan(context)
+    return _remote_local_sync_deploy_plan(context)
 
 
-def local_deploy_plan(context: ContextEntry) -> DeployPlan:
-    return LocalDeployStrategy().build_plan(context)
+def _local_deploy_plan(context: ContextEntry) -> DeployPlan:
+    if not context.root or not context.config:
+        raise ContextError(f"Local context {context.name} is missing local settings.")
+    config = load_config(context.config)
+    write_compose(config, context.root)
+    return DeployPlan(
+        commands=[
+            ["docker", "compose", "-f", config.docker.compose_file, "pull"],
+            ["docker", "compose", "-f", config.docker.compose_file, "up", "-d"],
+            ["docker", "compose", "-f", config.docker.compose_file, "ps", "sftpwarden"],
+        ]
+    )
 
 
-def remote_local_sync_deploy_plan(context: ContextEntry) -> DeployPlan:
-    return RemoteLocalSyncDeployStrategy().build_plan(context)
+def _remote_local_sync_deploy_plan(context: ContextEntry) -> DeployPlan:
+    if not context.remote:
+        raise ContextError(f"Remote context {context.name} is missing remote settings.")
+    if not context.root or not context.config:
+        raise ContextError(f"Remote local-sync context {context.name} is missing local settings.")
+    config = load_config(context.config)
+    compose_path = write_compose(config, context.root)
+    files = required_sync_files(
+        Path(context.root),
+        config_path=Path(context.config),
+        compose_path=compose_path,
+    )
+    mkdir_command = f"mkdir -p {shlex.quote(context.remote.remote_root)}"
+    return DeployPlan(
+        commands=[
+            remote_shell_command(context.remote, mkdir_command),
+            remote_rsync_command(files, context.remote),
+            remote_shell_command(context.remote, remote_compose_command(context.remote, "pull")),
+            remote_shell_command(context.remote, remote_compose_command(context.remote, "up -d")),
+            remote_shell_command(
+                context.remote,
+                remote_compose_command(context.remote, "ps sftpwarden"),
+            ),
+        ]
+    )
 
 
-def remote_only_deploy_plan(context: ContextEntry) -> DeployPlan:
-    return RemoteOnlyDeployStrategy().build_plan(context)
+def _remote_only_deploy_plan(context: ContextEntry) -> DeployPlan:
+    if not context.remote:
+        raise ContextError(f"Remote context {context.name} is missing remote settings.")
+    remote = context.remote
+    validate = (
+        f"test -f {shlex.quote(remote.remote_config)} && "
+        f"test -f {shlex.quote(remote.remote_root.rstrip('/') + '/' + remote.compose_file)}"
+    )
+    return DeployPlan(
+        commands=[
+            remote_shell_command(remote, validate),
+            remote_shell_command(remote, remote_compose_command(remote, "pull")),
+            remote_shell_command(remote, remote_compose_command(remote, "up -d")),
+            remote_shell_command(remote, remote_compose_command(remote, "ps sftpwarden")),
+        ]
+    )
 
 
 def required_sync_files(root: Path, *, config_path: Path, compose_path: Path) -> list[Path]:
