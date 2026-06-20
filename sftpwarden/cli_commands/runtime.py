@@ -18,7 +18,7 @@ from sftpwarden.runtime import (
     load_runtime_inputs,
     run_sync_loop,
 )
-from sftpwarden.utils.console import console
+from sftpwarden.utils.console import console, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
 
 
@@ -34,7 +34,9 @@ def runtime_refresh(
         Runtime config path inside the container.
     """
     try:
-        console.print(apply_once(config, force=True))
+        with terminal_status("Refreshing runtime users"):
+            output = apply_once(config, force=True)
+        console.print(output)
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -80,6 +82,7 @@ def runtime_sync(
         Runtime config path inside the container.
     """
     try:
+        console.print("[bold]Starting runtime sync loop[/bold]")
         run_sync_loop(config)
     except SFTPWardenError as exc:
         handle_error(exc)

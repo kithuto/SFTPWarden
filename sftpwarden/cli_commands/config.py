@@ -22,7 +22,8 @@ from sftpwarden.config.global_config import (
     save_global_config,
 )
 from sftpwarden.contexts import load_registry, resolve_context, save_registry
-from sftpwarden.utils.console import console
+from sftpwarden.utils.console import console, print_success
+from sftpwarden.utils.constants import PROJECT_CONFIG_PATHS
 from sftpwarden.utils.dotted import format_value, get_dotted, parse_cli_value, set_dotted
 from sftpwarden.utils.errors import SFTPWardenError
 
@@ -71,7 +72,7 @@ def config_value(
         write_config(entry.config, updated)
         if path == "project.name" and updated.project.name != old_name and not config:
             rename_context_for_project_name(entry.name, updated.project.name)
-        console.print(f"Updated [bold]{path}[/bold].")
+        print_success(f"Updated [bold]{path}[/bold].")
         raise typer.Exit()
     except SFTPWardenError as exc:
         handle_error(exc)
@@ -139,63 +140,7 @@ def update_project_config_value(
     write_config(entry.config, updated)
     if path == "project.name" and updated.project.name != old_name and not config:
         rename_context_for_project_name(entry.name, updated.project.name)
-    console.print(f"Updated [bold]{path}[/bold].")
-
-
-PROJECT_CONFIG_PATHS = [
-    "version",
-    "project.name",
-    "project.description",
-    "server.host",
-    "server.port",
-    "server.data_dir",
-    "server.host_keys_dir",
-    "server.state_dir",
-    "server.group",
-    "sync.enabled",
-    "sync.interval_seconds",
-    "sync.apply_on_startup",
-    "sync.disable_missing_users",
-    "sync.delete_missing_user_data",
-    "auth.allow_public_key",
-    "auth.allow_password",
-    "auth.recommended",
-    "auth.password_hash_scheme",
-    "isolation.mode",
-    "isolation.upload_dir",
-    "isolation.root_owner",
-    "isolation.root_group",
-    "isolation.root_permissions",
-    "isolation.upload_permissions",
-    "uid_gid.mode",
-    "uid_gid.start",
-    "uid_gid.end",
-    "uid_gid.preserve_existing",
-    "provider.type",
-    "provider.path",
-    "provider.dsn",
-    "provider.query",
-    "provider.table",
-    "logging.level",
-    "logging.format",
-    "docker.image",
-    "docker.container_name",
-    "docker.restart",
-    "docker.compose_file",
-    "remote.enabled",
-    "remote.storage",
-    "remote.host",
-    "remote.user",
-    "remote.port",
-    "remote.remote_root",
-    "remote.remote_config",
-    "remote.ssh_key",
-    "remote.delete_extra_files",
-    "remote.include_env",
-    "watcher.enabled",
-    "watcher.mode",
-    "watcher.image",
-]
+    print_success(f"Updated [bold]{path}[/bold].")
 
 
 def register_project_config_path(path: str) -> None:
@@ -263,6 +208,6 @@ def config_default_provider(provider: Annotated[str | None, typer.Argument()] = 
             return
         config.default_provider = ProviderType(provider)
         save_global_config(config)
-        console.print(f"Default provider set to [bold]{config.default_provider.value}[/bold].")
+        print_success(f"Default provider set to [bold]{config.default_provider.value}[/bold].")
     except (SFTPWardenError, ValueError) as exc:
         handle_error(exc if isinstance(exc, SFTPWardenError) else SFTPWardenError(str(exc)))

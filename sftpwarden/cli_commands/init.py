@@ -37,7 +37,7 @@ from sftpwarden.providers import (
 from sftpwarden.remote.checks import verify_remote_runtime_requirements
 from sftpwarden.render.compose import write_compose
 from sftpwarden.services.cli_workflows import install_context_watcher, remote_url_from_parts
-from sftpwarden.utils.console import console
+from sftpwarden.utils.console import print_info, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
 from sftpwarden.utils.files import write_private_text
 from sftpwarden.utils.paths import expand_path
@@ -166,9 +166,9 @@ def init(
         if global_config.default_provider is None:
             global_config.default_provider = selected_provider
             save_global_config(global_config)
-            console.print(f"Set global default provider to [bold]{selected_provider.value}[/bold].")
+            print_success(f"Set global default provider to [bold]{selected_provider.value}[/bold].")
         else:
-            console.print(f"Using global default provider [bold]{selected_provider.value}[/bold].")
+            print_info(f"Using global default provider [bold]{selected_provider.value}[/bold].")
         selected_root = expand_path(root) if root else Path.cwd()
         if (
             root is None
@@ -201,7 +201,7 @@ def init(
         entry = local_context(name, selected_root, selected_provider, critical)
         register_context(entry)
         set_default_context(name)
-        console.print(f"[green]Initialized[/green] context [bold]{name}[/bold] at {selected_root}.")
+        print_success(f"Initialized context [bold]{name}[/bold] at {selected_root}.")
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -272,7 +272,7 @@ def init_remote_context(
     selected_provider = resolve_provider(provider)
     defaults = load_global_config().defaults
     selected_port = port or defaults.ssh_port
-    console.print(f"Using remote SSH port [bold]{selected_port}[/bold].")
+    print_info(f"Using remote SSH port [bold]{selected_port}[/bold].")
     if (
         is_production_like(context_name)
         and not critical
@@ -334,11 +334,12 @@ def init_remote_context(
         port=selected_port,
     )
     if entry.remote and not skip_checks:
-        verify_remote_runtime_requirements(entry.remote)
+        with terminal_status(f"Checking remote host {entry.remote.host}"):
+            verify_remote_runtime_requirements(entry.remote)
     register_context(entry)
     set_default_context(context_name)
     install_context_watcher(entry, requested_mode=watcher_mode, yes=yes)
-    console.print(f"[green]Initialized[/green] remote context [bold]{context_name}[/bold].")
+    print_success(f"Initialized remote context [bold]{context_name}[/bold].")
 
 
 def init_project_config(
@@ -415,7 +416,9 @@ def ensure_sql_table_for_init(
     if config.provider.type not in SQL_PROVIDER_TYPES:
         return
     provider = provider_from_config(project_root, config)
-    if provider.table_exists():  # type: ignore[attr-defined]
+    with terminal_status(f"Checking SQL users table {config.provider.table}"):
+        table_exists = provider.table_exists()  # type: ignore[attr-defined]
+    if table_exists:
         return
     should_create = create_table
     if should_create is None and not yes:
@@ -433,5 +436,6 @@ def ensure_sql_table_for_init(
                 "examples/postgres/schema.sql, then run init again."
             ),
         )
-    provider.create_table()  # type: ignore[attr-defined]
-    console.print(f"[green]Created[/green] SQL users table [bold]{config.provider.table}[/bold].")
+    with terminal_status(f"Creating SQL users table {config.provider.table}"):
+        provider.create_table()  # type: ignore[attr-defined]
+    print_success(f"Created SQL users table [bold]{config.provider.table}[/bold].")

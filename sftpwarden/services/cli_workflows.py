@@ -4,7 +4,7 @@ from rich.prompt import Confirm
 
 from sftpwarden.contexts import ContextEntry
 from sftpwarden.refresh import refresh_context
-from sftpwarden.utils.console import console
+from sftpwarden.utils.console import console, print_info, terminal_status
 from sftpwarden.watcher import ensure_watcher, installed_watcher_mode
 
 
@@ -37,7 +37,9 @@ def print_refresh_after_user_change(entry: ContextEntry) -> None:
     entry
         Context affected by a user mutation.
     """
-    console.print(refresh_context(entry))
+    with terminal_status(f"Refreshing context {entry.name}"):
+        output = refresh_context(entry)
+    console.print(output)
 
 
 def install_context_watcher(
@@ -66,7 +68,7 @@ def install_context_watcher(
             f"Replace existing {existing.value} watcher with {requested_mode}?", default=False
         )
         if not replace:
-            console.print(f"Using existing [bold]{existing.value}[/bold] watcher.")
+            print_info(f"Using existing [bold]{existing.value}[/bold] watcher.")
             return
     result = ensure_watcher(requested_mode=requested_mode, yes=yes or replace)
     console.print(result)

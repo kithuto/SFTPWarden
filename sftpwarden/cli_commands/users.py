@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
+from rich import box
 from rich.prompt import Confirm
 from rich.table import Table
 
@@ -15,7 +16,7 @@ from sftpwarden.cli_commands.common import (
 )
 from sftpwarden.services.cli_workflows import print_refresh_after_user_change
 from sftpwarden.services.users import UserService
-from sftpwarden.utils.console import console
+from sftpwarden.utils.console import console, print_success
 from sftpwarden.utils.errors import SFTPWardenError
 
 
@@ -42,13 +43,17 @@ def users_list(
         if json_output:
             print_json(users.model_dump_json(indent=2))
             return
-        table = Table(title=f"Users in {service.context.name}")
-        table.add_column("Username")
-        table.add_column("Keys")
-        table.add_column("UID")
-        table.add_column("GID")
+        table = Table(
+            title=f"Users in {service.context.name}",
+            box=box.SIMPLE_HEAVY,
+            header_style="bold cyan",
+        )
+        table.add_column("Username", style="bold")
+        table.add_column("Keys", justify="right")
+        table.add_column("UID", justify="right")
+        table.add_column("GID", justify="right")
         table.add_column("Comment")
-        table.add_column("Disabled")
+        table.add_column("Disabled", justify="center")
         for user in users.users:
             table.add_row(
                 user.username,
@@ -144,7 +149,7 @@ def user_add(
             uid=uid,
             gid=gid,
         )
-        console.print(f"[green]Saved[/green] user [bold]{username}[/bold].")
+        print_success(f"Saved user [bold]{username}[/bold].")
         if not no_refresh:
             print_refresh_after_user_change(service.context)
     except SFTPWardenError as exc:
@@ -211,7 +216,7 @@ def user_update(
             gid=gid,
             disabled=disabled,
         )
-        console.print(f"[green]Updated[/green] user [bold]{username}[/bold].")
+        print_success(f"Updated user [bold]{username}[/bold].")
         if not no_refresh and result.runtime_changed:
             print_refresh_after_user_change(service.context)
     except SFTPWardenError as exc:
@@ -261,7 +266,7 @@ def user_remove(
             raise typer.Exit(1)
         service = UserService(context_name=context)
         service.remove_user(username)
-        console.print(f"[green]Removed[/green] user [bold]{username}[/bold].")
+        print_success(f"Removed user [bold]{username}[/bold].")
         if not no_refresh:
             print_refresh_after_user_change(service.context)
         if delete_files:

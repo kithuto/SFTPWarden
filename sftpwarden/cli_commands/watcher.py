@@ -11,7 +11,7 @@ from sftpwarden.cli_commands.common import (
     watcher_app,
 )
 from sftpwarden.contexts import require_initialized_context
-from sftpwarden.utils.console import console
+from sftpwarden.utils.console import console, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
 from sftpwarden.watcher import (
     install_watcher,
@@ -82,15 +82,26 @@ def watcher_install(
             ):
                 raise typer.Exit(1)
             yes = True
-        console.print(
-            install_watcher(
+        if dry_run:
+            console.print(
+                install_watcher(
+                    mode=watcher_mode,
+                    yes=yes,
+                    dry_run=True,
+                    image=image,
+                    activate=activate,
+                )
+            )
+            return
+        with terminal_status("Installing watcher"):
+            result = install_watcher(
                 mode=watcher_mode,
                 yes=yes,
-                dry_run=dry_run,
+                dry_run=False,
                 image=image,
                 activate=activate,
             )
-        )
+        print_success(result)
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -113,6 +124,11 @@ def watcher_uninstall(
         require_initialized_context()
         if not yes and not dry_run and not Confirm.ask("Uninstall watcher?", default=False):
             raise typer.Exit(1)
-        console.print(uninstall_watcher(dry_run=dry_run))
+        if dry_run:
+            console.print(uninstall_watcher(dry_run=True))
+            return
+        with terminal_status("Uninstalling watcher"):
+            result = uninstall_watcher(dry_run=False)
+        print_success(result)
     except SFTPWardenError as exc:
         handle_error(exc)

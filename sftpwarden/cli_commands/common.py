@@ -5,6 +5,7 @@ import json
 from typing import Annotated, Any
 
 import typer
+from rich import box
 from rich.prompt import Prompt
 from rich.table import Table
 
@@ -44,7 +45,7 @@ def handle_error(exc: SFTPWardenError) -> None:
     """
     console.print(f"[bold red]Error:[/bold red] {exc.message}")
     if exc.suggestion:
-        console.print(f"[yellow]Fix:[/yellow] {exc.suggestion}")
+        console.print(f"[bold yellow]Fix:[/bold yellow] {exc.suggestion}")
     raise typer.Exit(1)
 
 
@@ -160,11 +161,11 @@ def print_runtime_plan(runtime_plan: RuntimePlan) -> None:
     """
     if not runtime_plan.actions:
         return
-    table = Table(title="Runtime sync actions")
-    table.add_column("Action")
-    table.add_column("Username")
-    table.add_column("UID")
-    table.add_column("GID")
+    table = Table(title="Runtime sync actions", box=box.SIMPLE_HEAVY, header_style="bold cyan")
+    table.add_column("Action", style="bold")
+    table.add_column("Username", style="cyan")
+    table.add_column("UID", justify="right")
+    table.add_column("GID", justify="right")
     table.add_column("Reason")
     for action in runtime_plan.actions:
         table.add_row(

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from rich import box
 from rich.prompt import Confirm
 from rich.table import Table
 
@@ -35,7 +36,7 @@ from sftpwarden.runtime import (
     RuntimeState,
     build_runtime_plan,
 )
-from sftpwarden.utils.console import console
+from sftpwarden.utils.console import console, print_info, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
 from sftpwarden.utils.paths import expand_path
 from sftpwarden.watcher import (
@@ -66,8 +67,8 @@ def info(
         if json_output:
             print_json(entry.model_dump_json(indent=2))
             return
-        table = Table(title=f"Context {entry.name}")
-        table.add_column("Field")
+        table = Table(title=f"Context {entry.name}", box=box.SIMPLE_HEAVY, header_style="bold cyan")
+        table.add_column("Field", style="bold")
         table.add_column("Value")
         for key, value in entry.model_dump(mode="json", exclude_none=True).items():
             table.add_row(key, json.dumps(value) if isinstance(value, dict) else str(value))
@@ -105,10 +106,8 @@ def validate(
                 }
             )
             return
-        console.print(
-            f"[green]Valid config[/green] for project [bold]{loaded.project.name}[/bold]."
-        )
-        console.print(f"Provider: {loaded.provider.type.value} at {provider_path}")
+        print_success(f"Valid config for project [bold]{loaded.project.name}[/bold].")
+        print_info(f"Provider [bold]{loaded.provider.type.value}[/bold] at {provider_path}")
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -132,7 +131,7 @@ def compose(
         loaded = load_config(path)
         if write:
             target = write_compose(loaded, path.parent)
-            console.print(f"[green]Wrote[/green] {target}")
+            print_success(f"Wrote {target}")
             return
         console.print(compose_text(loaded, path.parent))
     except SFTPWardenError as exc:
@@ -178,14 +177,14 @@ def print_deploy_config_plan(reasons: list[str]) -> None:
         Detected configuration changes.
     """
     if not reasons:
-        console.print("No deploy-level configuration changes detected.")
+        print_success("No deploy-level configuration changes detected.")
         return
-    console.print(
+    print_info(
         "Configuration/deploy changes detected. These changes will be applied by "
         "`sftpwarden deploy`; `sftpwarden refresh` only applies user/provider changes."
     )
     for reason in reasons:
-        console.print(f"- {reason}")
+        console.print(f"  [cyan]-[/cyan] {reason}")
 
 
 @app.command()
@@ -223,8 +222,8 @@ def plan(
             data["deploy_config_reasons"] = config_change_reasons
             print_json(data)
             return
-        console.print(f"Context: [bold]{entry.name}[/bold]")
-        console.print(f"Provider users: {len(users.users)}")
+        print_info(f"Context [bold]{entry.name}[/bold]")
+        print_info(f"Provider users [bold]{len(users.users)}[/bold]")
         console.print(runtime_plan_explanation(runtime_plan, apply_command="sftpwarden refresh"))
         console.print(runtime_plan.summary())
         print_deploy_config_plan(config_change_reasons)
@@ -262,7 +261,11 @@ def refresh(
         )
         results = []
         for target in targets:
-            output = refresh_context(target, dry_run=dry_run)
+            if dry_run:
+                output = refresh_context(target, dry_run=True)
+            else:
+                with terminal_status(f"Refreshing context {target.name}"):
+                    output = refresh_context(target)
             results.append({"context": target.name, "result": output})
             if not json_output:
                 console.print(output)
@@ -305,9 +308,12 @@ def sync(
             )
             return
         for target in targets:
-            console.print(f"{target.context}: {target.local_path} -> {target.remote_path}")
+            console.print(
+                f"[bold]{target.context}[/bold]: {target.local_path} [cyan]->[/cyan] "
+                f"{target.remote_path}"
+            )
         if dry_run:
-            console.print("Dry run only; no files synced.")
+            print_info("Dry run only; no files synced.")
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -328,7 +334,7 @@ def watch(
     """
     try:
         require_initialized_context()
-        console.print("Watching remote local-sync contexts.")
+        print_info("Watching remote local-sync contexts.")
         poll_watch(interval_seconds=interval, dry_run=dry_run)
     except SFTPWardenError as exc:
         handle_error(exc)
@@ -360,7 +366,12 @@ def deploy(
             and not Confirm.ask(f"Deploy critical context {entry.name}?", default=False)
         ):
             raise typer.Exit(1)
-        console.print(deploy_context(entry, dry_run=dry_run))
+        if dry_run:
+            console.print(deploy_context(entry, dry_run=True))
+            return
+        with terminal_status(f"Deploying context {entry.name}"):
+            output = deploy_context(entry)
+        print_success(output)
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -381,7 +392,7 @@ def doctor(json_output: Annotated[bool, typer.Option("--json")] = False) -> None
     if json_output:
         print_json({"checks": checks})
         return
-    console.print("SFTPWarden doctor")
+    console.print("[bold]SFTPWarden doctor[/bold]")
     for check in checks:
-        status = "available" if check["available"] else "check PATH"
-        console.print(f"- {check['name']}: {status}")
+        status = "[green]available[/green]" if check["available"] else "[yellow]check PATH[/yellow]"
+        console.print(f"  [cyan]-[/cyan] [bold]{check['name']}[/bold]: {status}")
