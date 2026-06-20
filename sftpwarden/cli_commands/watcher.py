@@ -10,6 +10,7 @@ from sftpwarden.cli_commands.common import (
     print_json,
     watcher_app,
 )
+from sftpwarden.contexts import require_initialized_context
 from sftpwarden.utils.console import console
 from sftpwarden.utils.errors import SFTPWardenError
 from sftpwarden.watcher import (
@@ -30,10 +31,14 @@ def watcher_status(json_output: Annotated[bool, typer.Option("--json")] = False)
     json_output
         Whether to emit machine-readable JSON.
     """
-    if json_output:
-        print_json(watcher_status_data())
-        return
-    console.print(watcher_status_text())
+    try:
+        require_initialized_context()
+        if json_output:
+            print_json(watcher_status_data())
+            return
+        console.print(watcher_status_text())
+    except SFTPWardenError as exc:
+        handle_error(exc)
 
 
 @watcher_app.command("install")
@@ -68,6 +73,7 @@ def watcher_install(
         Whether to print planned commands without changing files.
     """
     try:
+        require_initialized_context()
         existing = installed_watcher_mode()
         if existing and watcher_mode and existing.value != watcher_mode and not yes:
             if not Confirm.ask(
@@ -104,6 +110,7 @@ def watcher_uninstall(
         Whether to print planned commands without changing files.
     """
     try:
+        require_initialized_context()
         if not yes and not dry_run and not Confirm.ask("Uninstall watcher?", default=False):
             raise typer.Exit(1)
         console.print(uninstall_watcher(dry_run=dry_run))

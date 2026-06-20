@@ -340,7 +340,7 @@ def test_refresh_all_requires_registered_contexts(
 ) -> None:
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
 
-    with pytest.raises(ContextError, match="No contexts are registered"):
+    with pytest.raises(ContextError, match="No SFTPWarden context has been initialized"):
         resolve_refresh_targets(all_contexts=True)
 
 
@@ -478,6 +478,8 @@ def test_watcher_install_is_idempotent_and_can_replace(
 ) -> None:
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     runner = CliRunner()
+    init = runner.invoke(app, ["init", "dev", "--root", str(tmp_path / "project"), "--yes"])
+    assert init.exit_code == 0, init.output
 
     first = runner.invoke(
         app, ["watcher", "install", "--watcher", "systemd", "--yes", "--no-activate"]
@@ -707,6 +709,8 @@ def test_watcher_status_json_reports_state_and_targets(
 ) -> None:
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     runner = CliRunner()
+    init = runner.invoke(app, ["init", "dev", "--root", str(tmp_path / "project"), "--yes"])
+    assert init.exit_code == 0, init.output
     runner.invoke(app, ["watcher", "install", "--watcher", "systemd", "--yes", "--no-activate"])
 
     result = runner.invoke(app, ["watcher", "status", "--json"])
@@ -723,6 +727,8 @@ def test_watcher_uninstall_clears_global_metadata(
 ) -> None:
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     runner = CliRunner()
+    init = runner.invoke(app, ["init", "dev", "--root", str(tmp_path / "project"), "--yes"])
+    assert init.exit_code == 0, init.output
     runner.invoke(app, ["watcher", "install", "--watcher", "systemd", "--yes", "--no-activate"])
 
     result = runner.invoke(app, ["watcher", "uninstall", "--yes"])
@@ -736,6 +742,8 @@ def test_systemd_watcher_install_plan_uses_sudo(
 ) -> None:
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     runner = CliRunner()
+    init = runner.invoke(app, ["init", "dev", "--root", str(tmp_path / "project"), "--yes"])
+    assert init.exit_code == 0, init.output
 
     result = runner.invoke(
         app,

@@ -22,6 +22,7 @@ from sftpwarden.config import (
     provider_local_path,
 )
 from sftpwarden.contexts import (
+    require_initialized_context,
     resolve_context,
 )
 from sftpwarden.providers import (
@@ -286,6 +287,7 @@ def sync(
         Whether to emit sync targets as JSON.
     """
     try:
+        require_initialized_context()
         targets = derive_watch_targets()
         if json_output:
             print_json(
@@ -325,6 +327,7 @@ def watch(
         Whether to report changes without syncing files.
     """
     try:
+        require_initialized_context()
         console.print("Watching remote local-sync contexts.")
         poll_watch(interval_seconds=interval, dry_run=dry_run)
     except SFTPWardenError as exc:

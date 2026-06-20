@@ -29,6 +29,7 @@ from sftpwarden.contexts import (
     register_context,
     remote_context,
     remove_context,
+    require_initialized_context,
     resolve_context,
     save_registry,
     set_default_context,
@@ -451,25 +452,29 @@ def context_ls(json_output: Annotated[bool, typer.Option("--json")] = False) -> 
     json_output
         Whether to emit raw registry JSON.
     """
-    registry = load_registry()
-    if json_output:
-        print_json(registry.model_dump_json(indent=2))
-        return
-    table = Table(title="SFTPWarden contexts")
-    table.add_column("Default")
-    table.add_column("Name")
-    table.add_column("Type")
-    table.add_column("Provider")
-    table.add_column("Root")
-    for name, entry in registry.contexts.items():
-        table.add_row(
-            "*" if registry.default == name else "",
-            name,
-            entry.type.value,
-            entry.provider.value,
-            entry.root,
-        )
-    console.print(table)
+    try:
+        require_initialized_context()
+        registry = load_registry()
+        if json_output:
+            print_json(registry.model_dump_json(indent=2))
+            return
+        table = Table(title="SFTPWarden contexts")
+        table.add_column("Default")
+        table.add_column("Name")
+        table.add_column("Type")
+        table.add_column("Provider")
+        table.add_column("Root")
+        for name, entry in registry.contexts.items():
+            table.add_row(
+                "*" if registry.default == name else "",
+                name,
+                entry.type.value,
+                entry.provider.value,
+                entry.root,
+            )
+        console.print(table)
+    except SFTPWardenError as exc:
+        handle_error(exc)
 
 
 @context_app.command("current")
@@ -512,12 +517,16 @@ def context_use(name: str) -> None:
 @context_app.command("clear")
 def context_clear() -> None:
     """Clear the default context from the registry."""
-    registry = load_registry()
-    registry.default = None
-    from sftpwarden.contexts import save_registry
+    try:
+        require_initialized_context()
+        registry = load_registry()
+        registry.default = None
+        from sftpwarden.contexts import save_registry
 
-    save_registry(registry)
-    console.print("Default context cleared.")
+        save_registry(registry)
+        console.print("Default context cleared.")
+    except SFTPWardenError as exc:
+        handle_error(exc)
 
 
 @context_app.command("show")

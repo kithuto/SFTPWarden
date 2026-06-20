@@ -933,6 +933,7 @@ def test_user_remove_can_be_cancelled(tmp_path: Path, monkeypatch: pytest.Monkey
 
 def test_watcher_status_install_and_uninstall_commands(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = CliRunner()
+    monkeypatch.setattr(watcher_commands, "require_initialized_context", lambda: None)
     monkeypatch.setattr(
         watcher_commands,
         "watcher_status_data",
@@ -967,6 +968,7 @@ def test_watcher_install_replacement_confirmation_paths(
 ) -> None:
     runner = CliRunner()
     install_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(watcher_commands, "require_initialized_context", lambda: None)
     monkeypatch.setattr(
         watcher_commands,
         "installed_watcher_mode",
@@ -989,6 +991,7 @@ def test_watcher_install_replacement_confirmation_paths(
 
 def test_watcher_install_and_uninstall_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     runner = CliRunner()
+    monkeypatch.setattr(watcher_commands, "require_initialized_context", lambda: None)
     monkeypatch.setattr(watcher_commands, "installed_watcher_mode", lambda: None)
     monkeypatch.setattr(
         watcher_commands,
