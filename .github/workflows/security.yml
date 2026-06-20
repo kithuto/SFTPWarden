@@ -52,14 +52,14 @@ jobs:
         run: docker build -t sftpwarden-watcher:security -f docker/watcher/Dockerfile .
 
       - name: Scan runtime image
-        uses: aquasecurity/trivy-action@v0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: sftpwarden:security
           format: sarif
           output: trivy-runtime.sarif
 
       - name: Scan watcher image
-        uses: aquasecurity/trivy-action@v0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: sftpwarden-watcher:security
           format: sarif
