@@ -1,0 +1,7 @@
+version: 1
+project:
+  name: csv-example
+provider:
+  type: csv
+  path: /etc/sftpwarden/users.csv
+

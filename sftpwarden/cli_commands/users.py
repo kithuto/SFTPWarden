@@ -25,6 +25,17 @@ def users_list(
     config: Annotated[str | None, typer.Option("--config")] = None,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
+    """List users in the selected context.
+
+    Parameters
+    ----------
+    context
+        Optional context name.
+    config
+        Optional direct config path.
+    json_output
+        Whether to emit users as JSON.
+    """
     try:
         service = UserService(context_name=context, config_path=config)
         users = service.list_users()
@@ -58,6 +69,17 @@ def user_show(
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
     config: Annotated[str | None, typer.Option("--config")] = None,
 ) -> None:
+    """Show one user as JSON.
+
+    Parameters
+    ----------
+    username
+        Username to look up.
+    context
+        Optional context name.
+    config
+        Optional direct config path.
+    """
     try:
         user = UserService(context_name=context, config_path=config).show_user(username)
         print_json(user.model_dump_json(indent=2))
@@ -81,6 +103,31 @@ def user_add(
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
     no_refresh: Annotated[bool, typer.Option("--no-refresh")] = False,
 ) -> None:
+    """Add a user to the selected provider.
+
+    Parameters
+    ----------
+    username
+        Username to create.
+    public_key
+        Public keys to assign.
+    password
+        Plaintext password to hash before storing.
+    password_hash
+        Precomputed password hash.
+    upload_dir
+        User upload directory relative to the chroot.
+    comment
+        Optional operator note.
+    uid
+        Optional explicit UID.
+    gid
+        Optional explicit GID.
+    context
+        Optional context name.
+    no_refresh
+        Whether to skip automatic refresh after mutation.
+    """
     try:
         service = UserService(context_name=context)
         resolved_password_hash = prompt_password_hash(
@@ -121,6 +168,33 @@ def user_update(
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
     no_refresh: Annotated[bool, typer.Option("--no-refresh")] = False,
 ) -> None:
+    """Update an existing provider user.
+
+    Parameters
+    ----------
+    username
+        Username to update.
+    public_key
+        Replacement public keys.
+    password
+        Plaintext password to hash before storing.
+    password_hash
+        Replacement precomputed password hash.
+    upload_dir
+        Replacement upload directory.
+    comment
+        Replacement operator note.
+    uid
+        Replacement explicit UID.
+    gid
+        Replacement explicit GID.
+    disabled
+        Whether the user should be disabled or enabled.
+    context
+        Optional context name.
+    no_refresh
+        Whether to skip automatic refresh after runtime-affecting mutation.
+    """
     try:
         service = UserService(context_name=context)
         resolved_password_hash = prompt_password_hash(
@@ -150,10 +224,39 @@ def user_remove(
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
     yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
     no_refresh: Annotated[bool, typer.Option("--no-refresh")] = False,
+    delete_files: Annotated[
+        bool,
+        typer.Option(
+            "--delete-files",
+            "--force-delete-files",
+            help="Delete the user's data directory after removing the provider user.",
+        ),
+    ] = False,
 ) -> None:
+    """Remove a user from the selected provider.
+
+    Parameters
+    ----------
+    username
+        Username to remove.
+    context
+        Optional context name.
+    yes
+        Whether to skip confirmation.
+    no_refresh
+        Whether to skip automatic refresh after mutation.
+    delete_files
+        Whether to delete the user's runtime data directory.
+    """
     try:
+        message = (
+            f"Remove user {username} and permanently delete all user files?"
+            if delete_files
+            else f"Remove user {username}? User data will not be deleted."
+        )
         if not yes and not Confirm.ask(
-            f"Remove user {username}? User data will not be deleted.", default=False
+            message,
+            default=False,
         ):
             raise typer.Exit(1)
         service = UserService(context_name=context)
@@ -161,5 +264,7 @@ def user_remove(
         console.print(f"[green]Removed[/green] user [bold]{username}[/bold].")
         if not no_refresh:
             print_refresh_after_user_change(service.context)
+        if delete_files:
+            console.print(service.delete_user_files(username))
     except SFTPWardenError as exc:
         handle_error(exc)

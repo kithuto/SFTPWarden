@@ -18,11 +18,15 @@ from sftpwarden.utils.paths import contexts_path, expand_path
 
 
 class ContextType(StrEnum):
+    """Type of registered SFTPWarden context."""
+
     LOCAL = "local"
     REMOTE = "remote"
 
 
 class RemoteEndpoint(BaseModel):
+    """SSH endpoint and remote SFTPWarden paths."""
+
     model_config = ConfigDict(extra="forbid")
 
     host: str
@@ -35,6 +39,8 @@ class RemoteEndpoint(BaseModel):
 
 
 class ContextEntry(BaseModel):
+    """Registered local or remote SFTPWarden context."""
+
     model_config = ConfigDict(extra="forbid")
 
     name: str
@@ -49,6 +55,8 @@ class ContextEntry(BaseModel):
 
 
 class ContextRegistry(BaseModel):
+    """Persistent registry of known SFTPWarden contexts."""
+
     model_config = ConfigDict(extra="forbid")
 
     default: str | None = None
@@ -57,6 +65,8 @@ class ContextRegistry(BaseModel):
 
 @dataclass(frozen=True)
 class ParsedRemoteURL:
+    """Parsed remote URL components."""
+
     user: str | None
     host: str
     path: str | None
@@ -66,10 +76,39 @@ REMOTE_RE = re.compile(r"^(?:(?P<user>[^@\s:]+)@)?(?P<host>[^:\s]+)(?::(?P<path>
 
 
 def is_production_like(name: str) -> bool:
+    """Return whether a context name looks production-like.
+
+    Parameters
+    ----------
+    name
+        Context name.
+
+    Returns
+    -------
+    bool
+        ``True`` when the name should receive production safeguards.
+    """
     return name.strip().lower() in PRODUCTION_NAMES
 
 
 def parse_remote_url(value: str) -> ParsedRemoteURL:
+    """Parse a remote URL in ``[user@]host[:path]`` form.
+
+    Parameters
+    ----------
+    value
+        Remote URL string.
+
+    Returns
+    -------
+    ParsedRemoteURL
+        Parsed user, host, and optional path.
+
+    Raises
+    ------
+    ContextError
+        Raised when the URL is invalid.
+    """
     match = REMOTE_RE.match(value)
     if not match:
         raise ContextError(
@@ -84,6 +123,18 @@ def parse_remote_url(value: str) -> ParsedRemoteURL:
 
 
 def load_registry(path: Path | None = None) -> ContextRegistry:
+    """Load the context registry.
+
+    Parameters
+    ----------
+    path
+        Optional registry path.
+
+    Returns
+    -------
+    ContextRegistry
+        Loaded registry, or an empty registry when missing.
+    """
     registry_path = path or contexts_path()
     if not registry_path.exists():
         return ContextRegistry()
@@ -98,6 +149,15 @@ def load_registry(path: Path | None = None) -> ContextRegistry:
 
 
 def save_registry(registry: ContextRegistry, path: Path | None = None) -> None:
+    """Persist the context registry.
+
+    Parameters
+    ----------
+    registry
+        Registry to save.
+    path
+        Optional registry path.
+    """
     registry_path = path or contexts_path()
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     registry_path.write_text(
@@ -109,6 +169,18 @@ def save_registry(registry: ContextRegistry, path: Path | None = None) -> None:
 
 
 def register_context(entry: ContextEntry) -> ContextRegistry:
+    """Register or replace a context.
+
+    Parameters
+    ----------
+    entry
+        Context entry to save.
+
+    Returns
+    -------
+    ContextRegistry
+        Updated registry.
+    """
     registry = load_registry()
     registry.contexts[entry.name] = entry
     if registry.default is None:
@@ -118,6 +190,18 @@ def register_context(entry: ContextEntry) -> ContextRegistry:
 
 
 def remove_context(name: str) -> ContextRegistry:
+    """Remove a registered context.
+
+    Parameters
+    ----------
+    name
+        Context name to remove.
+
+    Returns
+    -------
+    ContextRegistry
+        Updated registry.
+    """
     registry = load_registry()
     if name not in registry.contexts:
         raise ContextError(f"Unknown context: {name}", suggestion="Run `sftpwarden context ls`.")
@@ -129,6 +213,18 @@ def remove_context(name: str) -> ContextRegistry:
 
 
 def set_default_context(name: str) -> ContextRegistry:
+    """Set the default context.
+
+    Parameters
+    ----------
+    name
+        Context name.
+
+    Returns
+    -------
+    ContextRegistry
+        Updated registry.
+    """
     registry = load_registry()
     if name not in registry.contexts:
         raise ContextError(f"Unknown context: {name}", suggestion="Run `sftpwarden context ls`.")
@@ -137,12 +233,136 @@ def set_default_context(name: str) -> ContextRegistry:
     return registry
 
 
+def reconcile_registered_context(registry: ContextRegistry, name: str) -> ContextEntry:
+    """Sync registry metadata from the local project config when available.
+
+    Parameters
+    ----------
+    registry
+        Loaded context registry.
+    name
+        Context key to reconcile.
+
+    Returns
+    -------
+    ContextEntry
+        Reconciled context entry.
+
+    Raises
+    ------
+    ContextError
+        Raised when a manually changed project name conflicts with another
+        registered context.
+    """
+    entry = reconcile_registered_paths(registry, name)
+    if not entry.config:
+        return entry
+
+    config_path = expand_path(entry.config)
+    if not config_path.exists():
+        return entry
+
+    config = load_config(config_path)
+    updates: dict[str, object] = {}
+    if entry.provider != config.provider.type:
+        updates["provider"] = config.provider.type
+    if entry.name != config.project.name:
+        if config.project.name in registry.contexts and config.project.name != name:
+            raise ContextError(f"Context already exists: {config.project.name}")
+        updates["name"] = config.project.name
+
+    if not updates:
+        return entry
+
+    updated = entry.model_copy(update=updates)
+    if updated.name != name:
+        del registry.contexts[name]
+        registry.contexts[updated.name] = updated
+        if registry.default == name:
+            registry.default = updated.name
+    else:
+        registry.contexts[name] = updated
+    save_registry(registry)
+    return updated
+
+
+def reconcile_registered_paths(registry: ContextRegistry, name: str) -> ContextEntry:
+    """Detect and reconcile safe root/config path changes.
+
+    Parameters
+    ----------
+    registry
+        Loaded context registry.
+    name
+        Context key to reconcile.
+
+    Returns
+    -------
+    ContextEntry
+        Context with consistent root/config paths.
+
+    Raises
+    ------
+    ContextError
+        Raised when a manual root edit needs an explicit migration command.
+    """
+    entry = registry.contexts[name]
+    if not entry.root or not entry.config:
+        return entry
+
+    root = expand_path(entry.root)
+    config_path = expand_path(entry.config)
+    expected_config = root / CONFIG_FILENAME
+    if config_path.parent == root:
+        return entry
+
+    if expected_config.exists():
+        updated = entry.model_copy(update={"config": str(expected_config)})
+        registry.contexts[name] = updated
+        save_registry(registry)
+        return updated
+
+    if config_path.exists():
+        raise ContextError(
+            f"Context {entry.name} has inconsistent root/config paths.",
+            suggestion=(
+                f"Run `sftpwarden context root {root} --yes` so SFTPWarden can copy "
+                "project files safely, or update both root and config to an existing project."
+            ),
+        )
+    return entry
+
+
 def resolve_context(
     *,
     config_path: str | None = None,
     context_name: str | None = None,
     cwd: Path | None = None,
+    reconcile_config: bool = False,
 ) -> ContextEntry:
+    """Resolve the active context.
+
+    Parameters
+    ----------
+    config_path
+        Optional explicit project config path.
+    context_name
+        Optional registered context name.
+    cwd
+        Optional working directory used for local discovery.
+    reconcile_config
+        Whether to reconcile registry metadata from the project config.
+
+    Returns
+    -------
+    ContextEntry
+        Resolved context.
+
+    Raises
+    ------
+    ContextError
+        Raised when no context can be resolved.
+    """
     working_dir = cwd or Path.cwd()
     if config_path:
         path = expand_path(config_path)
@@ -158,12 +378,16 @@ def resolve_context(
     registry = load_registry()
     if requested:
         try:
+            if reconcile_config:
+                return reconcile_registered_context(registry, requested)
             return registry.contexts[requested]
         except KeyError as exc:
             raise ContextError(
                 f"Unknown context: {requested}", suggestion="Run `sftpwarden context ls`."
             ) from exc
     if registry.default and registry.default in registry.contexts:
+        if reconcile_config:
+            return reconcile_registered_context(registry, registry.default)
         return registry.contexts[registry.default]
     local_config = working_dir / CONFIG_FILENAME
     if local_config.exists():
@@ -186,6 +410,24 @@ def resolve_context(
 def local_context(
     name: str, root: str | Path, provider: ProviderType, critical: bool = False
 ) -> ContextEntry:
+    """Create a local context entry.
+
+    Parameters
+    ----------
+    name
+        Context name.
+    root
+        Local project root.
+    provider
+        Provider type.
+    critical
+        Whether the context should require critical-operation confirmation.
+
+    Returns
+    -------
+    ContextEntry
+        Local context entry.
+    """
     root_path = expand_path(root)
     return ContextEntry(
         name=name,
@@ -211,6 +453,38 @@ def remote_context(
     explicit_remote_root: str | None = None,
     port: int = DEFAULT_SSH_PORT,
 ) -> ContextEntry:
+    """Create a remote context entry.
+
+    Parameters
+    ----------
+    name
+        Context name.
+    provider
+        Provider type.
+    remote_url
+        Remote URL in ``[user@]host[:path]`` form.
+    local_root
+        Optional local project root for local-sync contexts.
+    remote_root
+        Default remote root.
+    remote_only
+        Whether the context stores files only on the remote host.
+    ssh_key
+        Optional SSH key path or ``default``.
+    critical
+        Whether the context should require critical-operation confirmation.
+    remote_user
+        Optional explicit remote user.
+    explicit_remote_root
+        Optional explicit remote root.
+    port
+        SSH port.
+
+    Returns
+    -------
+    ContextEntry
+        Remote context entry.
+    """
     parsed = parse_remote_url(remote_url)
     if parsed.user and remote_user and parsed.user != remote_user:
         raise ContextError(

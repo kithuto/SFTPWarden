@@ -1,68 +1,82 @@
 # SFTPWarden
 
-Container-native SFTP gateway powered by OpenSSH, chroot isolation, declarative user
-providers, and a practical CLI for local and remote operations.
+Container-native SFTP for teams that want a small, auditable OpenSSH runtime with
+declarative users, predictable Docker deployment, and a CLI that works the same
+locally and on remote hosts.
 
-[Installation](#installation) | [Quick Start](#quick-start) | [Users](#user-management) |
-[Contexts](#contexts) | [Providers](#providers) | [Operations](#operations) |
-[Security](#security-model) | [Documentation](#documentation)
+SFTPWarden runs OpenSSH in a container and keeps users, host keys, data, and runtime
+state outside the image. You manage environments with `sftpwarden`, and the runtime
+keeps Linux users synchronized from YAML, CSV, MySQL, or PostgreSQL.
 
----
+## Key Features
 
-SFTPWarden runs a small OpenSSH-based container and keeps users, secrets, host keys,
-and runtime state outside the image. Operators manage environments with the
-`sftpwarden` CLI, while the runtime applies user changes from YAML, CSV, MySQL, or
-PostgreSQL providers.
+- **Fast adoption for real SFTP needs:** create a local or remote SFTP environment
+  with `sftpwarden init`, add users, and deploy with Docker Compose without
+  hand-writing OpenSSH container plumbing.
+- **Declarative user sources:** manage accounts from YAML, CSV, MySQL, or
+  PostgreSQL, so small teams can start with files and larger systems can use SQL.
+- **Safe user isolation:** every SFTP user is forced into OpenSSH `internal-sftp`
+  and isolated under `/data/<username>` with chroot-oriented defaults.
+- **Docker-native operations:** generated Compose files, `sftpwarden deploy`,
+  `plan`, `refresh`, `watch`, `--dry-run`, and `--json` make it practical for
+  local development, CI, and production runbooks.
+- **Context-based workflow:** use Docker-style active contexts for `dev`, `prod`,
+  remote local-sync, and remote-only deployments instead of repeating long flags
+  on every command.
+- **Remote deployment built in:** deploy through SSH, rsync, and Docker Compose,
+  with systemd or Docker watcher modes for syncing user-provider changes.
+- **Operationally conservative defaults:** secrets are not baked into images,
+  plaintext provider passwords are rejected, host keys and state are persisted,
+  and user data is never deleted unless explicitly requested.
 
-Key features:
-
-- Lightweight OpenSSH runtime image with no baked-in users.
-- Per-user SFTP chroot under `/data/<username>`.
-- YAML, CSV, MySQL, and PostgreSQL providers.
-- CLI user management with password hashing and SSH key support.
-- Automatic UID/GID allocation with persistent runtime state.
-- Local, remote `local-sync`, and remote `remote-only` contexts.
-- Remote deploy through SSH, rsync, and Docker Compose.
-- Watcher support for syncing editable config/provider files to remote hosts.
-- Immediate runtime reloads with `sftpwarden refresh`.
-- JSON output for automation-friendly commands.
-
-> Security note: SFTPWarden provides OpenSSH chroot isolation inside a container.
-> It is not VM-grade isolation and does not replace host hardening.
+SFTPWarden is intentionally lightweight. It is not a full identity platform, a file
+sharing suite, or VM-grade isolation. It gives you a conservative OpenSSH-based SFTP
+runtime that is easy to understand, deploy, and operate.
 
 ## Table of Contents
 
+- [Key Features](#key-features)
 - [Installation](#installation)
-- [Quick Start](#quick-start)
+- [5-Minute Quick Start](#5-minute-quick-start)
+- [Deployment Choices](#deployment-choices)
 - [Project Files](#project-files)
 - [User Management](#user-management)
-- [Contexts](#contexts)
-- [Watch vs Refresh](#watch-vs-refresh)
 - [Providers](#providers)
-- [Configuration](#configuration)
 - [Operations](#operations)
-- [Security Model](#security-model)
+- [Security](#security)
 - [Documentation](#documentation)
-- [Development](#development)
+- [Contributing](#contributing)
+
+---
 
 ## Installation
 
-Development install:
+Install the CLI:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e ".[dev,docs,watch,mysql,postgres]"
+pip install sftpwarden
 sftpwarden --version
 ```
 
-Optional provider extras:
+For local development before the first public package release:
 
-| Provider | Extra |
+```bash
+git clone https://github.com/kithuto/sftpwarden.git
+cd sftpwarden
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[watch,mysql,postgres]"
+sftpwarden --version
+```
+
+Optional extras:
+
+| Need | Install |
 | --- | --- |
-| MySQL | `pip install -e ".[mysql]"` |
-| PostgreSQL | `pip install -e ".[postgres]"` |
-| Watcher tooling | `pip install -e ".[watch]"` |
+| File watcher support | `pip install "sftpwarden[watch]"` |
+| MySQL provider | `pip install "sftpwarden[mysql]"` |
+| PostgreSQL provider | `pip install "sftpwarden[postgres]"` |
+| Documentation/development | `pip install -e ".[dev,docs,watch,mysql,postgres]"` |
 
 Build the runtime image locally:
 
@@ -70,42 +84,104 @@ Build the runtime image locally:
 docker build -t sftpwarden:local -f docker/runtime/Dockerfile .
 ```
 
-Build the watcher image locally:
+## 5-Minute Quick Start
 
-```bash
-docker build -t sftpwarden-watcher:local -f docker/watcher/Dockerfile .
-```
-
-## Quick Start
-
-Create a local environment:
+Create a local SFTP project:
 
 ```bash
 sftpwarden config default-provider yaml
-sftpwarden init dev --root ~/sftpwarden-dev --yes
+mkdir -p ~/sftpwarden-dev
 cd ~/sftpwarden-dev
+sftpwarden init dev --yes
 sftpwarden validate
-sftpwarden compose --write
-docker compose up -d --build
+sftpwarden deploy
 ```
 
-Add a user and force the runtime to reload:
+Add a user:
 
 ```bash
 sftpwarden user add alice \
   --password "correct horse battery staple" \
-  --comment "Main upload account" \
-  -c dev
-
-sftpwarden refresh -c dev
+  --comment "Main upload account"
 ```
 
-Preview runtime changes:
+Connect with any SFTP client:
 
 ```bash
-sftpwarden plan -c dev
-sftpwarden runtime plan --config /etc/sftpwarden/sftpwarden.yaml
+sftp -P 2222 alice@localhost
 ```
+
+Preview and apply runtime changes:
+
+```bash
+sftpwarden plan
+sftpwarden refresh
+```
+
+`sftpwarden init` makes the created context active, so day-to-day commands do not
+need `--context`. This follows the same friendly idea people know from Docker:
+work in a project directory, keep an active context, and pass an explicit context
+only when you need to override it. To switch later, run `sftpwarden context use dev`.
+
+Read or update project settings without opening YAML:
+
+```bash
+sftpwarden config project.name dev2
+sftpwarden config server.port 2200
+sftpwarden context root ~/sftpwarden-dev2 --yes
+```
+
+## Deployment Choices
+
+Pick the model that matches how your team works.
+
+| Model | Best for | Source of truth | Watcher |
+| --- | --- | --- | --- |
+| Local | Development, demos, single-host testing | Local project folder | No |
+| Remote local-sync | Production managed from a workstation or CI runner | Local project folder synced to remote host | Yes |
+| Remote-only | Existing remote deployments managed in-place | Remote project folder | No |
+
+Local:
+
+```bash
+mkdir -p ~/sftpwarden-dev
+cd ~/sftpwarden-dev
+sftpwarden init dev --yes
+sftpwarden deploy
+```
+
+Remote local-sync:
+
+```bash
+mkdir -p ~/sftpwarden-prod
+cd ~/sftpwarden-prod
+sftpwarden init prod --remote deploy@sftp-prod.example.com:/opt/sftpwarden \
+  --critical
+
+sftpwarden deploy --dry-run
+sftpwarden deploy --yes
+```
+
+Remote-only:
+
+```bash
+sftpwarden init archive --remote deploy@sftp-archive.example.com:/opt/sftpwarden \
+  --remote-only \
+  --critical
+
+sftpwarden refresh --dry-run
+```
+
+Use `sftpwarden context add` when a SFTPWarden project already exists and you only
+want to register it on this machine:
+
+```bash
+sftpwarden context add prod deploy@sftp-prod.example.com:/opt/sftpwarden --critical
+sftpwarden context use prod
+```
+
+Production-like names such as `prod`, `production`, `prd`, `live`, and `main`
+require confirmation unless marked with `--critical` or accepted with `--yes`.
 
 ## Project Files
 
@@ -123,119 +199,58 @@ host_keys/
 The container always listens on port `22` internally. Configure the host-facing
 port with `server.port` in `sftpwarden.yaml`.
 
-The canonical runtime Dockerfile is `docker/runtime/Dockerfile`. The top-level
-`Dockerfile` remains as a compatibility entrypoint.
+Runtime state is stored in `/var/lib/sftpwarden/state.json` inside the container
+and should be backed by the `state/` volume. Host keys are stored in `host_keys/`
+to keep SSH fingerprints stable across restarts.
 
 ## User Management
 
 List and inspect users:
 
 ```bash
-sftpwarden users -c dev
-sftpwarden user show alice -c dev
+sftpwarden users
+sftpwarden user show alice
 ```
 
 Add users:
 
 ```bash
-sftpwarden user add alice --password "correct horse battery staple" -c dev
-sftpwarden user add bob --password-hash '$6$rounds=500000$...' -c dev
-sftpwarden user add carol --public-key "ssh-ed25519 AAAA..." -c dev
+sftpwarden user add alice --password "correct horse battery staple"
+sftpwarden user add bob --password-hash '$6$rounds=500000$...'
+sftpwarden user add carol --public-key "ssh-ed25519 AAAA..."
 ```
 
 Update users:
 
 ```bash
-sftpwarden user update alice --upload-dir inbound -c dev
-sftpwarden user update alice --uid 12001 --gid 12001 -c dev
-sftpwarden user update alice --comment "Finance inbox" -c dev
-sftpwarden user update alice --disabled -c dev
+sftpwarden user update alice --upload-dir inbound
+sftpwarden user update alice --uid 12001 --gid 12001
+sftpwarden user update alice --comment "Finance inbox"
+sftpwarden user update alice --disabled
 ```
 
-Remove a user from the provider:
+Removing a user disables access but does not delete user data:
 
 ```bash
-sftpwarden user remove alice -c dev --yes
+sftpwarden user remove alice --yes
 ```
 
-Removing a user disables access but does not delete user data.
-
-## Contexts
-
-Contexts tell the CLI where an environment lives.
-
-Local context:
+To permanently remove the user's data directory too:
 
 ```bash
-sftpwarden init dev --root ~/sftpwarden-dev --yes
-sftpwarden context use dev
+sftpwarden user remove alice --delete-files --yes
 ```
 
-Remote local-sync context:
-
-```bash
-sftpwarden context add prod deploy@sftp-prod.example.com:/opt/sftpwarden \
-  --root ~/sftpwarden-prod \
-  --critical \
-  --skip-checks
-```
-
-Remote-only context:
-
-```bash
-sftpwarden context add archive deploy@sftp-archive.example.com:/opt/sftpwarden \
-  --remote-only \
-  --critical \
-  --skip-checks
-```
-
-Context resolution order:
-
-1. `--config`
-2. `--context` / `-c`
-3. `SFTPWARDEN_CONTEXT`
-4. default context from `~/.sftpwarden/contexts.toml`
-5. `sftpwarden.yaml` in the current directory
-
-Production-like names such as `prod`, `production`, `prd`, `live`, and `main`
-require confirmation unless marked with `--critical` or accepted with `--yes`.
-
-## Watch vs Refresh
-
-`watch` syncs editable local files for remote `local-sync` contexts:
-
-```bash
-sftpwarden sync --json
-sftpwarden watch
-```
-
-Watched files are derived from the context registry and each context's
-`sftpwarden.yaml`. For YAML/CSV providers this means the project config and the
-configured provider file. For SQL providers, only the project config is synced.
-
-`refresh` tells a running runtime to reload users immediately:
-
-```bash
-sftpwarden refresh -c dev
-sftpwarden refresh --all
-sftpwarden refresh -c prod --dry-run --json
-```
-
-Docker Compose changes require an explicit deploy:
-
-```bash
-sftpwarden deploy -c prod --dry-run
-sftpwarden deploy -c prod --yes
-```
+Updating only `comment` does not refresh the runtime because comments are metadata.
 
 ## Providers
 
-| Provider | Runtime reads | CLI mutations | Notes |
+| Provider | Runtime reads | CLI mutations | Good fit |
 | --- | ---: | ---: | --- |
-| YAML | Yes | Yes | Default provider and best quickstart path |
-| CSV | Yes | Yes | Public keys are newline-separated in one field |
-| MySQL | Yes | Yes | Requires `dsn`; uses the configured table/query |
-| PostgreSQL | Yes | Yes | Requires `dsn`; uses the configured table/query |
+| YAML | Yes | Yes | Quick start, GitOps-style small deployments |
+| CSV | Yes | Yes | Spreadsheet-friendly user handoff |
+| MySQL | Yes | Yes | Existing application databases |
+| PostgreSQL | Yes | Yes | Existing platform or product databases |
 
 SQL providers read from `sftp_users` by default. The table should include:
 
@@ -245,40 +260,16 @@ username, public_keys, password_hash, uid, gid, upload_dir, comment, disabled
 
 See `examples/mysql/schema.sql` and `examples/postgres/schema.sql`.
 
-## Configuration
+During `init`, SFTPWarden checks whether the configured SQL table exists. If it is
+missing, it asks whether to create the table or abort so you can create it
+manually:
 
-Minimum valid `sftpwarden.yaml`:
-
-```yaml
-version: 1
-project:
-  name: sftpwarden
-provider:
-  type: yaml
-  path: /etc/sftpwarden/users.yaml
+```bash
+sftpwarden init prod \
+  --provider postgresql \
+  --dsn '${SFTPWARDEN_POSTGRES_DSN}' \
+  --create-table
 ```
-
-Useful defaults:
-
-```yaml
-server:
-  port: 2222
-
-auth:
-  allow_public_key: true
-  allow_password: true
-  recommended: password
-
-sync:
-  interval_seconds: 60
-  disable_missing_users: true
-```
-
-`server.container_port` is intentionally invalid. The container SSH port is
-always `22`; `server.port` controls the host port exposed by Docker Compose.
-
-Global CLI config lives at `~/.sftpwarden/config.toml`. Contexts live at
-`~/.sftpwarden/contexts.toml`.
 
 ## Operations
 
@@ -288,34 +279,42 @@ Common operational commands:
 sftpwarden doctor
 sftpwarden validate --config sftpwarden.yaml
 sftpwarden compose --write
-sftpwarden plan -c dev --json
-sftpwarden refresh -c dev --dry-run
+sftpwarden deploy --dry-run
+sftpwarden plan --json
+sftpwarden refresh --dry-run
 sftpwarden watcher status --json
 ```
 
-Runtime state is stored in `/var/lib/sftpwarden/state.json` inside the container
-and should be backed by the `state/` volume. Host keys are stored in `host_keys/`
-to keep SSH server fingerprints stable across restarts.
+`watch` and `refresh` are different on purpose:
 
-## Security Model
+- `sftpwarden watch` syncs YAML/CSV user provider files for remote `local-sync` contexts.
+- `sftpwarden refresh` tells a running runtime to reload users immediately.
+- Configuration and Docker Compose changes require `sftpwarden deploy`.
+
+`sftpwarden deploy` checks for Docker Compose before starting local deployments.
+For remote deployments, the remote host must have Docker Compose v2 available as
+`docker compose`.
+
+For production watcher installs, prefer `systemd` so SSH uses the host's normal
+identity, agent, `~/.ssh/config`, known hosts, bastions, and `ProxyJump` settings.
+Docker watcher mode is stricter and requires explicit dedicated deployment keys.
+
+## Security
 
 SFTPWarden follows conservative defaults:
 
-- Users and secrets are not baked into images.
-- Plaintext passwords are rejected in provider data.
-- `sftpwarden user add --password` stores only a system password hash.
-- SFTP users are forced into `internal-sftp`.
-- Root login, empty passwords, forwarding, tunneling, X11, and user environments
-  are disabled.
-- User data is not deleted automatically.
-- `.env`, `data/`, `state/`, `host_keys/`, Git metadata, and Python caches are
-  not watched or synced by the watcher.
-- Systemd watcher mode is recommended for production because it uses the host's
-  normal SSH defaults, agent, SSH config, and bastion settings.
-- Docker watcher mode does not require Docker socket access and only mounts
-  explicit dedicated SSH keys, never the whole `~/.ssh` directory.
+- users and secrets are not baked into images;
+- plaintext passwords are rejected in provider data;
+- `sftpwarden user add --password` stores only a system password hash;
+- SFTP users are forced into `internal-sftp`;
+- root login, empty passwords, forwarding, tunneling, X11, and user environments
+  are disabled;
+- user data is not deleted automatically;
+- `sftpwarden user remove --delete-files` is explicit and irreversible;
+- `.env`, `data/`, `state/`, `host_keys/`, Git metadata, and Python caches are not
+  watched or synced.
 
-For key-only deployments, add public keys to every active user and set:
+Key-only deployment:
 
 ```yaml
 auth:
@@ -324,45 +323,40 @@ auth:
   recommended: public_key
 ```
 
+Read the [security guide](docs/security.md) before exposing a deployment to a
+public or customer-facing network.
+
 ## Documentation
 
-General documentation lives in this README. Specific guides live in:
+The README is the adoption path. Detailed guides live in:
 
 - [Configuration](docs/configuration.md)
 - [Operations](docs/operations.md)
 - [Security](docs/security.md)
 - [CLI Reference](docs/cli-reference.md)
+- [Contributing, development, and testing](docs/contributing.md)
 
-The Sphinx site is built from `docs/` and published to GitHub Pages by the docs
-workflow.
+The Sphinx documentation is built from `docs/` and published to GitHub Pages.
 
-Local docs build:
+Build it locally:
 
 ```bash
 python -m pip install -e ".[docs]"
 sphinx-build -b html docs docs/_build/html
 ```
 
-## Development
+## Contributing
 
-Run the test suite:
+Contributions are welcome: bug reports, docs fixes, examples, tests, provider work,
+and operational feedback are all useful.
 
-```bash
-python -m pip install tox
-tox
-```
+Start here:
 
-`tox` expects Python 3.11, 3.12, and 3.13 to be available on the machine. It
-creates one environment per Python version and installs the test dependencies
-there.
-
-Run a single Python version:
-
-```bash
-tox -e py311
-tox -e py312
-tox -e py313
-```
-
-Release automation for v1.0 is expected to publish the Python package to PyPI,
-runtime and watcher images to GHCR, and documentation to GitHub Pages.
+- [CONTRIBUTING.md](https://github.com/kithuto/sftpwarden/blob/main/CONTRIBUTING.md)
+  for the GitHub workflow.
+- [docs/contributing.md](docs/contributing.md) for install, development, testing,
+  docs, and release checks.
+- [SECURITY.md](https://github.com/kithuto/sftpwarden/blob/main/SECURITY.md) for
+  responsible vulnerability reporting.
+- [CODE_OF_CONDUCT.md](https://github.com/kithuto/sftpwarden/blob/main/CODE_OF_CONDUCT.md)
+  for participation expectations.

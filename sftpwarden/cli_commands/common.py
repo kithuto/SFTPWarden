@@ -15,8 +15,14 @@ from sftpwarden.utils.console import console
 from sftpwarden.utils.errors import SFTPWardenError
 
 app = typer.Typer(help="Container-native SFTP gateway powered by OpenSSH.")
-config_app = typer.Typer(help="Global CLI configuration.")
-context_app = typer.Typer(help="Context registry management.")
+config_app = typer.Typer(
+    help="Global CLI configuration.",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
+context_app = typer.Typer(
+    help="Context registry management.",
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)
 runtime_app = typer.Typer(help="Runtime-only commands used inside the container.")
 user_app = typer.Typer(help="Manage users in mutable providers.")
 watcher_app = typer.Typer(help="Watcher management.")
@@ -29,6 +35,13 @@ app.add_typer(watcher_app, name="watcher")
 
 
 def handle_error(exc: SFTPWardenError) -> None:
+    """Print a domain error and exit the CLI.
+
+    Parameters
+    ----------
+    exc
+        Application error with user-facing message and optional suggestion.
+    """
     console.print(f"[bold red]Error:[/bold red] {exc.message}")
     if exc.suggestion:
         console.print(f"[yellow]Fix:[/yellow] {exc.suggestion}")
@@ -41,6 +54,22 @@ def prompt_password_hash(
     password_hash: str | None,
     prompt_if_missing: bool = False,
 ) -> str | None:
+    """Resolve password options into a stored password hash.
+
+    Parameters
+    ----------
+    password
+        Plaintext password provided through the CLI.
+    password_hash
+        Precomputed password hash provided through the CLI.
+    prompt_if_missing
+        Whether to prompt interactively when neither password option is set.
+
+    Returns
+    -------
+    str or None
+        Password hash ready to persist, or ``None`` when no password was provided.
+    """
     if password is not None and password_hash is not None:
         return resolve_password_hash(password=password, password_hash=password_hash)
     if password is None and password_hash is None and prompt_if_missing:
@@ -53,6 +82,18 @@ def prompt_password_hash(
 
 
 def runtime_plan_to_json(runtime_plan: RuntimePlan) -> str:
+    """Serialize a runtime plan for CLI JSON output.
+
+    Parameters
+    ----------
+    runtime_plan
+        Runtime plan to serialize.
+
+    Returns
+    -------
+    str
+        Stable, indented JSON document.
+    """
     return json.dumps(
         {
             "fingerprint": runtime_plan.fingerprint,
@@ -74,13 +115,49 @@ def runtime_plan_to_json(runtime_plan: RuntimePlan) -> str:
 
 
 def print_json(data: Any) -> None:
+    """Write JSON-compatible data to the configured console file.
+
+    Parameters
+    ----------
+    data
+        JSON string or JSON-serializable object.
+    """
     text = data if isinstance(data, str) else json.dumps(data, indent=2, sort_keys=True)
     console.file.write(text)
     console.file.write("\n")
     console.file.flush()
 
 
+def runtime_plan_explanation(runtime_plan: RuntimePlan, *, apply_command: str) -> str:
+    """Explain what a runtime plan means for the next apply command.
+
+    Parameters
+    ----------
+    runtime_plan
+        Runtime plan to explain.
+    apply_command
+        User-facing command that applies the planned actions.
+
+    Returns
+    -------
+    str
+        Human-readable explanation.
+    """
+    if runtime_plan.changed:
+        return (
+            f"User/provider changes detected. These actions will be applied by `{apply_command}`."
+        )
+    return f"No user/provider changes detected. `{apply_command}` has nothing to apply."
+
+
 def print_runtime_plan(runtime_plan: RuntimePlan) -> None:
+    """Render runtime actions as a Rich table.
+
+    Parameters
+    ----------
+    runtime_plan
+        Runtime plan whose actions should be displayed.
+    """
     if not runtime_plan.actions:
         return
     table = Table(title="Runtime sync actions")
@@ -101,6 +178,13 @@ def print_runtime_plan(runtime_plan: RuntimePlan) -> None:
 
 
 def version_callback(value: bool) -> None:
+    """Handle the eager ``--version`` option.
+
+    Parameters
+    ----------
+    value
+        Whether the version flag was provided.
+    """
     if value:
         console.print(f"SFTPWarden {__version__}")
         raise typer.Exit()
@@ -115,4 +199,11 @@ def main(
         ),
     ] = False,
 ) -> None:
+    """Configure root CLI options.
+
+    Parameters
+    ----------
+    version
+        Eager version flag handled by Typer before command dispatch.
+    """
     _ = version

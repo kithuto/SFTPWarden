@@ -9,6 +9,7 @@ from sftpwarden.cli_commands.common import (
     print_json,
     print_runtime_plan,
     runtime_app,
+    runtime_plan_explanation,
     runtime_plan_to_json,
 )
 from sftpwarden.runtime import (
@@ -25,6 +26,13 @@ from sftpwarden.utils.errors import SFTPWardenError
 def runtime_refresh(
     config: Annotated[str, typer.Option("--config")] = "/etc/sftpwarden/sftpwarden.yaml",
 ) -> None:
+    """Force one runtime synchronization pass.
+
+    Parameters
+    ----------
+    config
+        Runtime config path inside the container.
+    """
     try:
         console.print(apply_once(config, force=True))
     except SFTPWardenError as exc:
@@ -36,12 +44,24 @@ def runtime_plan(
     config: Annotated[str, typer.Option("--config")] = "/etc/sftpwarden/sftpwarden.yaml",
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
+    """Show the container runtime synchronization plan.
+
+    Parameters
+    ----------
+    config
+        Runtime config path inside the container.
+    json_output
+        Whether to emit the plan as JSON.
+    """
     try:
         loaded, users, state = load_runtime_inputs(config)
         sync_plan = build_runtime_plan(loaded, users, state)
         if json_output:
             print_json(runtime_plan_to_json(sync_plan))
             return
+        console.print(
+            runtime_plan_explanation(sync_plan, apply_command="sftpwarden runtime refresh")
+        )
         console.print(sync_plan.summary())
         print_runtime_plan(sync_plan)
     except SFTPWardenError as exc:
@@ -52,6 +72,13 @@ def runtime_plan(
 def runtime_sync(
     config: Annotated[str, typer.Option("--config")] = "/etc/sftpwarden/sftpwarden.yaml",
 ) -> None:
+    """Run the long-lived runtime synchronization loop.
+
+    Parameters
+    ----------
+    config
+        Runtime config path inside the container.
+    """
     try:
         run_sync_loop(config)
     except SFTPWardenError as exc:

@@ -23,6 +23,13 @@ from sftpwarden.watcher import (
 
 @watcher_app.command("status")
 def watcher_status(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
+    """Show watcher installation status.
+
+    Parameters
+    ----------
+    json_output
+        Whether to emit machine-readable JSON.
+    """
     if json_output:
         print_json(watcher_status_data())
         return
@@ -45,6 +52,21 @@ def watcher_install(
     yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
 ) -> None:
+    """Install or update the local watcher.
+
+    Parameters
+    ----------
+    watcher_mode
+        Requested watcher mode.
+    image
+        Optional Docker image override for Docker watcher mode.
+    activate
+        Whether to start or enable the watcher after writing files.
+    yes
+        Whether confirmation prompts should be skipped.
+    dry_run
+        Whether to print planned commands without changing files.
+    """
     try:
         existing = installed_watcher_mode()
         if existing and watcher_mode and existing.value != watcher_mode and not yes:
@@ -72,6 +94,15 @@ def watcher_uninstall(
     yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
 ) -> None:
+    """Uninstall the local watcher.
+
+    Parameters
+    ----------
+    yes
+        Whether confirmation prompts should be skipped.
+    dry_run
+        Whether to print planned commands without changing files.
+    """
     try:
         if not yes and not dry_run and not Confirm.ask("Uninstall watcher?", default=False):
             raise typer.Exit(1)

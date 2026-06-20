@@ -25,13 +25,34 @@ CSV_FIELDNAMES = [
 
 @register_provider
 class CSVProvider(FileProvider):
+    """CSV-backed user provider."""
+
     provider_type = ProviderType.CSV
 
     @classmethod
     def empty_text(cls) -> str:
+        """Return an empty CSV provider document.
+
+        Returns
+        -------
+        str
+            CSV header row.
+        """
         return ",".join(CSV_FIELDNAMES) + "\n"
 
     def read(self) -> ProviderUsers:
+        """Read users from a CSV provider file.
+
+        Returns
+        -------
+        ProviderUsers
+            Parsed provider users.
+
+        Raises
+        ------
+        ProviderError
+            Raised when the file is missing or invalid.
+        """
         path = self.ensure_exists()
         users: list[SFTPUser] = []
         with path.open(newline="", encoding="utf-8") as handle:
@@ -59,6 +80,13 @@ class CSVProvider(FileProvider):
             raise ProviderError(f"Invalid CSV provider file: {path}: {exc}") from exc
 
     def write(self, users: ProviderUsers) -> None:
+        """Write users to a CSV provider file.
+
+        Parameters
+        ----------
+        users
+            Users to persist.
+        """
         path = self.ensure_parent_dir()
         with path.open("w", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=CSV_FIELDNAMES)

@@ -14,6 +14,7 @@ from sftpwarden.cli_commands.common import (
     handle_error,
     print_json,
     print_runtime_plan,
+    runtime_plan_explanation,
     runtime_plan_to_json,
 )
 from sftpwarden.config import (
@@ -48,6 +49,17 @@ def info(
     config: Annotated[str | None, typer.Option("--config")] = None,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
+    """Show resolved context information.
+
+    Parameters
+    ----------
+    context
+        Optional context name.
+    config
+        Optional direct config path.
+    json_output
+        Whether to emit JSON instead of a table.
+    """
     try:
         entry = resolve_context(config_path=config, context_name=context)
         if json_output:
@@ -68,6 +80,15 @@ def validate(
     config: Annotated[str, typer.Option("--config", help="Config file path.")] = "sftpwarden.yaml",
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
+    """Validate a project config and provider location.
+
+    Parameters
+    ----------
+    config
+        Config file path to validate.
+    json_output
+        Whether to emit machine-readable JSON.
+    """
     try:
         config_path = expand_path(config)
         loaded = load_config(config_path)
@@ -96,6 +117,15 @@ def compose(
     config: Annotated[str, typer.Option("--config")] = "sftpwarden.yaml",
     write: Annotated[bool, typer.Option("--write", help="Write docker-compose.yml.")] = False,
 ) -> None:
+    """Render or write the Docker Compose file for a project.
+
+    Parameters
+    ----------
+    config
+        Config file path.
+    write
+        Whether to write ``docker-compose.yml`` instead of printing it.
+    """
     try:
         path = expand_path(config)
         loaded = load_config(path)
@@ -108,12 +138,72 @@ def compose(
         handle_error(exc)
 
 
+def deploy_config_change_reasons(entry, loaded) -> list[str]:
+    """Return deploy-level configuration changes detected for a context.
+
+    Parameters
+    ----------
+    entry
+        Resolved context entry.
+    loaded
+        Loaded project config.
+
+    Returns
+    -------
+    list[str]
+        Human-readable reasons that require ``sftpwarden deploy``.
+    """
+    reasons: list[str] = []
+    if entry.name != loaded.project.name:
+        reasons.append("project.name differs from the registered context")
+    if entry.provider != loaded.provider.type:
+        reasons.append("provider type differs from the registered context")
+
+    compose_path = Path(entry.root) / loaded.docker.compose_file
+    expected_compose = compose_text(loaded, entry.root)
+    if not compose_path.exists():
+        reasons.append(f"{loaded.docker.compose_file} is missing")
+    elif compose_path.read_text(encoding="utf-8") != expected_compose:
+        reasons.append(f"{loaded.docker.compose_file} differs from current configuration")
+    return reasons
+
+
+def print_deploy_config_plan(reasons: list[str]) -> None:
+    """Print deploy-level configuration plan details.
+
+    Parameters
+    ----------
+    reasons
+        Detected configuration changes.
+    """
+    if not reasons:
+        console.print("No deploy-level configuration changes detected.")
+        return
+    console.print(
+        "Configuration/deploy changes detected. These changes will be applied by "
+        "`sftpwarden deploy`; `sftpwarden refresh` only applies user/provider changes."
+    )
+    for reason in reasons:
+        console.print(f"- {reason}")
+
+
 @app.command()
 def plan(
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
     config: Annotated[str | None, typer.Option("--config")] = None,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
+    """Show the runtime sync plan for a local context.
+
+    Parameters
+    ----------
+    context
+        Optional context name.
+    config
+        Optional direct config path.
+    json_output
+        Whether to emit the plan as JSON.
+    """
     try:
         entry = resolve_context(config_path=config, context_name=context)
         if not entry.root or not entry.config:
@@ -125,12 +215,18 @@ def plan(
         users = load_users_from_project(entry.root, loaded)
         state = RuntimeState.load(Path(entry.root) / "state" / "state.json")
         runtime_plan = build_runtime_plan(loaded, users, state)
+        config_change_reasons = deploy_config_change_reasons(entry, loaded)
         if json_output:
-            print_json(runtime_plan_to_json(runtime_plan))
+            data = json.loads(runtime_plan_to_json(runtime_plan))
+            data["deploy_config_changed"] = bool(config_change_reasons)
+            data["deploy_config_reasons"] = config_change_reasons
+            print_json(data)
             return
         console.print(f"Context: [bold]{entry.name}[/bold]")
         console.print(f"Provider users: {len(users.users)}")
+        console.print(runtime_plan_explanation(runtime_plan, apply_command="sftpwarden refresh"))
         console.print(runtime_plan.summary())
+        print_deploy_config_plan(config_change_reasons)
         print_runtime_plan(runtime_plan)
     except SFTPWardenError as exc:
         handle_error(exc)
@@ -144,6 +240,21 @@ def refresh(
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
+    """Refresh one or more contexts.
+
+    Parameters
+    ----------
+    context
+        Optional context name.
+    config
+        Optional direct config path.
+    all_contexts
+        Whether to refresh all registered contexts.
+    dry_run
+        Whether to print commands without executing them.
+    json_output
+        Whether to emit machine-readable JSON.
+    """
     try:
         targets = resolve_refresh_targets(
             all_contexts=all_contexts, context_name=context, config_path=config
@@ -165,6 +276,15 @@ def sync(
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
+    """List or dry-run watcher sync targets.
+
+    Parameters
+    ----------
+    dry_run
+        Whether to avoid file synchronization.
+    json_output
+        Whether to emit sync targets as JSON.
+    """
     try:
         targets = derive_watch_targets()
         if json_output:
@@ -195,6 +315,15 @@ def watch(
     interval: Annotated[int, typer.Option("--interval", min=1)] = 2,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
 ) -> None:
+    """Poll local files and sync changed watcher targets.
+
+    Parameters
+    ----------
+    interval
+        Polling interval in seconds.
+    dry_run
+        Whether to report changes without syncing files.
+    """
     try:
         console.print("Watching remote local-sync contexts.")
         poll_watch(interval_seconds=interval, dry_run=dry_run)
@@ -208,8 +337,19 @@ def deploy(
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip critical confirmation.")] = False,
 ) -> None:
+    """Deploy the selected context.
+
+    Parameters
+    ----------
+    context
+        Optional context name.
+    dry_run
+        Whether to print planned commands without executing them.
+    yes
+        Whether to skip critical-context confirmation.
+    """
     try:
-        entry = resolve_context(context_name=context)
+        entry = resolve_context(context_name=context, reconcile_config=True)
         if (
             entry.critical
             and not dry_run
@@ -224,6 +364,13 @@ def deploy(
 
 @app.command()
 def doctor(json_output: Annotated[bool, typer.Option("--json")] = False) -> None:
+    """Check external command availability.
+
+    Parameters
+    ----------
+    json_output
+        Whether to emit machine-readable JSON.
+    """
     checks = [
         {"name": binary, "available": shutil.which(binary) is not None}
         for binary in ("docker", "ssh", "rsync")

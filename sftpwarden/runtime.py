@@ -22,6 +22,8 @@ NO_PASSWORD_HASH = "*"
 
 @dataclass
 class RuntimeUserState:
+    """Persisted runtime identity state for one user."""
+
     uid: int
     gid: int
     disabled: bool = False
@@ -29,11 +31,25 @@ class RuntimeUserState:
 
 @dataclass
 class RuntimeState:
+    """Persisted runtime state for all managed users."""
+
     users: dict[str, RuntimeUserState]
     fingerprint: str | None = None
 
     @classmethod
     def load(cls, path: Path) -> RuntimeState:
+        """Load runtime state from disk.
+
+        Parameters
+        ----------
+        path
+            State file path.
+
+        Returns
+        -------
+        RuntimeState
+            Loaded state, or an empty state when missing.
+        """
         if not path.exists():
             return cls(users={})
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -41,9 +57,23 @@ class RuntimeState:
 
     @property
     def uid_map(self) -> dict[str, int]:
+        """Return a legacy username-to-UID map.
+
+        Returns
+        -------
+        dict[str, int]
+            Mapping of username to UID.
+        """
         return {username: state.uid for username, state in self.users.items()}
 
     def save(self, path: Path) -> None:
+        """Save runtime state atomically.
+
+        Parameters
+        ----------
+        path
+            Destination state file path.
+        """
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(
@@ -70,6 +100,8 @@ class RuntimeState:
 
 @dataclass(frozen=True)
 class ResolvedUser:
+    """Provider user resolved to concrete UID/GID values."""
+
     spec: SFTPUser
     uid: int
     gid: int
@@ -77,6 +109,8 @@ class ResolvedUser:
 
 @dataclass(frozen=True)
 class RuntimeAction:
+    """Planned runtime action for one user."""
+
     action: Literal["create", "update", "disable"]
     username: str
     uid: int | None = None
@@ -86,15 +120,31 @@ class RuntimeAction:
 
 @dataclass(frozen=True)
 class RuntimePlan:
+    """Runtime synchronization plan."""
+
     fingerprint: str
     actions: list[RuntimeAction]
     resolved_users: list[ResolvedUser]
 
     @property
     def changed(self) -> bool:
+        """Return whether the plan contains actions.
+
+        Returns
+        -------
+        bool
+            ``True`` when the runtime should be changed.
+        """
         return bool(self.actions)
 
     def summary(self) -> str:
+        """Return a concise plan summary.
+
+        Returns
+        -------
+        str
+            Human-readable action counts.
+        """
         if not self.actions:
             return "No user changes detected."
         counts = {"create": 0, "update": 0, "disable": 0}
@@ -107,6 +157,18 @@ class RuntimePlan:
 
 
 def parse_state_users(data: dict[str, Any]) -> dict[str, RuntimeUserState]:
+    """Parse current or legacy runtime state user data.
+
+    Parameters
+    ----------
+    data
+        Raw state JSON mapping.
+
+    Returns
+    -------
+    dict[str, RuntimeUserState]
+        Parsed user state mapping.
+    """
     if isinstance(data.get("users"), dict):
         return {
             str(username): RuntimeUserState(
@@ -123,6 +185,13 @@ def parse_state_users(data: dict[str, Any]) -> dict[str, RuntimeUserState]:
 
 
 def run_command(args: list[str]) -> None:
+    """Run a runtime system command.
+
+    Parameters
+    ----------
+    args
+        Command arguments.
+    """
     run_checked(
         args,
         error_type=RuntimeError,
@@ -132,10 +201,34 @@ def run_command(args: list[str]) -> None:
 
 
 def yes_no(value: bool) -> str:
+    """Render a boolean as an OpenSSH yes/no value.
+
+    Parameters
+    ----------
+    value
+        Boolean value.
+
+    Returns
+    -------
+    str
+        ``"yes"`` or ``"no"``.
+    """
     return "yes" if value else "no"
 
 
 def render_sshd_config_text(config: SFTPWardenConfig) -> str:
+    """Render OpenSSH server configuration.
+
+    Parameters
+    ----------
+    config
+        Project config.
+
+    Returns
+    -------
+    str
+        ``sshd_config`` text.
+    """
     password_auth = yes_no(config.auth.allow_password)
     public_key_auth = yes_no(config.auth.allow_public_key)
     return f"""Port 22
@@ -174,15 +267,50 @@ Match Group {config.server.group}
 
 
 def render_sshd_config(config: SFTPWardenConfig, path: Path = SSHD_CONFIG_PATH) -> None:
+    """Write the OpenSSH server configuration.
+
+    Parameters
+    ----------
+    config
+        Project config.
+    path
+        Destination sshd config path.
+    """
     path.write_text(render_sshd_config_text(config), encoding="utf-8")
     os.chmod(path, 0o644)
 
 
 def state_path(config: SFTPWardenConfig) -> Path:
+    """Return the runtime state path for a config.
+
+    Parameters
+    ----------
+    config
+        Project config.
+
+    Returns
+    -------
+    Path
+        Runtime state file path.
+    """
     return Path(config.server.state_dir) / "state.json"
 
 
 def validate_runtime_users(config: SFTPWardenConfig, users: ProviderUsers) -> None:
+    """Validate that active users can authenticate.
+
+    Parameters
+    ----------
+    config
+        Project config.
+    users
+        Provider users.
+
+    Raises
+    ------
+    RuntimeError
+        Raised when an active user has no enabled auth method.
+    """
     for user in users.users:
         if user.disabled:
             continue
@@ -202,10 +330,34 @@ def validate_runtime_users(config: SFTPWardenConfig, users: ProviderUsers) -> No
 
 
 def has_usable_password_hash(user: SFTPUser) -> bool:
+    """Return whether a user has an active password hash.
+
+    Parameters
+    ----------
+    user
+        Provider user.
+
+    Returns
+    -------
+    bool
+        ``True`` when the password hash can be used for login.
+    """
     return bool(user.password_hash and not user.password_hash.startswith(("!", "*")))
 
 
 def validate_explicit_ids(users: ProviderUsers) -> None:
+    """Validate that explicit provider UID/GID values are unique.
+
+    Parameters
+    ----------
+    users
+        Provider users to inspect.
+
+    Raises
+    ------
+    RuntimeError
+        If two users declare the same explicit UID or GID.
+    """
     explicit_uids: dict[int, str] = {}
     explicit_gids: dict[int, str] = {}
     for user in users.users:
@@ -224,6 +376,20 @@ def validate_explicit_ids(users: ProviderUsers) -> None:
 
 
 def used_identity_ids(users: ProviderUsers, state: RuntimeState) -> set[int]:
+    """Collect identity values that cannot be reused during allocation.
+
+    Parameters
+    ----------
+    users
+        Desired provider users.
+    state
+        Previous runtime state.
+
+    Returns
+    -------
+    set[int]
+        UID/GID values already reserved by provider data or preserved state.
+    """
     provider_names = {user.username for user in users.users}
     used_ids = {
         user_state.uid for username, user_state in state.users.items() if username in provider_names
@@ -241,6 +407,26 @@ def allocate_uid(
     used_ids: set[int],
     max_id: int,
 ) -> tuple[int, int]:
+    """Resolve a user's UID and advance the allocation cursor.
+
+    Parameters
+    ----------
+    user
+        Provider user being allocated.
+    existing_state
+        Previously saved runtime state for the same username, if any.
+    next_id
+        Next candidate UID/GID value.
+    used_ids
+        Identity values already reserved in this plan.
+    max_id
+        Highest allowed UID/GID value.
+
+    Returns
+    -------
+    tuple[int, int]
+        Resolved UID and next allocation cursor.
+    """
     uid = user.uid or (existing_state.uid if existing_state else None)
     if uid is not None:
         return uid, next_id
@@ -253,10 +439,35 @@ def allocate_uid(
 
 
 def resolved_gid(user: SFTPUser, existing_state: RuntimeUserState | None, uid: int) -> int:
+    """Resolve the runtime GID for a provider user.
+
+    Parameters
+    ----------
+    user
+        Provider user being resolved.
+    existing_state
+        Previously saved runtime state for the same username, if any.
+    uid
+        Resolved UID to reuse as default GID.
+
+    Returns
+    -------
+    int
+        Explicit, preserved, or UID-derived GID.
+    """
     return user.gid or (existing_state.gid if existing_state else uid)
 
 
 def assert_unique_resolved_uid(uid: int, seen_ids: set[int]) -> None:
+    """Ensure an allocated UID is unique within the current plan.
+
+    Parameters
+    ----------
+    uid
+        Resolved UID to validate.
+    seen_ids
+        UIDs already emitted by this plan.
+    """
     if uid in seen_ids:
         raise RuntimeError(f"Duplicate UID after allocation: {uid}")
     seen_ids.add(uid)
@@ -265,6 +476,22 @@ def assert_unique_resolved_uid(uid: int, seen_ids: set[int]) -> None:
 def allocate_users(
     config: SFTPWardenConfig, users: ProviderUsers, state: RuntimeState
 ) -> list[ResolvedUser]:
+    """Resolve provider users to concrete UID/GID values.
+
+    Parameters
+    ----------
+    config
+        Project config.
+    users
+        Provider users.
+    state
+        Mutable runtime state used for preserving allocations.
+
+    Returns
+    -------
+    list[ResolvedUser]
+        Users with resolved identities.
+    """
     validate_explicit_ids(users)
     used_ids = used_identity_ids(users, state)
     next_id = config.uid_gid.start
@@ -287,6 +514,18 @@ def allocate_users(
 
 
 def copy_runtime_state(state: RuntimeState) -> RuntimeState:
+    """Create a detached copy of runtime state.
+
+    Parameters
+    ----------
+    state
+        Runtime state to copy.
+
+    Returns
+    -------
+    RuntimeState
+        Independent runtime state instance.
+    """
     return RuntimeState(
         users={
             username: RuntimeUserState(
@@ -303,6 +542,22 @@ def copy_runtime_state(state: RuntimeState) -> RuntimeState:
 def missing_user_actions(
     config: SFTPWardenConfig, state: RuntimeState, desired_names: set[str]
 ) -> list[RuntimeAction]:
+    """Build disable actions for users missing from the provider.
+
+    Parameters
+    ----------
+    config
+        Project config that controls missing-user behavior.
+    state
+        Existing runtime state.
+    desired_names
+        Usernames present in the provider.
+
+    Returns
+    -------
+    list[RuntimeAction]
+        Disable actions, or an empty list when the feature is disabled.
+    """
     if not config.sync.disable_missing_users:
         return []
     return [
@@ -321,6 +576,20 @@ def missing_user_actions(
 def runtime_action_for_user(
     resolved: ResolvedUser, previous: RuntimeUserState | None
 ) -> RuntimeAction:
+    """Create the runtime action for one resolved provider user.
+
+    Parameters
+    ----------
+    resolved
+        Provider user with concrete UID/GID values.
+    previous
+        Previous runtime state for the same username, if any.
+
+    Returns
+    -------
+    RuntimeAction
+        Create, update, or disable action.
+    """
     username = resolved.spec.username
     if resolved.spec.disabled:
         return RuntimeAction(
@@ -348,6 +617,20 @@ def runtime_action_for_user(
 
 
 def runtime_update_reason(previous: RuntimeUserState, resolved: ResolvedUser) -> str:
+    """Explain why an existing runtime user needs an update.
+
+    Parameters
+    ----------
+    previous
+        Previous runtime state for the user.
+    resolved
+        Desired runtime user.
+
+    Returns
+    -------
+    str
+        Short user-facing reason.
+    """
     if previous.uid != resolved.uid or previous.gid != resolved.gid:
         return "uid/gid changed"
     if previous.disabled:
@@ -362,6 +645,24 @@ def build_runtime_plan(
     *,
     force: bool = False,
 ) -> RuntimePlan:
+    """Build a plan for synchronizing runtime users.
+
+    Parameters
+    ----------
+    config
+        Project config.
+    users
+        Desired provider users.
+    state
+        Current runtime state.
+    force
+        Whether to plan updates even when the fingerprint matches.
+
+    Returns
+    -------
+    RuntimePlan
+        Planned runtime actions.
+    """
     validate_runtime_users(config, users)
     fingerprint = users_fingerprint(users)
     planning_state = copy_runtime_state(state)
@@ -382,6 +683,15 @@ def build_runtime_plan(
 
 
 def ensure_group(name: str, gid: int | None = None) -> None:
+    """Ensure a system group exists.
+
+    Parameters
+    ----------
+    name
+        Group name.
+    gid
+        Optional GID.
+    """
     if (
         shutil.which("getent")
         and run(
@@ -399,6 +709,18 @@ def ensure_group(name: str, gid: int | None = None) -> None:
 
 
 def user_exists(username: str) -> bool:
+    """Return whether a system user exists.
+
+    Parameters
+    ----------
+    username
+        Username to check.
+
+    Returns
+    -------
+    bool
+        ``True`` when the user exists.
+    """
     try:
         pwd.getpwnam(username)
         return True
@@ -407,6 +729,15 @@ def user_exists(username: str) -> bool:
 
 
 def ensure_system_user(config: SFTPWardenConfig, resolved: ResolvedUser) -> None:
+    """Create or update the system account for a resolved user.
+
+    Parameters
+    ----------
+    config
+        Project config.
+    resolved
+        Resolved provider user.
+    """
     user = resolved.spec
     primary_group = f"{user.username}_sftp"
     ensure_group(primary_group, resolved.gid)
@@ -456,6 +787,15 @@ def ensure_system_user(config: SFTPWardenConfig, resolved: ResolvedUser) -> None
 
 
 def ensure_directories(config: SFTPWardenConfig, resolved: ResolvedUser) -> None:
+    """Create and permission chroot/upload directories for a user.
+
+    Parameters
+    ----------
+    config
+        Project config.
+    resolved
+        Resolved provider user.
+    """
     root = Path(config.server.data_dir) / resolved.spec.username
     upload = root / resolved.spec.upload_dir
     root.mkdir(parents=True, exist_ok=True)
@@ -467,6 +807,15 @@ def ensure_directories(config: SFTPWardenConfig, resolved: ResolvedUser) -> None
 
 
 def write_authorized_keys(config: SFTPWardenConfig, resolved: ResolvedUser) -> None:
+    """Write restricted authorized keys for a user.
+
+    Parameters
+    ----------
+    config
+        Project config.
+    resolved
+        Resolved provider user.
+    """
     auth_dir = Path("/etc/sftpwarden/authorized_keys")
     auth_dir.mkdir(parents=True, exist_ok=True)
     path = auth_dir / resolved.spec.username
@@ -478,6 +827,17 @@ def write_authorized_keys(config: SFTPWardenConfig, resolved: ResolvedUser) -> N
 
 
 def disable_missing(config: SFTPWardenConfig, desired: ProviderUsers, state: RuntimeState) -> None:
+    """Disable system users missing from the provider.
+
+    Parameters
+    ----------
+    config
+        Project config.
+    desired
+        Desired provider users.
+    state
+        Mutable runtime state.
+    """
     if not config.sync.disable_missing_users:
         return
     desired_names = {user.username for user in desired.users}
@@ -492,6 +852,18 @@ def disable_missing(config: SFTPWardenConfig, desired: ProviderUsers, state: Run
 def load_runtime_inputs(
     config_path: str | Path,
 ) -> tuple[SFTPWardenConfig, ProviderUsers, RuntimeState]:
+    """Load runtime config, provider users, and state.
+
+    Parameters
+    ----------
+    config_path
+        Project config path inside the runtime.
+
+    Returns
+    -------
+    tuple[SFTPWardenConfig, ProviderUsers, RuntimeState]
+        Runtime inputs.
+    """
     config = load_config(config_path)
     provider_path = Path(config.provider.path)
     users = load_users(
@@ -506,6 +878,20 @@ def load_runtime_inputs(
 
 
 def apply_once(config_path: str | Path = CONTAINER_CONFIG_PATH, *, force: bool = False) -> str:
+    """Apply one runtime synchronization pass.
+
+    Parameters
+    ----------
+    config_path
+        Runtime config path.
+    force
+        Whether to force user update planning.
+
+    Returns
+    -------
+    str
+        Result summary.
+    """
     config, users, state = load_runtime_inputs(config_path)
     render_sshd_config(config)
     state_file = state_path(config)
@@ -531,6 +917,13 @@ def apply_once(config_path: str | Path = CONTAINER_CONFIG_PATH, *, force: bool =
 
 
 def run_sync_loop(config_path: str | Path = CONTAINER_CONFIG_PATH) -> None:
+    """Run the runtime synchronization loop forever.
+
+    Parameters
+    ----------
+    config_path
+        Runtime config path.
+    """
     while True:
         config = load_config(config_path)
         if config.sync.enabled:

@@ -5,49 +5,65 @@ This guide covers day-to-day commands for local and remote environments.
 ## Local Runtime
 
 ```bash
-sftpwarden init dev --root ~/sftpwarden-dev --yes
+mkdir -p ~/sftpwarden-dev
 cd ~/sftpwarden-dev
-sftpwarden compose --write
-docker compose up -d --build
+sftpwarden init dev --yes
+sftpwarden deploy
 sftpwarden doctor
 ```
 
 Preview and apply user changes:
 
 ```bash
-sftpwarden plan -c dev
-sftpwarden refresh -c dev
+sftpwarden plan
+sftpwarden refresh
 ```
+
+`sftpwarden init` sets the created context as active. The recommended workflow is
+the Docker-style one: create a project directory, `cd` into it, initialize it, and
+run commands without repeating `--context`. Use `sftpwarden context use dev` to
+switch later, or pass `--context dev`/`-c dev` for one explicit command.
 
 ## Remote Deploy
 
 Remote local-sync:
 
 ```bash
-sftpwarden context add prod deploy@example.com:/opt/sftpwarden \
-  --root ~/sftpwarden-prod \
+mkdir -p ~/sftpwarden-prod
+cd ~/sftpwarden-prod
+sftpwarden init prod --remote deploy@example.com:/opt/sftpwarden \
   --critical
 
-sftpwarden deploy -c prod --dry-run
-sftpwarden deploy -c prod --yes
+sftpwarden deploy --dry-run
+sftpwarden deploy --yes
 ```
 
 Remote-only:
 
 ```bash
-sftpwarden context add archive deploy@example.com:/opt/sftpwarden \
+sftpwarden init archive --remote deploy@example.com:/opt/sftpwarden \
   --remote-only \
   --critical
 
-sftpwarden refresh -c archive --dry-run
+sftpwarden refresh --dry-run
 ```
 
 Remote setup checks verify SSH connectivity and `docker compose version`.
+Local deploys also check Docker Compose before running `up -d --build`. If the
+check fails, install Docker Compose v2 and retry `sftpwarden deploy`.
+
+Use `sftpwarden context add` when the project already exists on the remote host and
+you only need to register it locally:
+
+```bash
+sftpwarden context add prod deploy@example.com:/opt/sftpwarden --critical
+sftpwarden context use prod
+```
 
 ## Watcher
 
-`sftpwarden watch` is only for remote `local-sync` contexts. It syncs editable
-config/provider files to remote hosts.
+`sftpwarden watch` is only for remote `local-sync` contexts. It syncs YAML/CSV
+user provider files to remote hosts. It does not sync `sftpwarden.yaml`.
 
 ```bash
 sftpwarden watcher status
@@ -57,7 +73,7 @@ sftpwarden watcher uninstall --yes
 ```
 
 Watched files are derived from the context registry and provider configuration.
-Docker Compose changes require an explicit deploy.
+Configuration and Docker Compose changes require an explicit deploy.
 
 Systemd watcher installation uses `sudo` for service setup and enables the service
 with `systemctl enable --now`. Use this mode for production when SSH should use
@@ -75,14 +91,29 @@ should be backed by the `state/` volume.
 Host keys live in `/etc/sftpwarden/host_keys` and should be backed by `host_keys/`
 so server fingerprints do not change on restart.
 
+## Deleting User Data
+
+By default, removing a user removes the provider entry and disables access after
+refresh. User files remain on disk:
+
+```bash
+sftpwarden user remove alice --yes
+```
+
+Use the explicit delete flag only when the data should be destroyed:
+
+```bash
+sftpwarden user remove alice --delete-files --yes
+```
+
 ## Troubleshooting
 
 Runtime is not running:
 
 ```bash
 docker compose ps
-docker compose up -d
-sftpwarden refresh -c dev
+sftpwarden deploy
+sftpwarden refresh
 ```
 
 Remote checks fail:
@@ -92,10 +123,13 @@ ssh deploy@example.com true
 ssh deploy@example.com 'docker compose version'
 ```
 
+If `docker compose version` fails locally or remotely, install Docker Compose v2
+before running `sftpwarden deploy` again.
+
 Provider data changed but users did not update:
 
 ```bash
-sftpwarden plan -c dev
-sftpwarden refresh -c dev --dry-run
-sftpwarden refresh -c dev
+sftpwarden plan
+sftpwarden refresh --dry-run
+sftpwarden refresh
 ```

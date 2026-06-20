@@ -8,6 +8,23 @@ from sftpwarden.utils.errors import ProviderError
 
 
 def hash_password(password: str) -> str:
+    """Hash a plaintext password for system authentication.
+
+    Parameters
+    ----------
+    password
+        Plaintext password.
+
+    Returns
+    -------
+    str
+        SHA-512 crypt password hash.
+
+    Raises
+    ------
+    ProviderError
+        Raised when the password is empty or too short.
+    """
     if not password:
         raise ProviderError("Password cannot be empty.")
     if len(password) < 8:
@@ -19,6 +36,25 @@ def hash_password(password: str) -> str:
 
 
 def resolve_password_hash(*, password: str | None, password_hash: str | None) -> str | None:
+    """Resolve mutually exclusive plaintext and precomputed password inputs.
+
+    Parameters
+    ----------
+    password
+        Optional plaintext password to hash.
+    password_hash
+        Optional precomputed system password hash.
+
+    Returns
+    -------
+    str | None
+        Password hash to store, or ``None`` when no password was supplied.
+
+    Raises
+    ------
+    ProviderError
+        Raised when both inputs are supplied or the hash is malformed.
+    """
     if password is not None and password_hash is not None:
         raise ProviderError(
             "Use either --password or --password-hash, not both.",

@@ -8,16 +8,54 @@ from sftpwarden.utils.paths import expand_path
 
 
 def uses_default_ssh_identity(ssh_key: str | None) -> bool:
+    """Return whether SSH should use the host default identity.
+
+    Parameters
+    ----------
+    ssh_key
+        SSH key setting from a remote context.
+
+    Returns
+    -------
+    bool
+        ``True`` when no explicit key should be passed to SSH.
+    """
     return ssh_key is None or ssh_key.strip().lower() == "default"
 
 
 def explicit_ssh_key_path(ssh_key: str | None) -> Path | None:
+    """Resolve an explicit SSH key path.
+
+    Parameters
+    ----------
+    ssh_key
+        SSH key setting from a remote context.
+
+    Returns
+    -------
+    Path | None
+        Expanded key path, or ``None`` when the default SSH identity is used.
+    """
     if uses_default_ssh_identity(ssh_key):
         return None
     return expand_path(ssh_key or "")
 
 
 def ssh_base_command(remote: RemoteEndpoint, *, destination: bool = True) -> list[str]:
+    """Build a safe SSH command argument list.
+
+    Parameters
+    ----------
+    remote
+        Remote endpoint to connect to.
+    destination
+        Whether to append ``user@host`` to the command.
+
+    Returns
+    -------
+    list[str]
+        SSH command arguments.
+    """
     command = [
         "ssh",
         "-p",
@@ -36,4 +74,16 @@ def ssh_base_command(remote: RemoteEndpoint, *, destination: bool = True) -> lis
 
 
 def rsync_ssh_transport(remote: RemoteEndpoint) -> str:
+    """Build the escaped SSH transport string used by ``rsync -e``.
+
+    Parameters
+    ----------
+    remote
+        Remote endpoint used for rsync transport.
+
+    Returns
+    -------
+    str
+        Shell-escaped SSH transport command.
+    """
     return shlex.join(ssh_base_command(remote, destination=False))

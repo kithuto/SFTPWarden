@@ -4,21 +4,36 @@ from pathlib import Path
 
 import yaml
 
-from sftpwarden.config import SFTPWardenConfig, provider_local_path
+from sftpwarden.config import ProviderType, SFTPWardenConfig, provider_local_path
 from sftpwarden.utils.constants import CONTAINER_CONFIG_PATH
 from sftpwarden.utils.paths import expand_path
 
 
 def compose_model(config: SFTPWardenConfig, project_root: str | Path = ".") -> dict:
+    """Build a Docker Compose model for the runtime.
+
+    Parameters
+    ----------
+    config
+        Project config.
+    project_root
+        Local project root.
+
+    Returns
+    -------
+    dict
+        Docker Compose model.
+    """
     root = expand_path(project_root)
-    provider_path = provider_local_path(root, config)
     volumes = [
         f"./sftpwarden.yaml:{CONTAINER_CONFIG_PATH}:ro",
-        f"./{provider_path.name}:{config.provider.path}:ro",
         "./data:/data",
         "./state:/var/lib/sftpwarden",
         "./host_keys:/etc/sftpwarden/host_keys",
     ]
+    if config.provider.type not in {ProviderType.MYSQL, ProviderType.POSTGRESQL}:
+        provider_path = provider_local_path(root, config)
+        volumes.insert(1, f"./{provider_path.name}:{config.provider.path}:ro")
     return {
         "services": {
             "sftpwarden": {
@@ -39,10 +54,38 @@ def compose_model(config: SFTPWardenConfig, project_root: str | Path = ".") -> d
 
 
 def compose_text(config: SFTPWardenConfig, project_root: str | Path = ".") -> str:
+    """Render Docker Compose YAML for the runtime.
+
+    Parameters
+    ----------
+    config
+        Project config.
+    project_root
+        Local project root.
+
+    Returns
+    -------
+    str
+        Docker Compose YAML text.
+    """
     return yaml.safe_dump(compose_model(config, project_root), sort_keys=False)
 
 
 def write_compose(config: SFTPWardenConfig, project_root: str | Path = ".") -> Path:
+    """Write the runtime Docker Compose file.
+
+    Parameters
+    ----------
+    config
+        Project config.
+    project_root
+        Local project root.
+
+    Returns
+    -------
+    Path
+        Written compose file path.
+    """
     root = expand_path(project_root)
     target = root / config.docker.compose_file
     target.write_text(compose_text(config, root), encoding="utf-8")

@@ -65,6 +65,20 @@ auth:
 `server.container_port` is not supported. The container SSH port is always `22`;
 `server.port` controls the host port exposed by Docker Compose.
 
+You can read or update any project setting with `sftpwarden config`:
+
+```bash
+sftpwarden config project.name
+sftpwarden config project.name prod2
+sftpwarden config server.port 2200
+sftpwarden config auth.allow_password false
+```
+
+If you edit `sftpwarden.yaml` by hand, run `sftpwarden deploy` to apply that
+configuration change. Deploy reconciles important metadata before it runs; for
+example, changing `project.name` in YAML updates the registered context name.
+`watch` and `refresh` only handle user changes.
+
 ## Providers
 
 YAML:
@@ -107,6 +121,19 @@ SQL providers read and mutate the configured users table. The default columns ar
 username, public_keys, password_hash, uid, gid, upload_dir, comment, disabled
 ```
 
+When you initialize a project with MySQL or PostgreSQL, SFTPWarden checks whether
+the table exists. If it is missing, interactive `init` asks whether to create it or
+abort so you can apply the schema manually.
+
+```bash
+sftpwarden init prod \
+  --provider mysql \
+  --dsn '${SFTPWARDEN_MYSQL_DSN}' \
+  --create-table
+```
+
+Use `--no-create-table` to force init to abort when the table is missing.
+
 ## Contexts
 
 Local context:
@@ -145,6 +172,30 @@ compose_file = "docker-compose.yml"
 
 Remote-only contexts keep top-level `root` and `config` empty because the source of
 truth is already on the remote server.
+
+You can inspect or update context registry values with `sftpwarden context`:
+
+```bash
+sftpwarden context show
+sftpwarden context name prod2
+sftpwarden context root ~/sftpwarden-prod2 --yes
+sftpwarden context remote-root /opt/sftpwarden-prod --yes
+```
+
+Changing `root` through the CLI copies project files to the new folder and updates
+the stored config path. Use `--delete-old-root` when you also want SFTPWarden to
+remove the old folder after the copy.
+
+Change context type only when you are intentionally changing how the environment
+is managed:
+
+```bash
+sftpwarden context type remote --remote deploy@example.com:/opt/sftpwarden --yes
+sftpwarden context type local --yes
+```
+
+Converting from remote to local removes remote metadata. Run without `--yes` if
+you want an interactive confirmation.
 
 ## Validation
 

@@ -21,6 +21,8 @@ from sftpwarden.utils.paths import app_home, global_config_path
 
 
 class DefaultsConfig(BaseModel):
+    """Global default values used by CLI commands."""
+
     model_config = ConfigDict(extra="forbid")
 
     root: str = DEFAULT_LOCAL_ROOT
@@ -32,6 +34,8 @@ class DefaultsConfig(BaseModel):
 
 
 class WatcherState(BaseModel):
+    """Persisted global watcher installation state."""
+
     model_config = ConfigDict(extra="forbid")
 
     installed: bool = False
@@ -41,6 +45,8 @@ class WatcherState(BaseModel):
 
 
 class GlobalConfig(BaseModel):
+    """Global SFTPWarden CLI configuration."""
+
     model_config = ConfigDict(extra="forbid")
 
     version: int = 1
@@ -50,6 +56,18 @@ class GlobalConfig(BaseModel):
 
 
 def load_global_config(path: Path | None = None) -> GlobalConfig:
+    """Load global CLI configuration.
+
+    Parameters
+    ----------
+    path
+        Optional config path.
+
+    Returns
+    -------
+    GlobalConfig
+        Loaded config or defaults when missing.
+    """
     config_path = path or global_config_path()
     if not config_path.exists():
         return GlobalConfig()
@@ -66,6 +84,15 @@ def load_global_config(path: Path | None = None) -> GlobalConfig:
 
 
 def save_global_config(config: GlobalConfig, path: Path | None = None) -> None:
+    """Save global CLI configuration.
+
+    Parameters
+    ----------
+    config
+        Global config to save.
+    path
+        Optional config path.
+    """
     config_path = path or global_config_path()
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(
@@ -76,10 +103,23 @@ def save_global_config(config: GlobalConfig, path: Path | None = None) -> None:
 
 
 def ensure_home() -> None:
+    """Ensure the SFTPWarden app home exists."""
     app_home().mkdir(parents=True, exist_ok=True)
 
 
 def resolve_provider(explicit: str | None = None) -> ProviderType:
+    """Resolve the default provider type.
+
+    Parameters
+    ----------
+    explicit
+        Optional explicit provider value.
+
+    Returns
+    -------
+    ProviderType
+        Resolved provider type.
+    """
     if explicit:
         return ProviderType(explicit)
     env_provider = os.environ.get("SFTPWARDEN_DEFAULT_PROVIDER")
@@ -92,4 +132,11 @@ def resolve_provider(explicit: str | None = None) -> ProviderType:
 
 
 def global_config_data() -> dict[str, Any]:
+    """Return global config as JSON-serializable data.
+
+    Returns
+    -------
+    dict[str, Any]
+        Global config mapping.
+    """
     return load_global_config().model_dump(mode="json", exclude_none=True)

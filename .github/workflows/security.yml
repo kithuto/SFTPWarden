@@ -1,0 +1,93 @@
+name: Security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "23 4 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+  id-token: write
+
+jobs:
+  python-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install scan tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[watch,mysql,postgres]" pip-audit
+
+      - name: Audit Python dependencies
+        run: pip-audit
+
+  container-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.0
+
+      - name: Build runtime image
+        run: docker build -t sftpwarden:security -f docker/runtime/Dockerfile .
+
+      - name: Scan runtime image
+        uses: aquasecurity/trivy-action@v0.35.0
+        with:
+          image-ref: sftpwarden:security
+          format: sarif
+          output: trivy-runtime.sarif
+
+      - name: Upload runtime scan
+        uses: github/codeql-action/upload-sarif@v3.36.2
+        with:
+          sarif_file: trivy-runtime.sarif
+
+      - name: Generate runtime SBOM
+        uses: anchore/sbom-action@v0.24.0
+        with:
+          image: sftpwarden:security
+          output-file: runtime-sbom.spdx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: runtime-sbom
+          path: runtime-sbom.spdx.json
+
+  scorecard:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Run OpenSSF Scorecard
+        uses: ossf/scorecard-action@v2.4.3
+        with:
+          results_file: scorecard.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload Scorecard results
+        uses: github/codeql-action/upload-sarif@v3.36.2
+        with:
+          sarif_file: scorecard.sarif

@@ -29,6 +29,7 @@ from sftpwarden.providers import empty_provider_text
 from sftpwarden.refresh import refresh_context, resolve_refresh_targets
 from sftpwarden.remote.deploy import deploy_context
 from sftpwarden.utils.errors import ContextError
+from sftpwarden.utils.errors import RuntimeError as SFTPWardenRuntimeError
 from sftpwarden.watcher import derive_watch_targets, render_docker_watcher_compose, sync_target
 
 
@@ -94,7 +95,7 @@ def test_remote_url_parser_accepts_host_only() -> None:
     assert parsed.path is None
 
 
-def test_watch_derives_only_config_and_provider_files(
+def test_watch_derives_only_user_provider_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = tmp_path / "home"
@@ -120,11 +121,8 @@ def test_watch_derives_only_config_and_provider_files(
 
     targets = derive_watch_targets()
 
-    assert {target.local_path.name for target in targets} == {"sftpwarden.yaml", "users.yaml"}
-    assert {target.remote_path for target in targets} == {
-        "/opt/sftpwarden/sftpwarden.yaml",
-        "/opt/sftpwarden/users.yaml",
-    }
+    assert {target.local_path.name for target in targets} == {"users.yaml"}
+    assert {target.remote_path for target in targets} == {"/opt/sftpwarden/users.yaml"}
 
 
 def test_sync_json_lists_watch_targets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -152,10 +150,7 @@ def test_sync_json_lists_watch_targets(tmp_path: Path, monkeypatch: pytest.Monke
 
     assert result.exit_code == 0, result.output
     assert data["dry_run"] is True
-    assert {target["remote_path"] for target in data["targets"]} == {
-        "/opt/sftpwarden/sftpwarden.yaml",
-        "/opt/sftpwarden/users.yaml",
-    }
+    assert {target["remote_path"] for target in data["targets"]} == {"/opt/sftpwarden/users.yaml"}
 
 
 def test_watch_uses_provider_path_from_context_config(
@@ -189,14 +184,11 @@ def test_watch_uses_provider_path_from_context_config(
 
     targets = derive_watch_targets()
 
-    assert {target.local_path.name for target in targets} == {"sftpwarden.yaml", "accounts.csv"}
-    assert {target.remote_path for target in targets} == {
-        "/opt/sftpwarden/sftpwarden.yaml",
-        "/opt/sftpwarden/accounts.csv",
-    }
+    assert {target.local_path.name for target in targets} == {"accounts.csv"}
+    assert {target.remote_path for target in targets} == {"/opt/sftpwarden/accounts.csv"}
 
 
-def test_watch_sql_provider_syncs_only_context_config(
+def test_watch_sql_provider_has_no_user_file_targets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = tmp_path / "home"
@@ -224,9 +216,7 @@ def test_watch_sql_provider_syncs_only_context_config(
 
     targets = derive_watch_targets()
 
-    assert [(target.local_path.name, target.remote_path) for target in targets] == [
-        ("sftpwarden.yaml", "/opt/sftpwarden/sftpwarden.yaml")
-    ]
+    assert targets == []
 
 
 def test_refresh_all_resolves_registered_contexts(
@@ -332,6 +322,44 @@ def test_init_remote_creates_local_sync_context(
     assert entry.remote.remote_root == "/opt/sftpwarden"
     assert load_global_config().watcher.installed is True
     assert load_global_config().watcher.mode == "systemd"
+    assert registry.default == "prod"
+
+
+def test_init_remote_shortcut_creates_local_sync_context_from_current_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "prod-project"
+    root.mkdir()
+    monkeypatch.chdir(root)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        app,
+        [
+            "init",
+            "prod",
+            "--remote",
+            "deploy@example.com:/opt/sftpwarden",
+            "--critical",
+            "--skip-checks",
+            "--yes",
+        ],
+    )
+
+    registry = load_registry()
+    entry = registry.contexts["prod"]
+
+    assert result.exit_code == 0, result.output
+    assert (root / "sftpwarden.yaml").exists()
+    assert (root / "users.yaml").exists()
+    assert (root / "docker-compose.yml").exists()
+    assert registry.default == "prod"
+    assert entry.type == ContextType.REMOTE
+    assert entry.storage == "local-sync"
+    assert entry.root == str(root)
+    assert entry.remote is not None
+    assert entry.remote.remote_root == "/opt/sftpwarden"
 
 
 def test_init_remote_only_does_not_install_watcher(
@@ -554,7 +582,7 @@ def test_deploy_remote_local_sync_dry_run_includes_sync_and_compose(
     assert "mkdir -p /opt/sftpwarden" in output
     assert "rsync" in output
     assert "docker compose -f docker-compose.yml pull" in output
-    assert "docker compose -f docker-compose.yml up -d" in output
+    assert "docker compose -f docker-compose.yml up -d --build" in output
 
 
 def test_deploy_remote_only_dry_run_validates_remote_files(
@@ -580,7 +608,7 @@ def test_deploy_remote_only_dry_run_validates_remote_files(
     assert result.exit_code == 0, result.output
     assert "test -f /opt/sftpwarden/sftpwarden.yaml" in output
     assert "rsync" not in output
-    assert "docker compose -f docker-compose.yml up -d" in output
+    assert "docker compose -f docker-compose.yml up -d --build" in output
 
 
 def test_deploy_context_accepts_injected_runner(tmp_path: Path) -> None:
@@ -598,8 +626,37 @@ def test_deploy_context_accepts_injected_runner(tmp_path: Path) -> None:
     result = deploy_context(entry, runner=fake_runner)
 
     assert result == "Deployed dev."
-    assert calls[0][0] == ["docker", "compose", "-f", "docker-compose.yml", "pull"]
+    assert calls[0][0] == ["docker", "compose", "version"]
+    assert calls[1][0] == ["docker", "compose", "-f", "docker-compose.yml", "pull"]
+    assert calls[2][0] == [
+        "docker",
+        "compose",
+        "-f",
+        "docker-compose.yml",
+        "up",
+        "-d",
+        "--build",
+    ]
     assert {cwd for _, cwd in calls} == {str(root)}
+
+
+def test_deploy_context_reports_missing_local_docker_compose(tmp_path: Path) -> None:
+    root = tmp_path / "dev-project"
+    root.mkdir()
+    config = default_project_config("dev")
+    write_config(root / "sftpwarden.yaml", config)
+    (root / "users.yaml").write_text(empty_provider_text(config.provider.type), encoding="utf-8")
+    entry = local_context("dev", root, config.provider.type)
+
+    def fake_runner(command: list[str], *, cwd: str | None = None) -> None:
+        if command == ["docker", "compose", "version"]:
+            raise SFTPWardenRuntimeError(
+                "Deploy command failed.",
+                suggestion="docker: compose is not a docker command",
+            )
+
+    with pytest.raises(SFTPWardenRuntimeError, match="Docker Compose is not available"):
+        deploy_context(entry, runner=fake_runner)
 
 
 def test_sync_target_escapes_ssh_key_transport(tmp_path: Path) -> None:

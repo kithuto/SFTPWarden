@@ -24,12 +24,16 @@ FILE_PROVIDER_TYPES = {ProviderType.YAML, ProviderType.CSV}
 
 
 class WatcherInstallMode(StrEnum):
+    """Supported watcher installation modes."""
+
     SYSTEMD = "systemd"
     DOCKER = "docker"
 
 
 @dataclass(frozen=True)
 class WatchTarget:
+    """File that should be watched and synced to a remote host."""
+
     context: str
     local_path: Path
     remote_path: str
@@ -37,17 +41,40 @@ class WatchTarget:
 
 @dataclass(frozen=True)
 class WatcherInstallPlan:
+    """Files and commands needed to install the watcher."""
+
     mode: WatcherInstallMode
     path: Path
     commands: list[list[str]]
 
     def text(self) -> str:
+        """Render the watcher install plan for dry-run output.
+
+        Returns
+        -------
+        str
+            Human-readable install plan.
+        """
         rendered = [f"{self.mode.value} watcher: {self.path}"]
         rendered.extend(" ".join(command) for command in self.commands)
         return "\n".join(rendered)
 
 
 def remote_root_path(context: ContextEntry, local_path: Path) -> str:
+    """Map a local project file to its remote path.
+
+    Parameters
+    ----------
+    context
+        Remote local-sync context.
+    local_path
+        Local file path inside the context root.
+
+    Returns
+    -------
+    str
+        Remote file path.
+    """
     if not context.remote:
         raise ContextError(f"Context {context.name} is missing remote settings.")
     if not context.root:
@@ -57,29 +84,41 @@ def remote_root_path(context: ContextEntry, local_path: Path) -> str:
 
 
 def editable_sync_targets(context: ContextEntry, config: SFTPWardenConfig) -> list[WatchTarget]:
-    if not context.remote:
+    """Return user-provider files that should be synced for a context.
+
+    Parameters
+    ----------
+    context
+        Remote context.
+    config
+        Project config.
+
+    Returns
+    -------
+    list[WatchTarget]
+        Existing user-provider files to sync.
+    """
+    if not context.remote or config.provider.type not in FILE_PROVIDER_TYPES:
         return []
-    config_path = Path(context.config)
+    provider_path = provider_local_path(context.root, config)
     candidates = [
         WatchTarget(
             context=context.name,
-            local_path=config_path,
-            remote_path=context.remote.remote_config,
+            local_path=provider_path,
+            remote_path=remote_root_path(context, provider_path),
         )
     ]
-    if config.provider.type in FILE_PROVIDER_TYPES:
-        provider_path = provider_local_path(context.root, config)
-        candidates.append(
-            WatchTarget(
-                context=context.name,
-                local_path=provider_path,
-                remote_path=remote_root_path(context, provider_path),
-            )
-        )
     return [target for target in candidates if target.local_path.exists()]
 
 
 def derive_watch_targets() -> list[WatchTarget]:
+    """Derive watch targets from the context registry.
+
+    Returns
+    -------
+    list[WatchTarget]
+        Sorted remote local-sync watch targets.
+    """
     registry = load_registry()
     targets: list[WatchTarget] = []
     for context in registry.contexts.values():
@@ -100,6 +139,13 @@ def derive_watch_targets() -> list[WatchTarget]:
 
 
 def watcher_status_text() -> str:
+    """Return watcher status as human-readable text.
+
+    Returns
+    -------
+    str
+        Status text.
+    """
     data = watcher_status_data()
     lines = [
         f"Watcher installed: {data['installed']}",
@@ -112,6 +158,13 @@ def watcher_status_text() -> str:
 
 
 def watcher_status_data() -> dict:
+    """Return watcher status as structured data.
+
+    Returns
+    -------
+    dict
+        JSON-serializable watcher status.
+    """
     state = load_global_config().watcher
     targets = derive_watch_targets()
     return {
@@ -130,11 +183,25 @@ def watcher_status_data() -> dict:
 
 
 def default_watcher_mode() -> WatcherInstallMode:
+    """Return the configured default watcher mode.
+
+    Returns
+    -------
+    WatcherInstallMode
+        Default watcher mode.
+    """
     mode = load_global_config().defaults.watcher_mode
     return WatcherInstallMode(mode)
 
 
 def installed_watcher_mode() -> WatcherInstallMode | None:
+    """Return the installed watcher mode.
+
+    Returns
+    -------
+    WatcherInstallMode | None
+        Installed mode, or ``None`` when no watcher is installed.
+    """
     state = load_global_config().watcher
     if not state.installed or not state.mode:
         return None
@@ -149,6 +216,26 @@ def install_watcher(
     image: str | None = None,
     activate: bool = False,
 ) -> str:
+    """Install watcher files and optionally activate them.
+
+    Parameters
+    ----------
+    mode
+        Requested watcher mode.
+    yes
+        Whether to replace existing watcher metadata without prompting.
+    dry_run
+        Whether to return the install plan without writing files.
+    image
+        Optional Docker watcher image.
+    activate
+        Whether to run enable/start commands.
+
+    Returns
+    -------
+    str
+        Install result message.
+    """
     selected_mode = WatcherInstallMode(mode or default_watcher_mode())
     config = load_global_config()
     existing = config.watcher
@@ -173,6 +260,13 @@ def install_watcher(
 
 
 def run_watcher_commands(commands: list[list[str]]) -> None:
+    """Run watcher activation commands.
+
+    Parameters
+    ----------
+    commands
+        Commands from a watcher install plan.
+    """
     for command in commands:
         run_checked(
             command,
@@ -184,6 +278,18 @@ def run_watcher_commands(commands: list[list[str]]) -> None:
 
 
 def uninstall_watcher(*, dry_run: bool = False) -> str:
+    """Uninstall watcher metadata and generated files.
+
+    Parameters
+    ----------
+    dry_run
+        Whether to report the planned uninstall only.
+
+    Returns
+    -------
+    str
+        Uninstall result message.
+    """
     config = load_global_config()
     state = config.watcher
     if not state.installed:
@@ -206,6 +312,22 @@ def ensure_watcher(
     yes: bool = False,
     image: str | None = None,
 ) -> str:
+    """Ensure a watcher is installed.
+
+    Parameters
+    ----------
+    requested_mode
+        Optional watcher mode to enforce.
+    yes
+        Whether to replace existing watcher metadata without prompting.
+    image
+        Optional Docker watcher image.
+
+    Returns
+    -------
+    str
+        Existing or newly installed watcher message.
+    """
     config = load_global_config()
     state = config.watcher
     if state.installed and not requested_mode:
@@ -219,6 +341,20 @@ def watcher_install_plan(
     *,
     image: str | None = None,
 ) -> WatcherInstallPlan:
+    """Build a watcher install plan.
+
+    Parameters
+    ----------
+    mode
+        Watcher mode.
+    image
+        Optional Docker watcher image.
+
+    Returns
+    -------
+    WatcherInstallPlan
+        Install plan.
+    """
     if mode == WatcherInstallMode.SYSTEMD:
         return WatcherInstallPlan(
             mode=mode,
@@ -246,6 +382,15 @@ def watcher_install_plan(
 
 
 def write_watcher_files(plan: WatcherInstallPlan, *, image: str | None = None) -> None:
+    """Write watcher files for an install plan.
+
+    Parameters
+    ----------
+    plan
+        Watcher install plan.
+    image
+        Optional Docker watcher image.
+    """
     plan.path.parent.mkdir(parents=True, exist_ok=True)
     if plan.mode == WatcherInstallMode.SYSTEMD:
         plan.path.write_text(render_systemd_unit(), encoding="utf-8")
@@ -254,14 +399,35 @@ def write_watcher_files(plan: WatcherInstallPlan, *, image: str | None = None) -
 
 
 def systemd_unit_path() -> Path:
+    """Return the generated systemd unit path.
+
+    Returns
+    -------
+    Path
+        Systemd unit path inside the app home.
+    """
     return app_home() / "watcher" / "systemd" / "sftpwarden-watch.service"
 
 
 def docker_watcher_compose_path() -> Path:
+    """Return the generated Docker watcher compose path.
+
+    Returns
+    -------
+    Path
+        Docker Compose path inside the app home.
+    """
     return app_home() / "watcher" / "docker-compose.yml"
 
 
 def render_systemd_unit() -> str:
+    """Render the systemd watcher unit.
+
+    Returns
+    -------
+    str
+        Systemd unit file text.
+    """
     user = os.environ.get("USER") or os.environ.get("LOGNAME") or "sftpwarden"
     return f"""[Unit]
 Description=SFTPWarden remote local-sync watcher
@@ -280,6 +446,18 @@ WantedBy=default.target
 
 
 def render_docker_watcher_compose(*, image: str | None = None) -> str:
+    """Render Docker Compose YAML for the watcher.
+
+    Parameters
+    ----------
+    image
+        Optional Docker watcher image.
+
+    Returns
+    -------
+    str
+        Docker Compose YAML text.
+    """
     volumes = [
         f"{app_home()}:{app_home()}:ro",
         f"{contexts_path()}:{contexts_path()}:ro",
@@ -301,10 +479,34 @@ def render_docker_watcher_compose(*, image: str | None = None) -> str:
 
 
 def unique_items(values: list[str]) -> list[str]:
+    """Return a list with duplicates removed while preserving order.
+
+    Parameters
+    ----------
+    values
+        Input values.
+
+    Returns
+    -------
+    list[str]
+        Unique values.
+    """
     return list(dict.fromkeys(values))
 
 
 def docker_watcher_ssh_volumes() -> list[str]:
+    """Return SSH-related Docker volume mounts for watcher contexts.
+
+    Returns
+    -------
+    list[str]
+        Docker volume specifications.
+
+    Raises
+    ------
+    ContextError
+        Raised when Docker watcher would need host default SSH identity.
+    """
     volumes: list[str] = []
     for context in docker_watcher_remote_contexts():
         remote = context.remote
@@ -332,6 +534,13 @@ def docker_watcher_ssh_volumes() -> list[str]:
 
 
 def docker_watcher_remote_contexts() -> list[ContextEntry]:
+    """Return remote local-sync contexts relevant to Docker watcher.
+
+    Returns
+    -------
+    list[ContextEntry]
+        Registered remote local-sync contexts.
+    """
     registry = load_registry()
     return [
         context
@@ -343,6 +552,24 @@ def docker_watcher_remote_contexts() -> list[ContextEntry]:
 def sync_target(
     context: ContextEntry, local_path: Path, remote_path: str, *, dry_run: bool = False
 ) -> str:
+    """Sync one local file to its remote target.
+
+    Parameters
+    ----------
+    context
+        Remote context.
+    local_path
+        Local file to sync.
+    remote_path
+        Remote destination path.
+    dry_run
+        Whether to return the rsync command without executing it.
+
+    Returns
+    -------
+    str
+        Rsync output or dry-run command.
+    """
     if not context.remote:
         raise ContextError(f"Context {context.name} is missing remote settings.")
     destination = f"{context.remote.user}@{context.remote.host}:{remote_path}"
@@ -360,6 +587,15 @@ def sync_target(
 
 
 def poll_watch(*, interval_seconds: int = 2, dry_run: bool = False) -> None:
+    """Poll watch targets and sync changed files forever.
+
+    Parameters
+    ----------
+    interval_seconds
+        Poll interval in seconds.
+    dry_run
+        Whether to print commands without syncing.
+    """
     seen: dict[tuple[str, Path, str], float] = {}
     while True:
         registry = load_registry()

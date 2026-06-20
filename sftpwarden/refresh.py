@@ -15,6 +15,18 @@ from sftpwarden.utils.errors import ContextError, RuntimeError
 
 
 def docker_compose_command(context: ContextEntry) -> list[str]:
+    """Build the Docker Compose runtime refresh command.
+
+    Parameters
+    ----------
+    context
+        Context whose runtime should be refreshed.
+
+    Returns
+    -------
+    list[str]
+        Docker Compose command arguments.
+    """
     compose_file = "docker-compose.yml"
     if context.type == ContextType.REMOTE and context.remote:
         compose_file = context.remote.compose_file
@@ -33,6 +45,27 @@ def docker_compose_command(context: ContextEntry) -> list[str]:
 
 
 def refresh_context(context: ContextEntry, *, dry_run: bool = False) -> str:
+    """Refresh a local or remote runtime context.
+
+    Parameters
+    ----------
+    context
+        Context to refresh.
+    dry_run
+        Whether to return the command without executing it.
+
+    Returns
+    -------
+    str
+        Refresh output or dry-run command text.
+
+    Raises
+    ------
+    ContextError
+        Raised when remote context settings are incomplete.
+    RuntimeError
+        Raised when the refresh command fails.
+    """
     if context.type == ContextType.LOCAL:
         command = docker_compose_command(context)
         cwd = context.root or "."
@@ -43,9 +76,7 @@ def refresh_context(context: ContextEntry, *, dry_run: bool = False) -> str:
             cwd=cwd,
             error_type=RuntimeError,
             message=f"Refresh failed for context {context.name}.",
-            fallback_suggestion=(
-                "Start the runtime with `sftpwarden deploy` or `docker compose up -d`."
-            ),
+            fallback_suggestion="Start the runtime with `sftpwarden deploy`.",
         )
         return result.stdout.strip() or f"Refreshed {context.name}."
 
@@ -73,6 +104,27 @@ def resolve_refresh_targets(
     context_name: str | None = None,
     config_path: str | None = None,
 ) -> list[ContextEntry]:
+    """Resolve contexts targeted by a refresh command.
+
+    Parameters
+    ----------
+    all_contexts
+        Whether to include every registered context.
+    context_name
+        Optional context name to resolve.
+    config_path
+        Optional explicit config path.
+
+    Returns
+    -------
+    list[ContextEntry]
+        Contexts to refresh.
+
+    Raises
+    ------
+    ContextError
+        Raised when no context can be resolved.
+    """
     if all_contexts:
         registry: ContextRegistry = load_registry()
         targets = list(registry.contexts.values())

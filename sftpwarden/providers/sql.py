@@ -22,14 +22,48 @@ SQL_USER_COLUMNS = (
     "comment",
     "disabled",
 )
+SQL_CREATE_USER_COLUMNS = (
+    "username varchar(32) primary key",
+    "public_keys text",
+    "password_hash text",
+    "uid integer",
+    "gid integer",
+    "upload_dir varchar(255) not null default 'upload'",
+    "comment text",
+    "disabled boolean not null default false",
+)
 
 
 def validate_sql_table(table: str) -> None:
+    """Validate a SQL table identifier.
+
+    Parameters
+    ----------
+    table
+        Table name or schema-qualified table name.
+
+    Raises
+    ------
+    ProviderError
+        Raised when the table name is unsafe.
+    """
     if not SQL_TABLE_RE.fullmatch(table):
         raise ProviderError("SQL provider table name is invalid.")
 
 
 def validate_sql_read_query(query: str) -> None:
+    """Validate a custom SQL read query.
+
+    Parameters
+    ----------
+    query
+        SQL query supplied in provider config.
+
+    Raises
+    ------
+    ProviderError
+        Raised when the query is empty, multi-statement, or mutating.
+    """
     normalized = query.strip()
     if not normalized:
         raise ProviderError("SQL provider query cannot be empty.")
@@ -43,11 +77,70 @@ def validate_sql_read_query(query: str) -> None:
 
 
 def sql_select_users_query(table: str = DEFAULT_SQL_USERS_TABLE) -> str:
+    """Build the default SQL users query.
+
+    Parameters
+    ----------
+    table
+        Users table name.
+
+    Returns
+    -------
+    str
+        SQL select query.
+    """
     validate_sql_table(table)
     return f"select {', '.join(SQL_USER_COLUMNS)} from {table} order by username"  # noqa: S608
 
 
+def sql_check_table_query(table: str = DEFAULT_SQL_USERS_TABLE) -> str:
+    """Build a lightweight SQL users table existence query.
+
+    Parameters
+    ----------
+    table
+        Users table name.
+
+    Returns
+    -------
+    str
+        Query that succeeds when the table exists.
+    """
+    validate_sql_table(table)
+    return f"select 1 from {table} limit 1"  # noqa: S608
+
+
+def create_sql_users_table_statement(table: str = DEFAULT_SQL_USERS_TABLE) -> str:
+    """Build the SQL users table creation statement.
+
+    Parameters
+    ----------
+    table
+        Users table name.
+
+    Returns
+    -------
+    str
+        ``CREATE TABLE`` statement for the default provider schema.
+    """
+    validate_sql_table(table)
+    columns = ", ".join(SQL_CREATE_USER_COLUMNS)
+    return f"create table {table} ({columns})"  # noqa: S608
+
+
 def users_from_sql_rows(rows: list[dict[str, Any]]) -> ProviderUsers:
+    """Convert SQL result rows into provider users.
+
+    Parameters
+    ----------
+    rows
+        Mapping rows returned by a SQL driver.
+
+    Returns
+    -------
+    ProviderUsers
+        Validated provider users.
+    """
     users: list[SFTPUser] = []
     for row in rows:
         public_keys_value = row.get("public_keys") or ""
@@ -71,12 +164,36 @@ def users_from_sql_rows(rows: list[dict[str, Any]]) -> ProviderUsers:
 
 
 def parse_sql_bool(value: Any) -> bool:
+    """Parse a database boolean value.
+
+    Parameters
+    ----------
+    value
+        Raw database value.
+
+    Returns
+    -------
+    bool
+        Parsed boolean value.
+    """
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "t", "yes", "y", "on"}
     return bool(value)
 
 
 def sql_user_row(user: SFTPUser) -> tuple[Any, ...]:
+    """Convert a user to a SQL parameter row.
+
+    Parameters
+    ----------
+    user
+        User to persist.
+
+    Returns
+    -------
+    tuple[Any, ...]
+        Row values matching ``SQL_USER_COLUMNS``.
+    """
     return (
         user.username,
         "\n".join(user.public_keys),
@@ -90,6 +207,19 @@ def sql_user_row(user: SFTPUser) -> tuple[Any, ...]:
 
 
 def upsert_sql_users(cursor: Any, table: str, users: ProviderUsers, *, dialect: str) -> None:
+    """Upsert users with a SQL dialect-specific statement.
+
+    Parameters
+    ----------
+    cursor
+        Database cursor.
+    table
+        Users table name.
+    users
+        Users to persist.
+    dialect
+        SQL dialect, either ``mysql`` or ``postgres``.
+    """
     validate_sql_table(table)
     if not users.users:
         return
@@ -117,10 +247,34 @@ def upsert_sql_users(cursor: Any, table: str, users: ProviderUsers, *, dialect: 
 
 
 def upsert_sql_user(cursor: Any, table: str, user: SFTPUser, *, dialect: str) -> None:
+    """Upsert a single user.
+
+    Parameters
+    ----------
+    cursor
+        Database cursor.
+    table
+        Users table name.
+    user
+        User to persist.
+    dialect
+        SQL dialect, either ``mysql`` or ``postgres``.
+    """
     upsert_sql_users(cursor, table, ProviderUsers(users=[user]), dialect=dialect)
 
 
 def delete_sql_user(cursor: Any, table: str, username: str) -> None:
+    """Delete a single user from a SQL provider table.
+
+    Parameters
+    ----------
+    cursor
+        Database cursor.
+    table
+        Users table name.
+    username
+        Username to delete.
+    """
     validate_sql_table(table)
     cursor.execute(f"delete from {table} where username = %s", [username])  # noqa: S608
     if getattr(cursor, "rowcount", 1) == 0:
@@ -128,6 +282,17 @@ def delete_sql_user(cursor: Any, table: str, username: str) -> None:
 
 
 def delete_missing_sql_users(cursor: Any, table: str, users: ProviderUsers) -> None:
+    """Delete SQL users that are missing from a desired provider set.
+
+    Parameters
+    ----------
+    cursor
+        Database cursor.
+    table
+        Users table name.
+    users
+        Desired provider users.
+    """
     validate_sql_table(table)
     usernames = [user.username for user in users.users]
     if not usernames:

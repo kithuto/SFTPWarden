@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install tox
+          python -m pip install -e ".[watch,mysql,postgres]"
+
+      - name: Run tox
+        run: tox -e py
+
+      - name: Validate examples
+        run: |
+          sftpwarden validate --config examples/yaml/sftpwarden.yaml
+          sftpwarden validate --config examples/csv/sftpwarden.yaml
+          SFTPWARDEN_MYSQL_DSN=mysql://user:pass@localhost/sftp sftpwarden validate --config examples/mysql/sftpwarden.yaml
+          SFTPWARDEN_POSTGRES_DSN=postgresql://user:pass@localhost/sftp sftpwarden validate --config examples/postgres/sftpwarden.yaml
+
+      - name: Validate compose generation
+        run: |
+          sftpwarden compose --config examples/yaml/sftpwarden.yaml > /tmp/sftpwarden-compose.yml
+          test -s /tmp/sftpwarden-compose.yml

@@ -1,0 +1,5 @@
+users:
+  - username: alice
+    password_hash: "$6$rounds=500000$example$replace-with-real-hash"
+    upload_dir: upload
+

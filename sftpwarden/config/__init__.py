@@ -23,6 +23,8 @@ SQL_TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?
 
 
 class ProviderType(StrEnum):
+    """Supported user provider types."""
+
     YAML = "yaml"
     CSV = "csv"
     MYSQL = "mysql"
@@ -30,16 +32,22 @@ class ProviderType(StrEnum):
 
 
 class RemoteStorage(StrEnum):
+    """Supported storage modes for remote contexts."""
+
     LOCAL_SYNC = "local-sync"
     REMOTE_ONLY = "remote-only"
 
 
 class WatcherMode(StrEnum):
+    """Supported watcher installation modes."""
+
     SYSTEMD = "systemd"
     DOCKER = "docker"
 
 
 class ProjectConfig(BaseModel):
+    """Project metadata configuration."""
+
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1)
@@ -47,6 +55,8 @@ class ProjectConfig(BaseModel):
 
 
 class ServerConfig(BaseModel):
+    """OpenSSH runtime server configuration."""
+
     model_config = ConfigDict(extra="forbid")
 
     host: str = "0.0.0.0"
@@ -58,6 +68,8 @@ class ServerConfig(BaseModel):
 
 
 class SyncConfig(BaseModel):
+    """Runtime synchronization behavior."""
+
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
@@ -68,6 +80,8 @@ class SyncConfig(BaseModel):
 
 
 class AuthConfig(BaseModel):
+    """Authentication behavior for SFTP users."""
+
     model_config = ConfigDict(extra="forbid")
 
     allow_public_key: bool = True
@@ -77,12 +91,21 @@ class AuthConfig(BaseModel):
 
     @model_validator(mode="after")
     def ensure_auth_method(self) -> AuthConfig:
+        """Ensure at least one login method is enabled.
+
+        Returns
+        -------
+        AuthConfig
+            Validated authentication config.
+        """
         if not self.allow_public_key and not self.allow_password:
             raise ValueError("At least one authentication method must be enabled.")
         return self
 
 
 class IsolationConfig(BaseModel):
+    """Chroot and upload directory isolation settings."""
+
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal["chroot"] = "chroot"
@@ -95,12 +118,36 @@ class IsolationConfig(BaseModel):
     @field_validator("upload_dir")
     @classmethod
     def validate_upload_dir(cls, value: str) -> str:
+        """Validate the configured upload directory.
+
+        Parameters
+        ----------
+        value
+            Upload directory from config.
+
+        Returns
+        -------
+        str
+            Validated relative path.
+        """
         validate_relative_safe_path(value, field_name="isolation.upload_dir")
         return value
 
     @field_validator("root_permissions")
     @classmethod
     def validate_root_permissions(cls, value: str) -> str:
+        """Validate chroot root permissions.
+
+        Parameters
+        ----------
+        value
+            Octal permission string.
+
+        Returns
+        -------
+        str
+            Validated permission string.
+        """
         validate_octal_permissions(value, field_name="isolation.root_permissions")
         if int(value, 8) & 0o022:
             raise ValueError("isolation.root_permissions must not be writable by group or others.")
@@ -109,6 +156,18 @@ class IsolationConfig(BaseModel):
     @field_validator("upload_permissions")
     @classmethod
     def validate_upload_permissions(cls, value: str) -> str:
+        """Validate upload directory permissions.
+
+        Parameters
+        ----------
+        value
+            Octal permission string.
+
+        Returns
+        -------
+        str
+            Validated permission string.
+        """
         validate_octal_permissions(value, field_name="isolation.upload_permissions")
         if int(value, 8) & 0o002:
             raise ValueError("isolation.upload_permissions must not be world-writable.")
@@ -116,6 +175,8 @@ class IsolationConfig(BaseModel):
 
 
 class UidGidConfig(BaseModel):
+    """UID/GID allocation settings."""
+
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal["auto"] = "auto"
@@ -125,12 +186,21 @@ class UidGidConfig(BaseModel):
 
     @model_validator(mode="after")
     def ensure_range(self) -> UidGidConfig:
+        """Ensure UID/GID allocation bounds are ordered.
+
+        Returns
+        -------
+        UidGidConfig
+            Validated allocation config.
+        """
         if self.end <= self.start:
             raise ValueError("uid_gid.end must be greater than uid_gid.start.")
         return self
 
 
 class ProviderConfig(BaseModel):
+    """User provider configuration."""
+
     model_config = ConfigDict(extra="forbid")
 
     type: ProviderType = ProviderType.YAML
@@ -142,18 +212,49 @@ class ProviderConfig(BaseModel):
     @field_validator("path")
     @classmethod
     def validate_path(cls, value: str) -> str:
+        """Validate provider path safety rules.
+
+        Parameters
+        ----------
+        value
+            Provider path from config.
+
+        Returns
+        -------
+        str
+            Validated provider path.
+        """
         validate_provider_path(value)
         return value
 
     @field_validator("table")
     @classmethod
     def validate_table(cls, value: str) -> str:
+        """Validate an SQL provider table name.
+
+        Parameters
+        ----------
+        value
+            Table name from config.
+
+        Returns
+        -------
+        str
+            Validated table name.
+        """
         if not SQL_TABLE_RE.fullmatch(value):
             raise ValueError("provider.table must be a table name or schema-qualified table name.")
         return value
 
     @model_validator(mode="after")
     def validate_provider(self) -> ProviderConfig:
+        """Validate provider-specific fields.
+
+        Returns
+        -------
+        ProviderConfig
+            Validated provider config.
+        """
         if self.type in {ProviderType.MYSQL, ProviderType.POSTGRESQL}:
             if not self.dsn:
                 raise ValueError(f"{self.type.value} provider requires dsn.")
@@ -170,6 +271,8 @@ class ProviderConfig(BaseModel):
 
 
 class LoggingConfig(BaseModel):
+    """Runtime logging configuration."""
+
     model_config = ConfigDict(extra="forbid")
 
     level: Literal["debug", "info", "warning", "error"] = "info"
@@ -177,6 +280,8 @@ class LoggingConfig(BaseModel):
 
 
 class DockerConfig(BaseModel):
+    """Docker Compose rendering configuration."""
+
     model_config = ConfigDict(extra="forbid")
 
     image: str = "sftpwarden:local"
@@ -186,6 +291,8 @@ class DockerConfig(BaseModel):
 
 
 class RemoteConfig(BaseModel):
+    """Remote deployment defaults."""
+
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
@@ -201,6 +308,8 @@ class RemoteConfig(BaseModel):
 
 
 class WatcherConfig(BaseModel):
+    """Watcher configuration stored in project config."""
+
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
@@ -209,6 +318,13 @@ class WatcherConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_watcher(self) -> WatcherConfig:
+        """Validate watcher mode-specific fields.
+
+        Returns
+        -------
+        WatcherConfig
+            Validated watcher config.
+        """
         if self.mode == WatcherMode.SYSTEMD and self.image:
             raise ValueError("watcher.image is only valid when watcher.mode is docker.")
         if self.mode == WatcherMode.DOCKER and self.enabled and not self.image:
@@ -217,6 +333,8 @@ class WatcherConfig(BaseModel):
 
 
 class SFTPWardenConfig(BaseModel):
+    """Root SFTPWarden project configuration."""
+
     model_config = ConfigDict(extra="forbid")
 
     version: Literal[1] = 1
@@ -236,6 +354,20 @@ class SFTPWardenConfig(BaseModel):
 def validation_error_to_config_error(
     error: ValidationError, source: Path | None = None
 ) -> ConfigError:
+    """Convert a Pydantic validation error into a user-facing config error.
+
+    Parameters
+    ----------
+    error
+        Pydantic validation error.
+    source
+        Optional source file path.
+
+    Returns
+    -------
+    ConfigError
+        Formatted SFTPWarden config error.
+    """
     details = []
     for item in error.errors():
         loc = ".".join(str(part) for part in item["loc"])
@@ -248,6 +380,23 @@ def validation_error_to_config_error(
 
 
 def load_config(path: str | Path = CONFIG_FILENAME) -> SFTPWardenConfig:
+    """Load and validate a project configuration file.
+
+    Parameters
+    ----------
+    path
+        Config file path.
+
+    Returns
+    -------
+    SFTPWardenConfig
+        Validated project config.
+
+    Raises
+    ------
+    ConfigError
+        Raised when the file is missing or invalid.
+    """
     config_path = expand_path(path)
     if not config_path.exists():
         raise ConfigError(
@@ -264,21 +413,78 @@ def load_config(path: str | Path = CONFIG_FILENAME) -> SFTPWardenConfig:
 
 
 def dump_config(config: SFTPWardenConfig) -> str:
+    """Serialize a project configuration to YAML.
+
+    Parameters
+    ----------
+    config
+        Project config to serialize.
+
+    Returns
+    -------
+    str
+        YAML config text.
+    """
     data = config.model_dump(mode="json", exclude_none=True)
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=False)
 
 
 def write_config(path: str | Path, config: SFTPWardenConfig) -> None:
+    """Write a private project configuration file.
+
+    Parameters
+    ----------
+    path
+        Destination path.
+    config
+        Project config to write.
+    """
     config_path = expand_path(path)
     write_private_text(config_path, dump_config(config))
 
 
 def default_project_config(
-    name: str, provider: ProviderType = ProviderType.YAML
+    name: str,
+    provider: ProviderType = ProviderType.YAML,
+    *,
+    dsn: str | None = None,
+    query: str | None = None,
+    table: str = "sftp_users",
 ) -> SFTPWardenConfig:
+    """Create a default project configuration.
+
+    Parameters
+    ----------
+    name
+        Project name.
+    provider
+        Initial provider type.
+    dsn
+        Optional SQL provider DSN.
+    query
+        Optional SQL read query.
+    table
+        SQL users table name.
+
+    Returns
+    -------
+    SFTPWardenConfig
+        Default project config.
+    """
     provider_path = f"{CONTAINER_PROVIDER_DIR}/users.yaml"
     if provider == ProviderType.CSV:
         provider_path = f"{CONTAINER_PROVIDER_DIR}/users.csv"
+    if provider in {ProviderType.MYSQL, ProviderType.POSTGRESQL}:
+        return SFTPWardenConfig(
+            project=ProjectConfig(name=name),
+            provider=ProviderConfig(
+                type=provider,
+                path=provider_path,
+                dsn=dsn,
+                query=query,
+                table=table,
+            ),
+        )
     return SFTPWardenConfig(
         project=ProjectConfig(name=name),
         provider=ProviderConfig(type=provider, path=provider_path),
@@ -286,6 +492,20 @@ def default_project_config(
 
 
 def provider_local_path(project_root: str | Path, config: SFTPWardenConfig) -> Path:
+    """Resolve the local provider file path for a project.
+
+    Parameters
+    ----------
+    project_root
+        Local project root.
+    config
+        Project config.
+
+    Returns
+    -------
+    Path
+        Local provider file path.
+    """
     root = expand_path(project_root)
     provider_path = Path(config.provider.path)
     if provider_path.is_absolute():
@@ -296,10 +516,34 @@ def provider_local_path(project_root: str | Path, config: SFTPWardenConfig) -> P
 
 
 def config_as_json(config: SFTPWardenConfig) -> str:
+    """Serialize a project configuration as formatted JSON.
+
+    Parameters
+    ----------
+    config
+        Project config.
+
+    Returns
+    -------
+    str
+        Formatted JSON string.
+    """
     return json.dumps(config.model_dump(mode="json", exclude_none=True), indent=2, sort_keys=True)
 
 
 def validate_raw_config_keys(data: dict[str, Any]) -> None:
+    """Validate deprecated or unsupported raw config keys.
+
+    Parameters
+    ----------
+    data
+        Raw YAML mapping.
+
+    Raises
+    ------
+    ConfigError
+        Raised when unsupported keys are present.
+    """
     if isinstance(data.get("server"), dict) and "container_port" in data["server"]:
         raise ConfigError(
             "server.container_port is not supported. The container SSH port is always 22.",
@@ -308,6 +552,15 @@ def validate_raw_config_keys(data: dict[str, Any]) -> None:
 
 
 def validate_relative_safe_path(value: str, *, field_name: str) -> None:
+    """Validate a relative path that cannot traverse directories.
+
+    Parameters
+    ----------
+    value
+        Path value to validate.
+    field_name
+        Config field name used in error messages.
+    """
     path = Path(value)
     if path.is_absolute():
         raise ValueError(f"{field_name} must be relative.")
@@ -316,11 +569,27 @@ def validate_relative_safe_path(value: str, *, field_name: str) -> None:
 
 
 def validate_provider_path(value: str | Path) -> None:
+    """Validate a provider path for unsafe segments.
+
+    Parameters
+    ----------
+    value
+        Provider path value.
+    """
     path = Path(value)
     if any(part in {"", ".", ".."} for part in path.parts):
         raise ValueError("provider.path must not contain empty, current, or parent segments.")
 
 
 def validate_octal_permissions(value: str, *, field_name: str) -> None:
+    """Validate an octal permission string.
+
+    Parameters
+    ----------
+    value
+        Permission string.
+    field_name
+        Config field name used in error messages.
+    """
     if not re.fullmatch(r"0?[0-7]{3}", value):
         raise ValueError(f"{field_name} must be a three-digit octal permission string.")

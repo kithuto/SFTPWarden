@@ -1,0 +1,3 @@
+username,public_keys,password_hash,uid,gid,upload_dir,disabled
+alice,,$6$rounds=500000$example$replace-with-real-hash,,,upload,false
+

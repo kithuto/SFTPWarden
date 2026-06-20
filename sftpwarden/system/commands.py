@@ -9,6 +9,20 @@ from sftpwarden.utils.errors import SFTPWardenError
 
 @dataclass(frozen=True)
 class CommandResult:
+    """Result returned by an external command.
+
+    Attributes
+    ----------
+    args
+        Command arguments that were executed.
+    returncode
+        Process return code.
+    stdout
+        Captured standard output.
+    stderr
+        Captured standard error.
+    """
+
     args: list[str]
     returncode: int
     stdout: str
@@ -16,10 +30,29 @@ class CommandResult:
 
     @property
     def output(self) -> str:
+        """Return the most useful captured output.
+
+        Returns
+        -------
+        str
+            Standard error when present, otherwise standard output.
+        """
         return (self.stderr or self.stdout).strip()
 
 
 def command_text(args: list[str]) -> str:
+    """Render a command for display.
+
+    Parameters
+    ----------
+    args
+        Command arguments.
+
+    Returns
+    -------
+    str
+        Shell-escaped representation suitable for logs and dry-runs.
+    """
     return shlex.join(args)
 
 
@@ -30,14 +63,40 @@ def run(
     timeout: float | None = None,
     capture_output: bool = True,
 ) -> CommandResult:
-    result = subprocess.run(
-        args,
-        cwd=cwd,
-        check=False,
-        text=True,
-        capture_output=capture_output,
-        timeout=timeout,
-    )
+    """Run an external command without raising on failure.
+
+    Parameters
+    ----------
+    args
+        Command arguments to execute.
+    cwd
+        Optional working directory.
+    timeout
+        Optional command timeout in seconds.
+    capture_output
+        Whether to capture stdout and stderr.
+
+    Returns
+    -------
+    CommandResult
+        Captured command result.
+    """
+    try:
+        result = subprocess.run(
+            args,
+            cwd=cwd,
+            check=False,
+            text=True,
+            capture_output=capture_output,
+            timeout=timeout,
+        )
+    except FileNotFoundError as exc:
+        return CommandResult(
+            args=args,
+            returncode=127,
+            stdout="",
+            stderr=f"Executable not found: {exc.filename}",
+        )
     return CommandResult(
         args=args,
         returncode=result.returncode,
@@ -56,6 +115,35 @@ def run_checked(
     timeout: float | None = None,
     capture_output: bool = True,
 ) -> CommandResult:
+    """Run an external command and raise a typed SFTPWarden error on failure.
+
+    Parameters
+    ----------
+    args
+        Command arguments to execute.
+    cwd
+        Optional working directory.
+    error_type
+        Error class to raise when the command fails.
+    message
+        Error message for failures.
+    fallback_suggestion
+        Suggestion used when the command does not provide output.
+    timeout
+        Optional command timeout in seconds.
+    capture_output
+        Whether to capture stdout and stderr.
+
+    Returns
+    -------
+    CommandResult
+        Successful command result.
+
+    Raises
+    ------
+    SFTPWardenError
+        Raised as ``error_type`` when the command exits with a non-zero code.
+    """
     command_result = run(
         args,
         cwd=cwd,

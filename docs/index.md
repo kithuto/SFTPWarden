@@ -13,4 +13,5 @@ configuration
 operations
 security
 cli-reference
+contributing
 ```

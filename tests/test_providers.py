@@ -14,7 +14,9 @@ from sftpwarden.providers import (
     users_from_sql_rows,
 )
 from sftpwarden.providers.sql import (
+    create_sql_users_table_statement,
     delete_missing_sql_users,
+    sql_check_table_query,
     sql_select_users_query,
     upsert_sql_users,
     validate_sql_read_query,
@@ -102,6 +104,13 @@ def test_sql_default_read_query_uses_users_table() -> None:
     assert sql_select_users_query() == (
         "select username, public_keys, password_hash, uid, gid, upload_dir, comment, disabled "
         "from sftp_users order by username"
+    )
+
+
+def test_sql_table_helpers_use_validated_table_name() -> None:
+    assert sql_check_table_query("sftp_users") == "select 1 from sftp_users limit 1"
+    assert create_sql_users_table_statement("sftp_users").startswith(
+        "create table sftp_users (username varchar(32) primary key"
     )
 
 

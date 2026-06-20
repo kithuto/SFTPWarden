@@ -10,6 +10,8 @@ your hosts and networks. Treat it as infrastructure.
 - `sftpwarden user add --password` hashes before writing provider data.
 - Host keys, user data, and UID/GID state are persisted outside the image.
 - Removed users are disabled; their data is not deleted.
+- User data is deleted only with the explicit `sftpwarden user remove --delete-files`
+  flag.
 - `.env`, `data/`, `state/`, `host_keys/`, Git metadata, and Python caches are not
   watched or synced by the watcher.
 - Production watcher installs should prefer systemd so SSH uses the host's
