@@ -2,21 +2,80 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+    paths:
+      - "sftpwarden/**"
+      - "pyproject.toml"
+      - "README.md"
+      - "LICENSE"
+      - "CHANGELOG.md"
+      - ".github/workflows/release.yml"
 
 permissions:
   contents: write
   id-token: write
-  packages: write
-
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-  WATCHER_IMAGE_NAME: ${{ github.repository }}-watcher
 
 jobs:
-  package:
+  verify:
     runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.version.outputs.changed }}
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Verify package versions and change
+        id: version
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+          import sftpwarden
+
+          def read_version(text: str) -> str:
+              return tomllib.loads(text)["project"]["version"]
+
+          package_version = read_version(Path("pyproject.toml").read_text(encoding="utf-8"))
+          module_version = sftpwarden.__version__
+          if package_version != module_version:
+              raise SystemExit(
+                  f"pyproject={package_version} module={module_version}"
+              )
+
+          previous = ""
+          before = os.environ.get("BEFORE_SHA", "")
+          if before and before != "0" * 40:
+              result = subprocess.run(
+                  ["git", "show", f"{before}:pyproject.toml"],
+                  capture_output=True,
+                  check=False,
+                  text=True,
+              )
+              if result.returncode == 0:
+                  previous = read_version(result.stdout)
+
+          changed = previous != package_version
+          print(f"version={package_version}")
+          print(f"previous_version={previous}")
+          print(f"changed={str(changed).lower()}")
+          PY
+
+  package:
+    needs: verify
+    if: needs.verify.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/sftpwarden
 
     steps:
       - name: Check out repository
@@ -33,79 +92,21 @@ jobs:
           python -m pip install --upgrade pip build
           python -m build
 
-      - name: Publish to PyPI
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: pypa/gh-action-pypi-publish@v1.14.0
-
       - name: Upload package artifacts
         uses: actions/upload-artifact@v7.0.1
         with:
           name: python-package
           path: dist/*
 
-  images:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7.0.0
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4.1.0
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v4.2.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Runtime metadata
-        id: runtime-meta
-        uses: docker/metadata-action@v6.1.0
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-
-      - name: Watcher metadata
-        id: watcher-meta
-        uses: docker/metadata-action@v6.1.0
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.WATCHER_IMAGE_NAME }}
-          tags: |
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-
-      - name: Publish runtime image
-        uses: docker/build-push-action@v7.2.0
-        with:
-          context: .
-          file: docker/runtime/Dockerfile
-          push: true
-          tags: ${{ steps.runtime-meta.outputs.tags }}
-          labels: ${{ steps.runtime-meta.outputs.labels }}
-
-      - name: Publish watcher image
-        uses: docker/build-push-action@v7.2.0
-        with:
-          context: .
-          file: docker/watcher/Dockerfile
-          push: true
-          tags: ${{ steps.watcher-meta.outputs.tags }}
-          labels: ${{ steps.watcher-meta.outputs.labels }}
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.14.0
 
   github-release:
-    needs: [package, images]
+    needs: [verify, package]
+    if: needs.verify.outputs.changed == 'true'
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7.0.0
-
       - name: Download package artifacts
         uses: actions/download-artifact@v8.0.1
         with:
@@ -115,5 +116,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3.0.1
         with:
+          tag_name: v${{ needs.verify.outputs.version }}
+          target_commitish: ${{ github.sha }}
           files: dist/*
           generate_release_notes: true

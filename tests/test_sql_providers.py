@@ -1,0 +1,502 @@
+from __future__ import annotations
+
+import sys
+import types
+from typing import Any
+
+import pytest
+
+from sftpwarden.config import ProviderConfig, ProviderType
+from sftpwarden.providers.mysql_provider import MySQLProvider, mysql_connect_kwargs
+from sftpwarden.providers.postgres_provider import PostgreSQLProvider
+from sftpwarden.providers.sql import (
+    delete_missing_sql_users,
+    delete_sql_user,
+    parse_sql_bool,
+    upsert_sql_users,
+    users_from_sql_rows,
+)
+from sftpwarden.users import ProviderUsers, SFTPUser
+from sftpwarden.utils.errors import ProviderError
+
+
+class FakeCursor:
+    def __init__(
+        self,
+        rows: list[dict[str, Any]] | None = None,
+        *,
+        execute_error: Exception | None = None,
+        executemany_error: Exception | None = None,
+    ) -> None:
+        self.rows = rows or []
+        self.execute_error = execute_error
+        self.executemany_error = executemany_error
+        self.executed: list[tuple[str, Any]] = []
+        self.executed_many: list[tuple[str, list[tuple[Any, ...]]]] = []
+
+    def __enter__(self) -> FakeCursor:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
+
+    def execute(self, statement: str, params: Any = None) -> None:
+        self.executed.append((statement, params))
+        if self.execute_error is not None:
+            raise self.execute_error
+
+    def executemany(self, statement: str, rows: list[tuple[Any, ...]]) -> None:
+        self.executed_many.append((statement, rows))
+        if self.executemany_error is not None:
+            raise self.executemany_error
+
+    def fetchall(self) -> list[dict[str, Any]]:
+        return self.rows
+
+
+class FakeConnection:
+    def __init__(self, cursor: FakeCursor) -> None:
+        self._cursor = cursor
+        self.committed = False
+        self.rolled_back = False
+        self.closed = False
+
+    def __enter__(self) -> FakeConnection:
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        return None
+
+    def cursor(self) -> FakeCursor:
+        return self._cursor
+
+    def commit(self) -> None:
+        self.committed = True
+
+    def rollback(self) -> None:
+        self.rolled_back = True
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def sample_user(username: str = "alice") -> SFTPUser:
+    return SFTPUser(
+        username=username,
+        password_hash="$6$rounds=500000$saltstring$hashvalue",  # noqa: S106
+        comment="Finance dropbox",
+    )
+
+
+def sample_row(username: str = "alice") -> dict[str, Any]:
+    return {
+        "username": username,
+        "public_keys": "",
+        "password_hash": "$6$rounds=500000$saltstring$hashvalue",
+        "uid": None,
+        "gid": None,
+        "upload_dir": "upload",
+        "comment": "Finance dropbox",
+        "disabled": False,
+    }
+
+
+def install_fake_pymysql(monkeypatch: pytest.MonkeyPatch, connection: FakeConnection) -> None:
+    pymysql = types.ModuleType("pymysql")
+    pymysql.cursors = types.SimpleNamespace(DictCursor=object)
+
+    def connect(**kwargs: Any) -> FakeConnection:
+        connection.kwargs = kwargs  # type: ignore[attr-defined]
+        return connection
+
+    pymysql.connect = connect  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "pymysql", pymysql)
+
+
+def install_fake_psycopg(monkeypatch: pytest.MonkeyPatch, connection: FakeConnection) -> None:
+    psycopg = types.ModuleType("psycopg")
+    rows = types.ModuleType("psycopg.rows")
+    rows.dict_row = object()
+
+    def connect(dsn: str, **kwargs: Any) -> FakeConnection:
+        connection.dsn = dsn  # type: ignore[attr-defined]
+        connection.kwargs = kwargs  # type: ignore[attr-defined]
+        return connection
+
+    psycopg.connect = connect  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "psycopg", psycopg)
+    monkeypatch.setitem(sys.modules, "psycopg.rows", rows)
+
+
+def mysql_provider() -> MySQLProvider:
+    return MySQLProvider(
+        config=ProviderConfig(
+            type=ProviderType.MYSQL,
+            dsn="mysql://user:pass@db.example.com:3307/sftp",
+            table="sftp_users",
+        )
+    )
+
+
+def mysql_provider_with_query(query: str) -> MySQLProvider:
+    return MySQLProvider(
+        config=ProviderConfig(
+            type=ProviderType.MYSQL,
+            dsn="mysql://user:pass@db.example.com:3307/sftp",
+            query=query,
+            table="sftp_users",
+        )
+    )
+
+
+def postgres_provider() -> PostgreSQLProvider:
+    return PostgreSQLProvider(
+        config=ProviderConfig(
+            type=ProviderType.POSTGRESQL,
+            dsn="postgresql://user:pass@db.example.com:5432/sftp",
+            table="sftp_users",
+        )
+    )
+
+
+def postgres_provider_with_query(query: str) -> PostgreSQLProvider:
+    return PostgreSQLProvider(
+        config=ProviderConfig(
+            type=ProviderType.POSTGRESQL,
+            dsn="postgresql://user:pass@db.example.com:5432/sftp",
+            query=query,
+            table="sftp_users",
+        )
+    )
+
+
+def test_mysql_provider_reads_users_with_default_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    cursor = FakeCursor(rows=[sample_row()])
+    connection = FakeConnection(cursor)
+    install_fake_pymysql(monkeypatch, connection)
+
+    users = mysql_provider().read()
+
+    assert users.users == [sample_user()]
+    assert cursor.executed == [
+        (
+            "select username, public_keys, password_hash, uid, gid, upload_dir, "
+            "comment, disabled from sftp_users order by username",
+            None,
+        )
+    ]
+    assert connection.closed is True
+    assert connection.kwargs["cursorclass"] is object  # type: ignore[attr-defined]
+
+
+def test_sql_provider_empty_text_is_empty() -> None:
+    assert MySQLProvider.empty_text() == ""
+    assert PostgreSQLProvider.empty_text() == ""
+
+
+def test_sql_helpers_cover_list_keys_empty_upsert_and_delete_edges() -> None:
+    users = users_from_sql_rows(
+        [
+            {
+                **sample_row(),
+                "public_keys": [" ssh-ed25519 AAAA alice@example.com ", ""],
+                "uid": "12000",
+                "gid": "12000",
+                "disabled": "off",
+            }
+        ]
+    )
+    cursor = FakeCursor()
+
+    upsert_sql_users(cursor, "sftp_users", ProviderUsers(users=[]), dialect="mysql")
+    delete_missing_sql_users(cursor, "sftp_users", ProviderUsers(users=[]))
+
+    cursor.rowcount = 0  # type: ignore[attr-defined]
+    with pytest.raises(ProviderError, match="Unknown user"):
+        delete_sql_user(cursor, "sftp_users", "missing")
+    with pytest.raises(ProviderError, match="Unsupported SQL dialect"):
+        upsert_sql_users(
+            cursor, "sftp_users", ProviderUsers(users=[sample_user()]), dialect="sqlite"
+        )
+
+    assert users.users[0].public_keys == ["ssh-ed25519 AAAA alice@example.com"]
+    assert users.users[0].uid == 12000
+    assert users.users[0].disabled is False
+    assert parse_sql_bool("yes") is True
+    assert parse_sql_bool(0) is False
+    assert cursor.executed[0] == ("delete from sftp_users", None)
+
+
+def test_mysql_provider_validates_and_executes_custom_read_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = FakeCursor(rows=[sample_row()])
+    connection = FakeConnection(cursor)
+    install_fake_pymysql(monkeypatch, connection)
+
+    users = mysql_provider_with_query("select * from sftp_users").read()
+
+    assert users.users[0].username == "alice"
+    assert cursor.executed == [("select * from sftp_users", None)]
+
+
+def test_mysql_provider_mutates_users_and_commits(monkeypatch: pytest.MonkeyPatch) -> None:
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+    install_fake_pymysql(monkeypatch, connection)
+    provider = mysql_provider()
+
+    provider.write(ProviderUsers(users=[sample_user()]))
+    provider.upsert_user(sample_user("bob"))
+    provider.remove_user("bob")
+    provider.create_table()
+
+    assert connection.committed is True
+    assert connection.closed is True
+    assert any("on duplicate key update" in statement for statement, _ in cursor.executed_many)
+    assert ("delete from sftp_users where username = %s", ["bob"]) in cursor.executed
+    assert any(statement.startswith("create table sftp_users") for statement, _ in cursor.executed)
+
+
+def test_mysql_provider_rolls_back_failed_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    cursor = FakeCursor(execute_error=RuntimeError("delete failed"))
+    connection = FakeConnection(cursor)
+    install_fake_pymysql(monkeypatch, connection)
+
+    with pytest.raises(RuntimeError, match="delete failed"):
+        mysql_provider().write(ProviderUsers(users=[sample_user()]))
+
+    assert connection.rolled_back is True
+    assert connection.closed is True
+
+
+def test_mysql_provider_rolls_back_failed_single_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = FakeCursor(executemany_error=RuntimeError("upsert failed"))
+    connection = FakeConnection(cursor)
+    install_fake_pymysql(monkeypatch, connection)
+    with pytest.raises(RuntimeError, match="upsert failed"):
+        mysql_provider().upsert_user(sample_user())
+    assert connection.rolled_back is True
+
+    cursor = FakeCursor(execute_error=RuntimeError("remove failed"))
+    connection = FakeConnection(cursor)
+    install_fake_pymysql(monkeypatch, connection)
+    with pytest.raises(RuntimeError, match="remove failed"):
+        mysql_provider().remove_user("alice")
+    assert connection.rolled_back is True
+
+    cursor = FakeCursor(execute_error=RuntimeError("create failed"))
+    connection = FakeConnection(cursor)
+    install_fake_pymysql(monkeypatch, connection)
+    with pytest.raises(RuntimeError, match="create failed"):
+        mysql_provider().create_table()
+    assert connection.rolled_back is True
+
+
+def test_mysql_provider_table_exists_handles_missing_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    missing_table_error = Exception(1146, "table does not exist")
+    cursor = FakeCursor(execute_error=missing_table_error)
+    connection = FakeConnection(cursor)
+    install_fake_pymysql(monkeypatch, connection)
+
+    assert mysql_provider().table_exists() is False
+    assert connection.closed is True
+
+
+def test_mysql_provider_table_exists_reraises_unexpected_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = FakeCursor(execute_error=RuntimeError("network down"))
+    connection = FakeConnection(cursor)
+    install_fake_pymysql(monkeypatch, connection)
+
+    with pytest.raises(RuntimeError, match="network down"):
+        mysql_provider().table_exists()
+
+
+def test_mysql_provider_table_exists_returns_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+    install_fake_pymysql(monkeypatch, connection)
+
+    assert mysql_provider().table_exists() is True
+
+
+def test_mysql_connect_kwargs_rejects_non_mysql_scheme() -> None:
+    with pytest.raises(ProviderError, match="mysql://"):
+        mysql_connect_kwargs("postgresql://user:pass@example.com/sftp")
+
+
+@pytest.mark.parametrize(
+    "method_name", ["read", "write", "upsert_user", "remove_user", "table_exists", "create_table"]
+)
+def test_mysql_provider_reports_missing_optional_dependency(
+    monkeypatch: pytest.MonkeyPatch, method_name: str
+) -> None:
+    monkeypatch.setitem(sys.modules, "pymysql", None)
+    provider = mysql_provider()
+    args = {
+        "read": (),
+        "write": (ProviderUsers(users=[sample_user()]),),
+        "upsert_user": (sample_user(),),
+        "remove_user": ("alice",),
+        "table_exists": (),
+        "create_table": (),
+    }[method_name]
+
+    with pytest.raises(ProviderError, match="mysql optional dependency"):
+        getattr(provider, method_name)(*args)
+
+
+@pytest.mark.parametrize(
+    "method_name", ["write", "upsert_user", "remove_user", "table_exists", "create_table"]
+)
+def test_mysql_provider_mutations_require_dsn(method_name: str) -> None:
+    provider = MySQLProvider(
+        config=ProviderConfig.model_construct(type=ProviderType.MYSQL, dsn=None, table="sftp_users")
+    )
+    args = {
+        "write": (ProviderUsers(users=[sample_user()]),),
+        "upsert_user": (sample_user(),),
+        "remove_user": ("alice",),
+        "table_exists": (),
+        "create_table": (),
+    }[method_name]
+
+    with pytest.raises(ProviderError, match="requires dsn|mutations require dsn"):
+        getattr(provider, method_name)(*args)
+
+
+def test_postgres_provider_reads_users_with_default_query(monkeypatch: pytest.MonkeyPatch) -> None:
+    cursor = FakeCursor(rows=[sample_row()])
+    connection = FakeConnection(cursor)
+    install_fake_psycopg(monkeypatch, connection)
+
+    users = postgres_provider().read()
+
+    assert users.users == [sample_user()]
+    assert cursor.executed[0][0].startswith("select username, public_keys")
+    assert connection.dsn == "postgresql://user:pass@db.example.com:5432/sftp"  # type: ignore[attr-defined]
+    assert "row_factory" in connection.kwargs  # type: ignore[attr-defined]
+
+
+def test_postgres_provider_validates_and_executes_custom_read_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = FakeCursor(rows=[sample_row()])
+    connection = FakeConnection(cursor)
+    install_fake_psycopg(monkeypatch, connection)
+
+    users = postgres_provider_with_query("select * from sftp_users").read()
+
+    assert users.users[0].username == "alice"
+    assert cursor.executed == [("select * from sftp_users", None)]
+
+
+def test_postgres_provider_mutates_users(monkeypatch: pytest.MonkeyPatch) -> None:
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+    install_fake_psycopg(monkeypatch, connection)
+    provider = postgres_provider()
+
+    provider.write(ProviderUsers(users=[sample_user()]))
+    provider.upsert_user(sample_user("bob"))
+    provider.remove_user("bob")
+    provider.create_table()
+
+    assert any("on conflict (username)" in statement for statement, _ in cursor.executed_many)
+    assert ("delete from sftp_users where username = %s", ["bob"]) in cursor.executed
+    assert any(statement.startswith("create table sftp_users") for statement, _ in cursor.executed)
+
+
+def test_postgres_provider_table_exists_handles_missing_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class MissingTableError(Exception):
+        sqlstate = "42P01"
+
+    cursor = FakeCursor(execute_error=MissingTableError())
+    connection = FakeConnection(cursor)
+    install_fake_psycopg(monkeypatch, connection)
+
+    assert postgres_provider().table_exists() is False
+
+
+def test_postgres_provider_table_exists_reraises_unexpected_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = FakeCursor(execute_error=RuntimeError("network down"))
+    connection = FakeConnection(cursor)
+    install_fake_psycopg(monkeypatch, connection)
+
+    with pytest.raises(RuntimeError, match="network down"):
+        postgres_provider().table_exists()
+
+
+def test_postgres_provider_table_exists_returns_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+    install_fake_psycopg(monkeypatch, connection)
+
+    assert postgres_provider().table_exists() is True
+
+
+@pytest.mark.parametrize(
+    "method_name", ["read", "write", "upsert_user", "remove_user", "table_exists", "create_table"]
+)
+def test_postgres_provider_reports_missing_optional_dependency(
+    monkeypatch: pytest.MonkeyPatch, method_name: str
+) -> None:
+    monkeypatch.setitem(sys.modules, "psycopg", None)
+    monkeypatch.setitem(sys.modules, "psycopg.rows", None)
+    provider = postgres_provider()
+    args = {
+        "read": (),
+        "write": (ProviderUsers(users=[sample_user()]),),
+        "upsert_user": (sample_user(),),
+        "remove_user": ("alice",),
+        "table_exists": (),
+        "create_table": (),
+    }[method_name]
+
+    with pytest.raises(ProviderError, match="postgres optional dependency"):
+        getattr(provider, method_name)(*args)
+
+
+@pytest.mark.parametrize(
+    "method_name", ["write", "upsert_user", "remove_user", "table_exists", "create_table"]
+)
+def test_postgres_provider_mutations_require_dsn(method_name: str) -> None:
+    provider = PostgreSQLProvider(
+        config=ProviderConfig.model_construct(
+            type=ProviderType.POSTGRESQL, dsn=None, table="sftp_users"
+        )
+    )
+    args = {
+        "write": (ProviderUsers(users=[sample_user()]),),
+        "upsert_user": (sample_user(),),
+        "remove_user": ("alice",),
+        "table_exists": (),
+        "create_table": (),
+    }[method_name]
+
+    with pytest.raises(ProviderError, match="requires dsn|mutations require dsn"):
+        getattr(provider, method_name)(*args)
+
+
+@pytest.mark.parametrize(
+    ("provider_cls", "provider_type", "message"),
+    [
+        (MySQLProvider, ProviderType.MYSQL, "MySQL provider requires dsn"),
+        (PostgreSQLProvider, ProviderType.POSTGRESQL, "PostgreSQL provider requires dsn"),
+    ],
+)
+def test_sql_providers_require_dsn(provider_cls, provider_type: ProviderType, message: str) -> None:
+    provider = provider_cls(config=ProviderConfig.model_construct(type=provider_type, dsn=None))
+
+    with pytest.raises(ProviderError, match=message):
+        provider.read()

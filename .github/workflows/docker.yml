@@ -3,9 +3,12 @@ name: Docker
 on:
   push:
     branches: [main]
-    tags: ["v*"]
-  pull_request:
-    branches: [main]
+    paths:
+      - "docker/**"
+      - "sftpwarden/**"
+      - "pyproject.toml"
+      - ".dockerignore"
+      - ".github/workflows/docker.yml"
 
 permissions:
   contents: read
@@ -17,7 +20,54 @@ env:
   WATCHER_IMAGE_NAME: ${{ github.repository }}-watcher
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.version.outputs.changed }}
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Check package version change
+        id: version
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+          def read_version(text: str) -> str:
+              return tomllib.loads(text)["project"]["version"]
+
+          current = read_version(Path("pyproject.toml").read_text(encoding="utf-8"))
+          previous = ""
+          before = os.environ.get("BEFORE_SHA", "")
+          if before and before != "0" * 40:
+              result = subprocess.run(
+                  ["git", "show", f"{before}:pyproject.toml"],
+                  capture_output=True,
+                  check=False,
+                  text=True,
+              )
+              if result.returncode == 0:
+                  previous = read_version(result.stdout)
+
+          changed = previous != current
+          print(f"version={current}")
+          print(f"previous_version={previous}")
+          print(f"changed={str(changed).lower()}")
+          PY
+
   build:
+    needs: version
+    if: needs.version.outputs.changed == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -28,7 +78,6 @@ jobs:
         uses: docker/setup-buildx-action@v4.1.0
 
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v4.2.0
         with:
           registry: ${{ env.REGISTRY }}
@@ -41,9 +90,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=tag
-            type=semver,pattern={{version}}
+            type=raw,value=${{ needs.version.outputs.version }}
+            type=raw,value=latest
 
       - name: Watcher metadata
         id: watcher-meta
@@ -51,9 +99,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.WATCHER_IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=tag
-            type=semver,pattern={{version}}
+            type=raw,value=${{ needs.version.outputs.version }}
+            type=raw,value=latest
 
       - name: Build runtime image
         uses: docker/build-push-action@v7.2.0
@@ -65,7 +112,7 @@ jobs:
 
       - name: Runtime smoke test
         run: |
-          docker run --rm --entrypoint sh sftpwarden:ci -c 'command -v sshd && command -v sftpwarden'
+          docker run --rm --entrypoint sh sftpwarden:ci -c 'command -v sshd && command -v sftpwarden && sftpwarden --version && grep -q "^Port 22$" /etc/ssh/sshd_config'
 
       - name: Build watcher image
         uses: docker/build-push-action@v7.2.0
@@ -77,10 +124,9 @@ jobs:
 
       - name: Watcher smoke test
         run: |
-          docker run --rm --entrypoint sh sftpwarden-watcher:ci -c 'command -v sftpwarden'
+          docker run --rm --entrypoint sh sftpwarden-watcher:ci -c 'command -v sftpwarden && sftpwarden --version && test ! -S /var/run/docker.sock'
 
       - name: Publish runtime image
-        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v7.2.0
         with:
           context: .
@@ -90,7 +136,6 @@ jobs:
           labels: ${{ steps.runtime-meta.outputs.labels }}
 
       - name: Publish watcher image
-        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v7.2.0
         with:
           context: .

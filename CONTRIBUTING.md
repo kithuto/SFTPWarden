@@ -19,14 +19,45 @@ Found a bug? Open an issue with:
 Have an idea? Open an issue describing the operational problem first. A short
 example of the workflow you want is more helpful than a large design document.
 
-Want to send code? Open a pull request. For larger changes, start with an issue so
-we can align on behavior before implementation.
+Want to send code? Open a pull request to `dev`. For larger changes, start with an
+issue so we can align on behavior before implementation.
+
+## Branch Workflow
+
+`dev` is the integration branch for contributions. `main` is protected and used
+for production and release promotion by the maintainer.
+
+Contributors should work like this:
+
+1. Fork the repository.
+2. Create your own branch from `dev`.
+3. Develop and validate your change in that branch.
+4. Open a Pull Request from your branch to `dev`.
+
+```bash
+git clone https://github.com/<your-user>/sftpwarden.git
+cd sftpwarden
+git remote add upstream https://github.com/kithuto/sftpwarden.git
+git fetch upstream
+git checkout -b dev upstream/dev
+git checkout -b fix/my-change
+```
+
+After developing and pushing your branch, open the PR as:
+
+```text
+fix/my-change -> dev
+```
+
+Normal contribution PRs should not target `main`. The maintainer promotes accepted
+changes from `dev` to `main` when preparing production or release updates.
 
 ## Development Setup
 
 ```bash
 git clone https://github.com/kithuto/sftpwarden.git
 cd sftpwarden
+git checkout dev
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
@@ -127,7 +158,10 @@ Use `docs/` for detail:
 
 Before opening a PR:
 
-- run `tox`;
+- target `dev`, not `main`;
+- for docs-only changes, run `tox -e docs`;
+- for code changes, run `tox`;
+- for Docker/runtime changes, build the affected Docker image locally;
 - update docs and examples when behavior changes;
 - add or update tests for code changes;
 - keep secrets out of logs, screenshots, and fixtures;

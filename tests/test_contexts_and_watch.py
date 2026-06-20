@@ -6,6 +6,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+import sftpwarden.refresh as refresh_module
+import sftpwarden.remote.deploy as deploy_module
+import sftpwarden.watcher as watcher_module
 from sftpwarden.cli import app
 from sftpwarden.config import (
     ProjectConfig,
@@ -30,7 +33,20 @@ from sftpwarden.refresh import refresh_context, resolve_refresh_targets
 from sftpwarden.remote.deploy import deploy_context
 from sftpwarden.utils.errors import ContextError
 from sftpwarden.utils.errors import RuntimeError as SFTPWardenRuntimeError
-from sftpwarden.watcher import derive_watch_targets, render_docker_watcher_compose, sync_target
+from sftpwarden.watcher import (
+    WatcherInstallMode,
+    default_watcher_mode,
+    derive_watch_targets,
+    ensure_watcher,
+    install_watcher,
+    poll_watch,
+    remote_root_path,
+    render_docker_watcher_compose,
+    run_watcher_commands,
+    sync_target,
+    uninstall_watcher,
+    watcher_install_plan,
+)
 
 
 def test_remote_only_context_has_empty_top_level_paths() -> None:
@@ -125,6 +141,30 @@ def test_watch_derives_only_user_provider_files(
     assert {target.remote_path for target in targets} == {"/opt/sftpwarden/users.yaml"}
 
 
+def test_remote_root_path_requires_remote_settings(tmp_path: Path) -> None:
+    entry = local_context("dev", tmp_path / "dev", ProviderType.YAML)
+
+    with pytest.raises(ContextError, match="missing remote settings"):
+        remote_root_path(entry, tmp_path / "dev" / "users.yaml")
+
+
+def test_remote_root_path_requires_local_root() -> None:
+    entry = remote_context(
+        name="archive",
+        provider=ProviderType.YAML,
+        remote_url="deploy@example.com:/opt/sftpwarden",
+        local_root=None,
+        remote_root="~/sftpwarden",
+        remote_only=True,
+        ssh_key=None,
+        critical=True,
+    )
+    entry.root = ""
+
+    with pytest.raises(ContextError, match="missing local root"):
+        remote_root_path(entry, Path("users.yaml"))
+
+
 def test_sync_json_lists_watch_targets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = tmp_path / "home"
     monkeypatch.setenv("SFTPWARDEN_HOME", str(home))
@@ -217,6 +257,51 @@ def test_watch_sql_provider_has_no_user_file_targets(
     targets = derive_watch_targets()
 
     assert targets == []
+
+
+def test_watch_derivation_skips_non_sync_or_incomplete_contexts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    project = tmp_path / "project"
+    project.mkdir()
+    config = default_project_config("prod")
+    write_config(project / "sftpwarden.yaml", config)
+    (project / "users.yaml").write_text(empty_provider_text(config.provider.type), encoding="utf-8")
+    local = local_context("local", project, ProviderType.YAML)
+    missing_root = remote_context(
+        name="missing-root",
+        provider=ProviderType.YAML,
+        remote_url="deploy@example.com:/opt/sftpwarden",
+        local_root=project,
+        remote_root="~/sftpwarden",
+        remote_only=False,
+        ssh_key=None,
+        critical=True,
+    )
+    missing_root.root = ""
+    missing_config = remote_context(
+        name="missing-config",
+        provider=ProviderType.YAML,
+        remote_url="deploy@example.com:/opt/sftpwarden",
+        local_root=tmp_path / "missing",
+        remote_root="~/sftpwarden",
+        remote_only=False,
+        ssh_key=None,
+        critical=True,
+    )
+    save_registry(
+        ContextRegistry(
+            default="local",
+            contexts={
+                "local": local,
+                "missing-root": missing_root,
+                "missing-config": missing_config,
+            },
+        )
+    )
+
+    assert derive_watch_targets() == []
 
 
 def test_refresh_all_resolves_registered_contexts(
@@ -416,6 +501,121 @@ def test_watcher_install_is_idempotent_and_can_replace(
     assert "/var/run/docker.sock" not in watcher_path.read_text(encoding="utf-8")
 
 
+def test_default_and_existing_watcher_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+
+    assert default_watcher_mode() == WatcherInstallMode.SYSTEMD
+    installed = ensure_watcher()
+
+    assert installed.startswith("Installed systemd watcher")
+    assert ensure_watcher() == "Using existing systemd watcher."
+
+
+def test_install_watcher_can_activate_plan_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    calls: list[list[str]] = []
+    monkeypatch.setattr(watcher_module, "run_watcher_commands", calls.extend)
+
+    message = install_watcher(mode="systemd", yes=True, activate=True)
+
+    assert message.startswith("Installed systemd watcher")
+    assert calls == watcher_install_plan(WatcherInstallMode.SYSTEMD).commands
+
+
+def test_install_watcher_rejects_replacement_without_confirmation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    install_watcher(mode="systemd", yes=True, activate=False)
+
+    with pytest.raises(ContextError, match="already installed in systemd mode"):
+        install_watcher(mode="docker", yes=False, activate=False)
+
+
+def test_uninstall_watcher_reports_when_not_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+
+    assert uninstall_watcher() == "Watcher is not installed."
+
+
+def test_uninstall_watcher_dry_run_keeps_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    install_watcher(mode="systemd", yes=True, activate=False)
+
+    message = uninstall_watcher(dry_run=True)
+
+    assert message.startswith("Would uninstall systemd watcher")
+    assert load_global_config().watcher.installed is True
+
+
+def test_run_watcher_commands_runs_each_command(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        watcher_module, "run_checked", lambda command, **_kwargs: calls.append(command)
+    )
+
+    run_watcher_commands([["sudo", "systemctl", "daemon-reload"], ["sudo", "systemctl", "restart"]])
+
+    assert calls == [["sudo", "systemctl", "daemon-reload"], ["sudo", "systemctl", "restart"]]
+
+
+def test_docker_watcher_plan_uses_custom_image() -> None:
+    plan = watcher_install_plan(WatcherInstallMode.DOCKER, image="example/watcher:test")
+    text = render_docker_watcher_compose(image="example/watcher:test")
+
+    assert "example/watcher:test" in text
+    assert "docker compose" in plan.text()
+
+
+def test_poll_watch_syncs_changed_targets_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    project = tmp_path / "project"
+    project.mkdir()
+    config = default_project_config("prod")
+    write_config(project / "sftpwarden.yaml", config)
+    users_file = project / "users.yaml"
+    users_file.write_text(empty_provider_text(config.provider.type), encoding="utf-8")
+    entry = remote_context(
+        name="prod",
+        provider=config.provider.type,
+        remote_url="deploy@example.com:/opt/sftpwarden",
+        local_root=project,
+        remote_root="~/sftpwarden",
+        remote_only=False,
+        ssh_key=None,
+        critical=True,
+    )
+    save_registry(ContextRegistry(default="prod", contexts={"prod": entry}))
+    calls: list[tuple[str, Path, str, bool]] = []
+
+    def stop_after_first_sleep(_interval: int) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        watcher_module,
+        "sync_target",
+        lambda context, local_path, remote_path, *, dry_run=False: calls.append(
+            (context.name, local_path, remote_path, dry_run)
+        ),
+    )
+    monkeypatch.setattr(watcher_module.time, "sleep", stop_after_first_sleep)
+
+    with pytest.raises(KeyboardInterrupt):
+        poll_watch(interval_seconds=1, dry_run=True)
+
+    assert calls == [("prod", users_file, "/opt/sftpwarden/users.yaml", True)]
+
+
 def test_docker_watcher_mounts_only_explicit_ssh_key(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -474,6 +674,31 @@ def test_docker_watcher_rejects_default_ssh_identity(
     save_registry(ContextRegistry(default="prod", contexts={"prod": entry}))
 
     with pytest.raises(ContextError, match="Docker watcher cannot use the host default SSH"):
+        render_docker_watcher_compose()
+
+
+def test_docker_watcher_rejects_missing_explicit_ssh_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    project = tmp_path / "prod-project"
+    project.mkdir()
+    config = default_project_config("prod")
+    write_config(project / "sftpwarden.yaml", config)
+    (project / "users.yaml").write_text(empty_provider_text(config.provider.type), encoding="utf-8")
+    entry = remote_context(
+        name="prod",
+        provider=config.provider.type,
+        remote_url="deploy@example.com:/opt/sftpwarden",
+        local_root=project,
+        remote_root="~/sftpwarden",
+        remote_only=False,
+        ssh_key=str(tmp_path / "missing-key"),
+        critical=True,
+    )
+    save_registry(ContextRegistry(default="prod", contexts={"prod": entry}))
+
+    with pytest.raises(ContextError, match="Docker watcher SSH key not found"):
         render_docker_watcher_compose()
 
 
@@ -659,6 +884,166 @@ def test_deploy_context_reports_missing_local_docker_compose(tmp_path: Path) -> 
         deploy_context(entry, runner=fake_runner)
 
 
+def test_deploy_plan_and_required_files_error_edges(tmp_path: Path) -> None:
+    malformed_remote = local_context("broken", tmp_path / "broken", ProviderType.YAML)
+    malformed_remote.type = ContextType.REMOTE
+    malformed_remote.remote = None
+
+    with pytest.raises(ContextError, match="missing remote settings"):
+        deploy_module.deploy_plan(malformed_remote)
+    with pytest.raises(ContextError, match="missing local settings"):
+        deploy_module._local_deploy_plan(
+            local_context("local", tmp_path / "missing", ProviderType.YAML).model_copy(
+                update={"root": "", "config": ""}
+            )
+        )
+    with pytest.raises(ContextError, match="missing remote settings"):
+        deploy_module._remote_local_sync_deploy_plan(malformed_remote)
+    with pytest.raises(ContextError, match="missing remote settings"):
+        deploy_module._remote_only_deploy_plan(malformed_remote)
+    remote_missing_local = remote_context(
+        name="prod",
+        provider=ProviderType.YAML,
+        remote_url="deploy@example.com:/opt/sftpwarden",
+        local_root=tmp_path,
+        remote_root="~/sftpwarden",
+        remote_only=False,
+        ssh_key=None,
+        critical=True,
+    )
+    remote_missing_local.root = ""
+    remote_missing_local.config = ""
+    with pytest.raises(ContextError, match="missing local settings"):
+        deploy_module._remote_local_sync_deploy_plan(remote_missing_local)
+
+    root = tmp_path / "project"
+    root.mkdir()
+    config = default_project_config("dev")
+    config_path = root / "sftpwarden.yaml"
+    compose_path = root / "docker-compose.yml"
+    write_config(config_path, config)
+    compose_path.write_text("services: {}\n", encoding="utf-8")
+
+    with pytest.raises(SFTPWardenRuntimeError, match="Required deploy file"):
+        deploy_module.required_sync_files(root, config_path=config_path, compose_path=compose_path)
+
+    users_path = root / "users.yaml"
+    users_path.write_text(empty_provider_text(ProviderType.YAML), encoding="utf-8")
+    excluded = root / ".env"
+    excluded.write_text("SECRET=1\n", encoding="utf-8")
+    with pytest.raises(SFTPWardenRuntimeError, match="Refusing to sync"):
+        deploy_module.required_sync_files(root, config_path=config_path, compose_path=excluded)
+
+
+def test_deploy_remote_runs_verification_and_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    config = default_project_config("prod")
+    write_config(root / "sftpwarden.yaml", config)
+    (root / "users.yaml").write_text(empty_provider_text(config.provider.type), encoding="utf-8")
+    entry = remote_context(
+        name="prod",
+        provider=config.provider.type,
+        remote_url="deploy@example.com:/opt/sftpwarden",
+        local_root=root,
+        remote_root="~/sftpwarden",
+        remote_only=False,
+        ssh_key=None,
+        critical=True,
+    )
+    verified: list[str] = []
+    commands: list[tuple[list[str], str | None]] = []
+    monkeypatch.setattr(
+        deploy_module,
+        "verify_remote_runtime_requirements",
+        lambda remote: verified.append(remote.host),
+    )
+
+    message = deploy_context(
+        entry,
+        runner=lambda command, *, cwd=None: commands.append((command, cwd)),
+    )
+
+    assert message == "Deployed prod."
+    assert verified == ["example.com"]
+    assert commands
+    assert {cwd for _command, cwd in commands} == {None}
+
+
+def test_deploy_context_rechecks_remote_settings_after_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    malformed_remote = local_context("broken", tmp_path / "broken", ProviderType.YAML)
+    malformed_remote.type = ContextType.REMOTE
+    malformed_remote.remote = None
+    monkeypatch.setattr(
+        deploy_module,
+        "deploy_plan",
+        lambda _context: deploy_module.DeployPlan(commands=[]),
+    )
+
+    with pytest.raises(ContextError, match="missing remote settings"):
+        deploy_context(malformed_remote)
+
+
+def test_run_command_delegates_to_checked_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[list[str], str | None]] = []
+    monkeypatch.setattr(
+        deploy_module,
+        "run_checked",
+        lambda command, **kwargs: calls.append((command, kwargs.get("cwd"))),
+    )
+
+    cwd = str(tmp_path / "project")
+    deploy_module.run_command(["docker", "compose", "ps"], cwd=cwd)
+
+    assert calls == [(["docker", "compose", "ps"], cwd)]
+
+
+def test_refresh_context_executes_local_and_remote_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local = local_context("dev", tmp_path / "dev", ProviderType.YAML)
+    remote = remote_context(
+        name="prod",
+        provider=ProviderType.YAML,
+        remote_url="deploy@example.com:/opt/sftpwarden",
+        local_root=tmp_path,
+        remote_root="~/sftpwarden",
+        remote_only=False,
+        ssh_key=None,
+        critical=True,
+    )
+    calls: list[tuple[list[str], str | None]] = []
+
+    class Result:
+        stdout = ""
+
+    def fake_run_checked(command: list[str], **kwargs: object) -> Result:
+        calls.append((command, kwargs.get("cwd")))  # type: ignore[arg-type]
+        return Result()
+
+    monkeypatch.setattr(refresh_module, "run_checked", fake_run_checked)
+
+    assert refresh_context(local) == "Refreshed dev."
+    assert refresh_context(remote) == "Refreshed prod."
+    assert calls[0][1] == str(tmp_path / "dev")
+    assert calls[1][0][0] == "ssh"
+
+
+def test_refresh_context_rejects_remote_without_settings(tmp_path: Path) -> None:
+    malformed_remote = local_context("broken", tmp_path / "broken", ProviderType.YAML)
+    malformed_remote.type = ContextType.REMOTE
+    malformed_remote.remote = None
+
+    with pytest.raises(ContextError, match="missing remote settings"):
+        refresh_context(malformed_remote)
+
+
 def test_sync_target_escapes_ssh_key_transport(tmp_path: Path) -> None:
     import shlex
 
@@ -684,3 +1069,64 @@ def test_sync_target_escapes_ssh_key_transport(tmp_path: Path) -> None:
     assert args[:4] == ["rsync", "-az", "--protect-args", "-e"]
     assert transport[0] == "ssh"
     assert transport[transport.index("-i") + 1] == str(key_path)
+
+
+def test_sync_target_requires_remote_settings(tmp_path: Path) -> None:
+    entry = local_context("dev", tmp_path / "dev-project", ProviderType.YAML)
+
+    with pytest.raises(ContextError, match="missing remote settings"):
+        sync_target(entry, tmp_path / "users.yaml", "/opt/sftpwarden/users.yaml")
+
+
+def test_sync_target_runs_rsync_and_returns_stdout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    local_file = tmp_path / "users.yaml"
+    local_file.write_text("users: []\n", encoding="utf-8")
+    entry = remote_context(
+        name="prod",
+        provider=ProviderType.YAML,
+        remote_url="deploy@example.com:/opt/sftpwarden",
+        local_root=tmp_path,
+        remote_root="~/sftpwarden",
+        remote_only=False,
+        ssh_key=None,
+        critical=True,
+    )
+    calls: list[list[str]] = []
+
+    class Result:
+        stdout = "sent users\n"
+
+    def fake_run_checked(command: list[str], **_kwargs: object) -> Result:
+        calls.append(command)
+        return Result()
+
+    monkeypatch.setattr(watcher_module, "run_checked", fake_run_checked)
+
+    output = sync_target(entry, local_file, "/opt/sftpwarden/users.yaml")
+
+    assert output == "sent users"
+    assert calls == [
+        [
+            "rsync",
+            "-az",
+            "--protect-args",
+            "-e",
+            "ssh -p 22 -o BatchMode=yes -o ConnectTimeout=10",
+            str(local_file),
+            "deploy@example.com:/opt/sftpwarden/users.yaml",
+        ]
+    ]
+
+
+def test_docker_watcher_ignores_context_without_remote(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = local_context("dev", tmp_path / "dev", ProviderType.YAML)
+    entry.type = ContextType.REMOTE
+    entry.storage = "local-sync"
+    entry.remote = None
+    monkeypatch.setattr(watcher_module, "docker_watcher_remote_contexts", lambda: [entry])
+
+    assert watcher_module.docker_watcher_ssh_volumes() == []

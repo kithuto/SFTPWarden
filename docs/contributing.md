@@ -4,13 +4,45 @@ This guide is for people who want to run SFTPWarden from source, contribute a
 change, build documentation, or validate the project before publishing a release.
 
 For the shorter GitHub contribution guide, see
-[CONTRIBUTING.md](https://github.com/kithuto/sftpwarden/blob/main/CONTRIBUTING.md).
+[CONTRIBUTING.md](https://github.com/kithuto/sftpwarden/blob/dev/CONTRIBUTING.md).
+
+## Branch Model
+
+SFTPWarden uses `dev` as the integration branch and `main` as the protected
+production/release branch.
+
+Contributors should not work directly on `dev` or open normal pull requests to
+`main`. Instead:
+
+1. Fork the repository.
+2. Create your own branch from `dev`.
+3. Develop and validate your change in that branch.
+4. Open a Pull Request from your branch to `dev`.
+
+```bash
+git clone https://github.com/<your-user>/sftpwarden.git
+cd sftpwarden
+git remote add upstream https://github.com/kithuto/sftpwarden.git
+git fetch upstream
+git checkout -b dev upstream/dev
+git checkout -b fix/my-change
+```
+
+After development, push your branch and open:
+
+```text
+fix/my-change -> dev
+```
+
+The maintainer promotes accepted changes from `dev` to `main` when preparing
+production updates or public releases.
 
 ## Install from Source
 
 ```bash
 git clone https://github.com/kithuto/sftpwarden.git
 cd sftpwarden
+git checkout dev
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
@@ -23,9 +55,11 @@ the full `tox` matrix.
 
 ## Development Workflow
 
-Create a branch:
+Create a branch from `dev` before changing files:
 
 ```bash
+git checkout dev
+git pull origin dev
 git checkout -b fix/my-change
 ```
 
@@ -119,7 +153,10 @@ rsync, Docker, or systemd commands stay reviewable.
 
 Before opening a PR:
 
-- run `tox`;
+- target `dev`, not `main`;
+- for docs-only changes, run `tox -e docs`;
+- for code changes, run `tox`;
+- for Docker/runtime changes, build the affected Docker image locally;
 - update README/docs when adoption or operations behavior changes;
 - update examples when configuration changes;
 - redact secrets from logs and screenshots;
