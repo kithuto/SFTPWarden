@@ -11,9 +11,6 @@ on:
 
 permissions:
   contents: read
-  security-events: write
-  actions: read
-  id-token: write
 
 jobs:
   python-scan:
@@ -26,7 +23,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6.2.0
         with:
-          python-version: "3.13"
+          python-version: "3.14"
           cache: pip
 
       - name: Install scan tools
@@ -40,6 +37,9 @@ jobs:
   container-scan:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      security-events: write
 
     steps:
       - name: Check out repository
@@ -52,14 +52,14 @@ jobs:
         run: docker build -t sftpwarden-watcher:security -f docker/watcher/Dockerfile .
 
       - name: Scan runtime image
-        uses: aquasecurity/trivy-action@v0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: sftpwarden:security
           format: sarif
           output: trivy-runtime.sarif
 
       - name: Scan watcher image
-        uses: aquasecurity/trivy-action@v0.35.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: sftpwarden-watcher:security
           format: sarif
@@ -69,11 +69,13 @@ jobs:
         uses: github/codeql-action/upload-sarif@v4.36.2
         with:
           sarif_file: trivy-runtime.sarif
+          category: trivy-runtime
 
       - name: Upload watcher scan
         uses: github/codeql-action/upload-sarif@v4.36.2
         with:
           sarif_file: trivy-watcher.sarif
+          category: trivy-watcher
 
       - name: Generate runtime SBOM
         uses: anchore/sbom-action@v0.24.0
@@ -98,6 +100,11 @@ jobs:
   scorecard:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+      id-token: write
 
     steps:
       - name: Check out repository

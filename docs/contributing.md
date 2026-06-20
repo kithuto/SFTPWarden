@@ -50,8 +50,8 @@ python -m pip install -e ".[dev,docs,watch,mysql,postgres]"
 sftpwarden --version
 ```
 
-Use Python 3.11, 3.12, or 3.13. Install the Python versions locally before running
-the full `tox` matrix.
+Use Python 3.11, 3.12, 3.13, or 3.14. Install the Python versions locally before
+running the full `tox` matrix.
 
 ## Development Workflow
 
@@ -95,7 +95,8 @@ tox
 The default `tox` run covers:
 
 - lint and formatting;
-- tests on Python 3.11, 3.12, and 3.13;
+- tests on Python 3.11, 3.12, 3.13, and 3.14;
+- coverage once, instead of repeating it for every Python version;
 - Sphinx documentation build;
 - package build and wheel content check.
 
@@ -106,6 +107,8 @@ tox -e lint
 tox -e py311
 tox -e py312
 tox -e py313
+tox -e py314
+tox -e coverage
 tox -e docs
 tox -e package
 ```
