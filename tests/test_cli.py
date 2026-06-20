@@ -23,6 +23,8 @@ def test_init_named_context_creates_project_name(tmp_path: Path, monkeypatch) ->
     assert config.project.name == "dev"
     assert (root / "users.yaml").exists()
     assert (root / "docker-compose.yml").exists()
+    assert ((root / "sftpwarden.yaml").stat().st_mode & 0o777) == 0o600
+    assert ((root / "users.yaml").stat().st_mode & 0o777) == 0o600
 
 
 def test_validate_json_reports_config_and_provider(tmp_path: Path, monkeypatch) -> None:

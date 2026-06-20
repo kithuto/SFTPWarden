@@ -310,7 +310,10 @@ SFTPWarden follows conservative defaults:
 - User data is not deleted automatically.
 - `.env`, `data/`, `state/`, `host_keys/`, Git metadata, and Python caches are
   not watched or synced by the watcher.
-- Docker watcher mode does not require Docker socket access.
+- Systemd watcher mode is recommended for production because it uses the host's
+  normal SSH defaults, agent, SSH config, and bastion settings.
+- Docker watcher mode does not require Docker socket access and only mounts
+  explicit dedicated SSH keys, never the whole `~/.ssh` directory.
 
 For key-only deployments, add public keys to every active user and set:
 

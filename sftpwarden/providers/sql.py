@@ -8,6 +8,10 @@ from sftpwarden.utils.errors import ProviderError
 
 DEFAULT_SQL_USERS_TABLE = "sftp_users"
 SQL_TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
+SQL_MUTATION_RE = re.compile(
+    r"\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|merge|replace)\b",
+    re.IGNORECASE,
+)
 SQL_USER_COLUMNS = (
     "username",
     "public_keys",
@@ -23,6 +27,19 @@ SQL_USER_COLUMNS = (
 def validate_sql_table(table: str) -> None:
     if not SQL_TABLE_RE.fullmatch(table):
         raise ProviderError("SQL provider table name is invalid.")
+
+
+def validate_sql_read_query(query: str) -> None:
+    normalized = query.strip()
+    if not normalized:
+        raise ProviderError("SQL provider query cannot be empty.")
+    if ";" in normalized:
+        raise ProviderError("SQL provider query must contain a single read-only statement.")
+    first_word = normalized.split(None, 1)[0].lower()
+    if first_word not in {"select", "with"}:
+        raise ProviderError("SQL provider query must start with SELECT or WITH.")
+    if SQL_MUTATION_RE.search(normalized):
+        raise ProviderError("SQL provider query must be read-only.")
 
 
 def sql_select_users_query(table: str = DEFAULT_SQL_USERS_TABLE) -> str:

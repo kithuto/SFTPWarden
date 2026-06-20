@@ -9,6 +9,7 @@ from sftpwarden.providers.base import FileProvider
 from sftpwarden.providers.registry import register_provider
 from sftpwarden.users.models import ProviderUsers, SFTPUser
 from sftpwarden.utils.errors import ProviderError
+from sftpwarden.utils.files import chmod_private
 
 CSV_FIELDNAMES = [
     "username",
@@ -66,3 +67,4 @@ class CSVProvider(FileProvider):
                 row = user.model_dump(mode="json", exclude_none=True)
                 row["public_keys"] = "\n".join(user.public_keys)
                 writer.writerow(row)
+        chmod_private(path)

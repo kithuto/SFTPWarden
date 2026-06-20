@@ -17,6 +17,7 @@ from sftpwarden.providers.sql import (
     delete_missing_sql_users,
     sql_select_users_query,
     upsert_sql_users,
+    validate_sql_read_query,
 )
 from sftpwarden.users import SFTPUser
 from sftpwarden.utils.errors import ProviderError
@@ -84,6 +85,7 @@ def test_csv_provider_round_trip(tmp_path) -> None:
     assert loaded.users[0].gid == 10002
     assert loaded.users[0].upload_dir == "dropbox"
     assert loaded.users[0].comment == "Finance dropbox"
+    assert (path.stat().st_mode & 0o777) == 0o600
 
 
 def test_file_provider_reports_missing_file(tmp_path) -> None:
@@ -139,3 +141,22 @@ def test_sql_mutation_rejects_bad_table_name() -> None:
     users = ProviderUsers(users=[])
     with pytest.raises(ProviderError, match="table name is invalid"):
         delete_missing_sql_users(cursor, "sftp_users; drop table sftp_users", users)
+
+
+def test_sql_read_query_allows_select_and_with() -> None:
+    validate_sql_read_query("select * from sftp_users")
+    validate_sql_read_query("with active as (select * from sftp_users) select * from active")
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "",
+        "select * from sftp_users; drop table sftp_users",
+        "delete from sftp_users",
+        "with removed as (delete from sftp_users returning *) select * from removed",
+    ],
+)
+def test_sql_read_query_rejects_mutations(query: str) -> None:
+    with pytest.raises(ProviderError):
+        validate_sql_read_query(query)

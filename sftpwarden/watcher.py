@@ -11,8 +11,12 @@ import yaml
 from sftpwarden.config import ProviderType, SFTPWardenConfig, load_config, provider_local_path
 from sftpwarden.config.global_config import load_global_config, save_global_config
 from sftpwarden.contexts import ContextEntry, ContextType, load_registry
-from sftpwarden.remote.ssh import uses_default_ssh_identity
-from sftpwarden.system.commands import run_checked
+from sftpwarden.remote.ssh import (
+    explicit_ssh_key_path,
+    rsync_ssh_transport,
+    uses_default_ssh_identity,
+)
+from sftpwarden.system.commands import command_text, run_checked
 from sftpwarden.utils.errors import ContextError
 from sftpwarden.utils.paths import app_home, contexts_path
 
@@ -276,16 +280,17 @@ WantedBy=default.target
 
 
 def render_docker_watcher_compose(*, image: str | None = None) -> str:
+    volumes = [
+        f"{app_home()}:{app_home()}:ro",
+        f"{contexts_path()}:{contexts_path()}:ro",
+        *docker_watcher_ssh_volumes(),
+    ]
     model = {
         "services": {
             "sftpwarden-watcher": {
                 "image": image or "sftpwarden-watcher:local",
                 "command": ["sftpwarden", "watch"],
-                "volumes": [
-                    f"{app_home()}:{app_home()}:ro",
-                    f"{contexts_path()}:{contexts_path()}:ro",
-                    f"{Path.home() / '.ssh'}:/home/sftpwarden/.ssh:ro",
-                ],
+                "volumes": unique_items(volumes),
                 "restart": "unless-stopped",
                 "read_only": True,
                 "security_opt": ["no-new-privileges:true"],
@@ -295,18 +300,56 @@ def render_docker_watcher_compose(*, image: str | None = None) -> str:
     return yaml.safe_dump(model, sort_keys=False)
 
 
+def unique_items(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(values))
+
+
+def docker_watcher_ssh_volumes() -> list[str]:
+    volumes: list[str] = []
+    for context in docker_watcher_remote_contexts():
+        remote = context.remote
+        if remote is None:
+            continue
+        if uses_default_ssh_identity(remote.ssh_key):
+            raise ContextError(
+                f"Docker watcher cannot use the host default SSH identity for {context.name}.",
+                suggestion=(
+                    "Use the systemd watcher for host SSH config/agent support, or register "
+                    "the context with --ssh-key /path/to/a/dedicated/key."
+                ),
+            )
+        key_path = explicit_ssh_key_path(remote.ssh_key)
+        if key_path is None or not key_path.exists():
+            raise ContextError(
+                f"Docker watcher SSH key not found for {context.name}: {key_path}",
+                suggestion="Use an existing dedicated deployment key with --ssh-key.",
+            )
+        volumes.append(f"{key_path}:{key_path}:ro")
+    known_hosts = Path.home() / ".ssh" / "known_hosts"
+    if volumes and known_hosts.exists():
+        volumes.append(f"{known_hosts}:/root/.ssh/known_hosts:ro")
+    return volumes
+
+
+def docker_watcher_remote_contexts() -> list[ContextEntry]:
+    registry = load_registry()
+    return [
+        context
+        for context in registry.contexts.values()
+        if context.type == ContextType.REMOTE and context.storage == "local-sync" and context.remote
+    ]
+
+
 def sync_target(
     context: ContextEntry, local_path: Path, remote_path: str, *, dry_run: bool = False
 ) -> str:
     if not context.remote:
         raise ContextError(f"Context {context.name} is missing remote settings.")
     destination = f"{context.remote.user}@{context.remote.host}:{remote_path}"
-    command = ["rsync", "-az", "--protect-args", "-e", f"ssh -p {context.remote.port}"]
-    if not uses_default_ssh_identity(context.remote.ssh_key):
-        command[-1] = f"{command[-1]} -i {context.remote.ssh_key}"
+    command = ["rsync", "-az", "--protect-args", "-e", rsync_ssh_transport(context.remote)]
     command.extend([str(local_path), destination])
     if dry_run:
-        return " ".join(command)
+        return command_text(command)
     result = run_checked(
         command,
         error_type=ContextError,

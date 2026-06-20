@@ -7,8 +7,8 @@ from typing import Protocol
 
 from sftpwarden.config import RemoteStorage, load_config, provider_local_path
 from sftpwarden.contexts import ContextEntry, ContextType, RemoteEndpoint
-from sftpwarden.remote.checks import ssh_base_command, verify_remote_runtime_requirements
-from sftpwarden.remote.ssh import uses_default_ssh_identity
+from sftpwarden.remote.checks import verify_remote_runtime_requirements
+from sftpwarden.remote.ssh import rsync_ssh_transport, ssh_base_command
 from sftpwarden.render.compose import write_compose
 from sftpwarden.system.commands import command_text, run_checked
 from sftpwarden.utils.errors import ContextError, RuntimeError
@@ -40,15 +40,12 @@ def remote_compose_command(remote: RemoteEndpoint, command: str) -> str:
 
 
 def remote_rsync_command(files: list[Path], remote: RemoteEndpoint) -> list[str]:
-    transport = ["ssh", "-p", str(remote.port)]
-    if not uses_default_ssh_identity(remote.ssh_key):
-        transport.extend(["-i", remote.ssh_key or ""])
     return [
         "rsync",
         "-az",
         "--protect-args",
         "-e",
-        shlex.join(transport),
+        rsync_ssh_transport(remote),
         *[str(path) for path in files],
         f"{remote.user}@{remote.host}:{remote.remote_root.rstrip('/')}/",
     ]

@@ -36,6 +36,7 @@ from sftpwarden.render.compose import write_compose
 from sftpwarden.services.cli_workflows import install_context_watcher, remote_url_from_parts
 from sftpwarden.utils.console import console
 from sftpwarden.utils.errors import SFTPWardenError
+from sftpwarden.utils.files import write_private_text
 from sftpwarden.utils.paths import expand_path
 
 
@@ -118,7 +119,7 @@ def init(
             raise typer.Exit(1)
         write_config(config_path, config)
         if not provider_path.exists():
-            provider_path.write_text(empty_provider_text(selected_provider), encoding="utf-8")
+            write_private_text(provider_path, empty_provider_text(selected_provider))
         write_compose(config, selected_root)
         entry = local_context(name, selected_root, selected_provider, critical)
         register_context(entry)
@@ -186,7 +187,7 @@ def init_remote_context(
         write_config(selected_root / "sftpwarden.yaml", config)
         provider_path = provider_local_path(selected_root, config)
         if not provider_path.exists():
-            provider_path.write_text(empty_provider_text(selected_provider), encoding="utf-8")
+            write_private_text(provider_path, empty_provider_text(selected_provider))
         write_compose(config, selected_root)
     entry = remote_context(
         name=context_name,

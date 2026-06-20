@@ -14,6 +14,7 @@ from sftpwarden.providers.sql import (
     upsert_sql_user,
     upsert_sql_users,
     users_from_sql_rows,
+    validate_sql_read_query,
     validate_sql_table,
 )
 from sftpwarden.users.models import ProviderUsers, SFTPUser
@@ -44,7 +45,10 @@ class MySQLProvider(BaseProvider):
         )
         try:
             with connection.cursor() as cursor:
-                cursor.execute(self.config.query or sql_select_users_query(self.config.table))
+                query = self.config.query or sql_select_users_query(self.config.table)
+                if self.config.query:
+                    validate_sql_read_query(query)
+                cursor.execute(query)
                 return users_from_sql_rows(list(cursor.fetchall()))
         finally:
             connection.close()

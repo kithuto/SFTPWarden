@@ -125,6 +125,45 @@ def test_upload_dir_rejects_traversal() -> None:
         )
 
 
+def test_rejects_unsafe_chroot_root_permissions() -> None:
+    with pytest.raises(ValidationError, match="root_permissions"):
+        SFTPWardenConfig.model_validate(
+            {
+                "version": 1,
+                "project": {"name": "dev"},
+                "isolation": {"root_permissions": "777"},
+                "provider": {"type": "yaml", "path": "/etc/sftpwarden/users.yaml"},
+            }
+        )
+
+
+def test_rejects_world_writable_upload_permissions() -> None:
+    with pytest.raises(ValidationError, match="upload_permissions"):
+        SFTPWardenConfig.model_validate(
+            {
+                "version": 1,
+                "project": {"name": "dev"},
+                "isolation": {"upload_permissions": "777"},
+                "provider": {"type": "yaml", "path": "/etc/sftpwarden/users.yaml"},
+            }
+        )
+
+
+def test_rejects_mutating_sql_provider_query() -> None:
+    with pytest.raises(ValidationError, match="read-only|SELECT"):
+        SFTPWardenConfig.model_validate(
+            {
+                "version": 1,
+                "project": {"name": "dev"},
+                "provider": {
+                    "type": "mysql",
+                    "dsn": "mysql://user:pass@localhost/sftp",
+                    "query": "delete from sftp_users",
+                },
+            }
+        )
+
+
 @pytest.mark.parametrize(
     "path",
     [

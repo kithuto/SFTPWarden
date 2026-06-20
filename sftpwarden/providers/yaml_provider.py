@@ -8,6 +8,7 @@ from sftpwarden.providers.base import FileProvider
 from sftpwarden.providers.registry import register_provider
 from sftpwarden.users.models import ProviderUsers
 from sftpwarden.utils.errors import ProviderError
+from sftpwarden.utils.files import write_private_text
 
 
 @register_provider
@@ -29,4 +30,4 @@ class YAMLProvider(FileProvider):
     def write(self, users: ProviderUsers) -> None:
         path = self.ensure_parent_dir()
         data = {"users": [user.model_dump(mode="json", exclude_none=True) for user in users.users]}
-        path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+        write_private_text(path, yaml.safe_dump(data, sort_keys=False))

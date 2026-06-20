@@ -15,7 +15,8 @@ from sftpwarden.utils.constants import (
     DEFAULT_GROUP,
     HOST_SSH_PORT,
 )
-from sftpwarden.utils.errors import ConfigError
+from sftpwarden.utils.errors import ConfigError, ProviderError
+from sftpwarden.utils.files import write_private_text
 from sftpwarden.utils.paths import expand_path
 
 SQL_TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
@@ -97,6 +98,22 @@ class IsolationConfig(BaseModel):
         validate_relative_safe_path(value, field_name="isolation.upload_dir")
         return value
 
+    @field_validator("root_permissions")
+    @classmethod
+    def validate_root_permissions(cls, value: str) -> str:
+        validate_octal_permissions(value, field_name="isolation.root_permissions")
+        if int(value, 8) & 0o022:
+            raise ValueError("isolation.root_permissions must not be writable by group or others.")
+        return value
+
+    @field_validator("upload_permissions")
+    @classmethod
+    def validate_upload_permissions(cls, value: str) -> str:
+        validate_octal_permissions(value, field_name="isolation.upload_permissions")
+        if int(value, 8) & 0o002:
+            raise ValueError("isolation.upload_permissions must not be world-writable.")
+        return value
+
 
 class UidGidConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -140,6 +157,13 @@ class ProviderConfig(BaseModel):
         if self.type in {ProviderType.MYSQL, ProviderType.POSTGRESQL}:
             if not self.dsn:
                 raise ValueError(f"{self.type.value} provider requires dsn.")
+            if self.query:
+                from sftpwarden.providers.sql import validate_sql_read_query
+
+                try:
+                    validate_sql_read_query(self.query)
+                except ProviderError as exc:
+                    raise ValueError(str(exc)) from exc
         elif self.dsn or self.query or self.table != "sftp_users":
             raise ValueError("dsn/query/table are only supported for SQL providers.")
         return self
@@ -246,8 +270,7 @@ def dump_config(config: SFTPWardenConfig) -> str:
 
 def write_config(path: str | Path, config: SFTPWardenConfig) -> None:
     config_path = expand_path(path)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(dump_config(config), encoding="utf-8")
+    write_private_text(config_path, dump_config(config))
 
 
 def default_project_config(
@@ -296,3 +319,8 @@ def validate_provider_path(value: str | Path) -> None:
     path = Path(value)
     if any(part in {"", ".", ".."} for part in path.parts):
         raise ValueError("provider.path must not contain empty, current, or parent segments.")
+
+
+def validate_octal_permissions(value: str, *, field_name: str) -> None:
+    if not re.fullmatch(r"0?[0-7]{3}", value):
+        raise ValueError(f"{field_name} must be a three-digit octal permission string.")

@@ -12,7 +12,10 @@ your hosts and networks. Treat it as infrastructure.
 - Removed users are disabled; their data is not deleted.
 - `.env`, `data/`, `state/`, `host_keys/`, Git metadata, and Python caches are not
   watched or synced by the watcher.
-- SSH private keys for watcher containers should be mounted read-only.
+- Production watcher installs should prefer systemd so SSH uses the host's
+  normal `ssh-agent`, `~/.ssh/config`, known hosts, and default identity.
+- Docker watcher mode requires an explicit dedicated SSH key; it never mounts
+  the whole `~/.ssh` directory.
 
 ## SSH Restrictions
 
@@ -57,6 +60,13 @@ auth:
   allow_password: false
   recommended: public_key
 ```
+
+## Remote Watcher SSH
+
+Use systemd watcher mode for production when the host's SSH configuration,
+default identity, agent, `ProxyJump`, or bastion rules matter. Docker watcher mode
+is intentionally stricter: every watched remote context must define `--ssh-key`
+with an existing dedicated deployment key.
 
 ## Limitations
 

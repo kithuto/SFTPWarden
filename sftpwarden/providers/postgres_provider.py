@@ -12,6 +12,7 @@ from sftpwarden.providers.sql import (
     upsert_sql_user,
     upsert_sql_users,
     users_from_sql_rows,
+    validate_sql_read_query,
     validate_sql_table,
 )
 from sftpwarden.users.models import ProviderUsers, SFTPUser
@@ -46,6 +47,8 @@ class PostgreSQLProvider(BaseProvider):
             connection.cursor() as cursor,
         ):
             query = self.config.query or sql_select_users_query(self.config.table)
+            if self.config.query:
+                validate_sql_read_query(query)
             cursor.execute(query)  # type: ignore
             return users_from_sql_rows(cursor.fetchall())  # type: ignore
 

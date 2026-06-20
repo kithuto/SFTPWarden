@@ -60,10 +60,12 @@ Watched files are derived from the context registry and provider configuration.
 Docker Compose changes require an explicit deploy.
 
 Systemd watcher installation uses `sudo` for service setup and enables the service
-with `systemctl enable --now`.
+with `systemctl enable --now`. Use this mode for production when SSH should use
+the host's default identity, agent, SSH config, bastions, or `ProxyJump`.
 
-Docker watcher mode mounts the context registry, local project folders, and SSH
-key material read-only. It does not require Docker socket access.
+Docker watcher mode mounts the context registry, local project folders, and only
+explicit dedicated SSH keys read-only. It does not mount `~/.ssh` and does not
+require Docker socket access.
 
 ## Runtime State
 
