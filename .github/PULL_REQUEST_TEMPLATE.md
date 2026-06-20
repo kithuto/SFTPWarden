@@ -2,9 +2,15 @@
 
 Describe the user-facing change.
 
+## Target Branch
+
+- [ ] This PR targets `dev`, not `main`
+
 ## Validation
 
-- [ ] `tox`
+- [ ] Docs-only change: `tox -e docs`
+- [ ] Code change: `tox`
+- [ ] Docker/runtime change: local Docker build/smoke test
 - [ ] Docs updated when behavior changed
 - [ ] Examples updated when configuration changed
 - [ ] No secrets, private keys, tokens, DSNs, or customer data included

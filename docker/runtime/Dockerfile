@@ -1,4 +1,4 @@
-FROM python:3.12-alpine AS runtime
+FROM python:3.13-alpine AS runtime
 
 LABEL org.opencontainers.image.title="SFTPWarden" \
       org.opencontainers.image.description="Lightweight OpenSSH SFTP runtime with declarative user provisioning" \

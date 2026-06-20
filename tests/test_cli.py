@@ -6,11 +6,16 @@ from pathlib import Path
 import yaml
 from typer.testing import CliRunner
 
+import sftpwarden.cli_commands.core as core_commands
 import sftpwarden.cli_commands.init as init_commands
+import sftpwarden.cli_commands.runtime as runtime_commands
 import sftpwarden.services.cli_workflows as cli_workflows
 from sftpwarden.cli import app
 from sftpwarden.config import load_config, write_config
 from sftpwarden.contexts import load_registry
+from sftpwarden.runtime import ResolvedUser, RuntimeAction, RuntimePlan, RuntimeState
+from sftpwarden.users import ProviderUsers, SFTPUser
+from sftpwarden.watcher import WatchTarget
 
 
 def test_init_named_context_creates_project_name(tmp_path: Path, monkeypatch) -> None:
@@ -382,6 +387,132 @@ def test_doctor_json_reports_checks() -> None:
 
     assert result.exit_code == 0, result.output
     assert {check["name"] for check in data["checks"]} == {"docker", "ssh", "rsync"}
+
+
+def test_global_config_commands_show_and_update_defaults(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    runner = CliRunner()
+
+    show_result = runner.invoke(app, ["config", "show", "--json"])
+    default_before = runner.invoke(app, ["config", "default-provider"])
+    update_result = runner.invoke(app, ["config", "default-provider", "csv"])
+    default_after = runner.invoke(app, ["config", "default-provider"])
+
+    assert show_result.exit_code == 0, show_result.output
+    assert json.loads(show_result.output)["defaults"]["remote_storage"] == "local-sync"
+    assert default_before.exit_code == 0, default_before.output
+    assert default_before.output.strip() == "yaml"
+    assert update_result.exit_code == 0, update_result.output
+    assert "csv" in update_result.output
+    assert default_after.output.strip() == "csv"
+
+
+def test_context_registry_commands_cover_show_list_default_clear_and_remove(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "dev-project"
+    runner = CliRunner()
+    runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
+
+    add_result = runner.invoke(app, ["context", "add", "qa", "--root", str(root), "--yes"])
+    list_result = runner.invoke(app, ["context", "ls", "--json"])
+    show_result = runner.invoke(app, ["context", "show", "--name", "qa"])
+    default_result = runner.invoke(app, ["context", "default", "qa"])
+    use_result = runner.invoke(app, ["context", "use", "dev"])
+    clear_result = runner.invoke(app, ["context", "clear"])
+    remove_result = runner.invoke(app, ["context", "remove", "qa", "--yes"])
+    registry = load_registry()
+
+    assert add_result.exit_code == 0, add_result.output
+    assert json.loads(list_result.output)["contexts"]["qa"]["root"] == str(root)
+    assert json.loads(show_result.output)["name"] == "qa"
+    assert default_result.exit_code == 0, default_result.output
+    assert use_result.exit_code == 0, use_result.output
+    assert clear_result.exit_code == 0, clear_result.output
+    assert remove_result.exit_code == 0, remove_result.output
+    assert registry.default is None
+    assert "qa" not in registry.contexts
+
+
+def test_info_compose_refresh_and_sync_json_commands(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "dev-project"
+    runner = CliRunner()
+    runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
+
+    def fake_refresh_context(entry, *, dry_run=False):
+        return f"{entry.name} dry_run={dry_run}"
+
+    monkeypatch.setattr(core_commands, "refresh_context", fake_refresh_context)
+    monkeypatch.setattr(
+        core_commands,
+        "derive_watch_targets",
+        lambda: [WatchTarget("prod", root / "users.yaml", "/opt/sftpwarden/users.yaml")],
+    )
+
+    info_result = runner.invoke(app, ["info", "--json"])
+    compose_result = runner.invoke(
+        app, ["compose", "--config", str(root / "sftpwarden.yaml"), "--write"]
+    )
+    refresh_result = runner.invoke(app, ["refresh", "--json", "--dry-run"])
+    sync_result = runner.invoke(app, ["sync", "--json", "--dry-run"])
+
+    assert json.loads(info_result.output)["name"] == "dev"
+    assert compose_result.exit_code == 0, compose_result.output
+    assert (root / "docker-compose.yml").exists()
+    assert json.loads(refresh_result.output) == {
+        "dry_run": True,
+        "targets": [{"context": "dev", "result": "dev dry_run=True"}],
+    }
+    assert json.loads(sync_result.output)["targets"][0]["remote_path"] == (
+        "/opt/sftpwarden/users.yaml"
+    )
+
+
+def test_runtime_cli_commands_use_runtime_services(monkeypatch) -> None:
+    runner = CliRunner()
+    user = SFTPUser(
+        username="alice",
+        password_hash="$6$rounds=500000$saltstring$hashvalue",  # noqa: S106
+    )
+    plan = RuntimePlan(
+        fingerprint="abc123",
+        actions=[
+            RuntimeAction(
+                action="create",
+                username="alice",
+                uid=10000,
+                gid=10000,
+                reason="new user",
+            )
+        ],
+        resolved_users=[ResolvedUser(spec=user, uid=10000, gid=10000)],
+    )
+    sync_calls: list[str] = []
+
+    monkeypatch.setattr(runtime_commands, "apply_once", lambda config, force=False: "applied")
+    monkeypatch.setattr(
+        runtime_commands,
+        "load_runtime_inputs",
+        lambda config: (
+            load_config("examples/yaml/sftpwarden.yaml"),
+            ProviderUsers(users=[user]),
+            RuntimeState(users={}),
+        ),
+    )
+    monkeypatch.setattr(runtime_commands, "build_runtime_plan", lambda *_args: plan)
+    monkeypatch.setattr(runtime_commands, "run_sync_loop", lambda config: sync_calls.append(config))
+
+    refresh_result = runner.invoke(app, ["runtime", "refresh", "--config", "custom.yaml"])
+    plan_result = runner.invoke(app, ["runtime", "plan", "--config", "custom.yaml", "--json"])
+    sync_result = runner.invoke(app, ["runtime", "sync", "--config", "custom.yaml"])
+
+    assert refresh_result.exit_code == 0, refresh_result.output
+    assert "applied" in refresh_result.output
+    assert json.loads(plan_result.output)["actions"][0]["username"] == "alice"
+    assert sync_result.exit_code == 0, sync_result.output
+    assert sync_calls == ["custom.yaml"]
 
 
 def test_user_add_hashes_plaintext_password(tmp_path: Path, monkeypatch) -> None:

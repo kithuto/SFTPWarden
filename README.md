@@ -1,8 +1,34 @@
-# SFTPWarden
+<p align="center">
+  <img
+    src="docs/_static/logo%20sftpwarden.png"
+    alt="SFTPWarden - Container-native SFTP management"
+    width="760"
+  >
+</p>
 
-Container-native SFTP for teams that want a small, auditable OpenSSH runtime with
-declarative users, predictable Docker deployment, and a CLI that works the same
-locally and on remote hosts.
+<p align="center">
+  Container-native SFTP for teams that want a small, auditable OpenSSH runtime with
+  declarative users, predictable Docker deployment, and a CLI that works the same
+  locally and on remote hosts.
+</p>
+
+<p align="center">
+  <a href="#key-features">Key Features</a>
+  &nbsp;·&nbsp;
+  <a href="#installation">Installation</a>
+  &nbsp;·&nbsp;
+  <a href="#5-minute-quick-start">Quick Start</a>
+  &nbsp;·&nbsp;
+  <a href="#deployment-choices">Deployment</a>
+  &nbsp;·&nbsp;
+  <a href="#providers">Providers</a>
+  &nbsp;·&nbsp;
+  <a href="#documentation">Docs</a>
+  &nbsp;·&nbsp;
+  <a href="#contributing">Contributing</a>
+</p>
+
+---
 
 SFTPWarden runs OpenSSH in a container and keeps users, host keys, data, and runtime
 state outside the image. You manage environments with `sftpwarden`, and the runtime
@@ -45,6 +71,7 @@ runtime that is easy to understand, deploy, and operate.
 - [Operations](#operations)
 - [Security](#security)
 - [Documentation](#documentation)
+- [Roadmap](#roadmap)
 - [Contributing](#contributing)
 
 ---
@@ -58,7 +85,7 @@ pip install sftpwarden
 sftpwarden --version
 ```
 
-For local development before the first public package release:
+For local development:
 
 ```bash
 git clone https://github.com/kithuto/sftpwarden.git
@@ -345,18 +372,36 @@ python -m pip install -e ".[docs]"
 sphinx-build -b html docs docs/_build/html
 ```
 
+## Roadmap
+
+### v1.1 - Kubernetes
+
+- Add Helm chart and Kubernetes manifests.
+- Add ConfigMap/Secret/PVC examples.
+- Add liveness/readiness probes.
+
 ## Contributing
 
 Contributions are welcome: bug reports, docs fixes, examples, tests, provider work,
 and operational feedback are all useful.
 
+Contribution workflow:
+
+1. Fork the repository.
+2. Create your own branch from `dev`.
+3. Develop and validate your change in that branch.
+4. Open a Pull Request from your branch to `dev`.
+
+Normal contribution PRs should target `dev`, not `main`. The maintainer promotes
+accepted changes from `dev` to `main` for production and release work.
+
 Start here:
 
-- [CONTRIBUTING.md](https://github.com/kithuto/sftpwarden/blob/main/CONTRIBUTING.md)
+- [CONTRIBUTING.md](https://github.com/kithuto/sftpwarden/blob/dev/CONTRIBUTING.md)
   for the GitHub workflow.
 - [docs/contributing.md](docs/contributing.md) for install, development, testing,
   docs, and release checks.
-- [SECURITY.md](https://github.com/kithuto/sftpwarden/blob/main/SECURITY.md) for
+- [SECURITY.md](https://github.com/kithuto/sftpwarden/blob/dev/SECURITY.md) for
   responsible vulnerability reporting.
-- [CODE_OF_CONDUCT.md](https://github.com/kithuto/sftpwarden/blob/main/CODE_OF_CONDUCT.md)
+- [CODE_OF_CONDUCT.md](https://github.com/kithuto/sftpwarden/blob/dev/CODE_OF_CONDUCT.md)
   for participation expectations.

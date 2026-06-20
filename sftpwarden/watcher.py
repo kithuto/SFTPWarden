@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import time
 from dataclasses import dataclass
 from enum import StrEnum
@@ -429,6 +430,7 @@ def render_systemd_unit() -> str:
         Systemd unit file text.
     """
     user = os.environ.get("USER") or os.environ.get("LOGNAME") or "sftpwarden"
+    executable = shutil.which("sftpwarden") or "/usr/bin/env sftpwarden"
     return f"""[Unit]
 Description=SFTPWarden remote local-sync watcher
 
@@ -436,12 +438,12 @@ Description=SFTPWarden remote local-sync watcher
 Type=simple
 User={user}
 Environment=SFTPWARDEN_HOME={app_home()}
-ExecStart=sftpwarden watch
+ExecStart={executable} watch
 Restart=always
 RestartSec=5
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 """
 
 

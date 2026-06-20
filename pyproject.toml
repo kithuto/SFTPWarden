@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sftpwarden"
-version = "0.7.0"
+version = "1.0.0"
 description = "Container-native SFTP gateway with OpenSSH, chroot isolation, and declarative user provisioning."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,7 +12,7 @@ license = "Apache-2.0"
 authors = [{ name = "Ignasi Rovira", email = "nacho.rovira94@gmail.com" }]
 keywords = ["sftp", "openssh", "docker", "devops", "platform-engineering"]
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 5 - Production/Stable",
   "Environment :: Console",
   "Intended Audience :: System Administrators",
   "License :: OSI Approved :: Apache Software License",
@@ -34,7 +34,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "build",
-  "pytest",
+  "pytest>=9.0.3",
   "pytest-cov",
   "ruff",
   "tox",
@@ -68,6 +68,13 @@ packages = ["sftpwarden"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --import-mode=importlib"
+
+[tool.coverage.run]
+source = ["sftpwarden"]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 80
 
 [tool.ruff]
 line-length = 100

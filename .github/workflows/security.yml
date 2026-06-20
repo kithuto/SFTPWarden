@@ -7,6 +7,7 @@ on:
     branches: [main]
   schedule:
     - cron: "23 4 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -38,6 +39,7 @@ jobs:
 
   container-scan:
     runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
       - name: Check out repository
@@ -46,6 +48,9 @@ jobs:
       - name: Build runtime image
         run: docker build -t sftpwarden:security -f docker/runtime/Dockerfile .
 
+      - name: Build watcher image
+        run: docker build -t sftpwarden-watcher:security -f docker/watcher/Dockerfile .
+
       - name: Scan runtime image
         uses: aquasecurity/trivy-action@v0.35.0
         with:
@@ -53,10 +58,22 @@ jobs:
           format: sarif
           output: trivy-runtime.sarif
 
+      - name: Scan watcher image
+        uses: aquasecurity/trivy-action@v0.35.0
+        with:
+          image-ref: sftpwarden-watcher:security
+          format: sarif
+          output: trivy-watcher.sarif
+
       - name: Upload runtime scan
-        uses: github/codeql-action/upload-sarif@v3.36.2
+        uses: github/codeql-action/upload-sarif@v4.36.2
         with:
           sarif_file: trivy-runtime.sarif
+
+      - name: Upload watcher scan
+        uses: github/codeql-action/upload-sarif@v4.36.2
+        with:
+          sarif_file: trivy-watcher.sarif
 
       - name: Generate runtime SBOM
         uses: anchore/sbom-action@v0.24.0
@@ -64,11 +81,19 @@ jobs:
           image: sftpwarden:security
           output-file: runtime-sbom.spdx.json
 
-      - name: Upload SBOM
+      - name: Generate watcher SBOM
+        uses: anchore/sbom-action@v0.24.0
+        with:
+          image: sftpwarden-watcher:security
+          output-file: watcher-sbom.spdx.json
+
+      - name: Upload SBOMs
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: runtime-sbom
-          path: runtime-sbom.spdx.json
+          name: sbom
+          path: |
+            runtime-sbom.spdx.json
+            watcher-sbom.spdx.json
 
   scorecard:
     runs-on: ubuntu-latest
@@ -88,6 +113,6 @@ jobs:
           publish_results: true
 
       - name: Upload Scorecard results
-        uses: github/codeql-action/upload-sarif@v3.36.2
+        uses: github/codeql-action/upload-sarif@v4.36.2
         with:
           sarif_file: scorecard.sarif
