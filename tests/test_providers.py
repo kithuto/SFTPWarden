@@ -86,6 +86,16 @@ def test_csv_provider_round_trip(tmp_path) -> None:
     assert loaded.users[0].comment == "Finance dropbox"
 
 
+def test_file_provider_reports_missing_file(tmp_path) -> None:
+    provider = YAMLProvider(
+        config=ProviderConfig(type=ProviderType.YAML),
+        path=tmp_path / "missing.yaml",
+    )
+
+    with pytest.raises(ProviderError, match="Provider file not found"):
+        provider.read()
+
+
 def test_sql_default_read_query_uses_users_table() -> None:
     assert sql_select_users_query() == (
         "select username, public_keys, password_hash, uid, gid, upload_dir, comment, disabled "

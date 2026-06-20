@@ -21,7 +21,27 @@ def test_dockerfile_keeps_runtime_lightweight() -> None:
     assert "tini" in canonical
     assert "--no-cache-dir" in dockerfile
     assert "--no-cache-dir" in canonical
+    assert "COPY sftpwarden ./sftpwarden" in dockerfile
+    assert "COPY sftpwarden ./sftpwarden" in canonical
+    assert "docker/runtime/entrypoint.sh" in dockerfile
+    assert "docker/runtime/sshd_config.template" in dockerfile
+    assert not Path("docker/entrypoint.sh").exists()
+    assert not Path("docker/sshd_config").exists()
 
 
-def test_github_actions_are_not_created_yet() -> None:
-    assert not Path(".github").exists()
+def test_watcher_dockerfile_uses_flat_package_layout() -> None:
+    dockerfile = Path("docker/watcher/Dockerfile").read_text(encoding="utf-8")
+
+    assert "COPY sftpwarden ./sftpwarden" in dockerfile
+
+
+def test_release_workflows_exist() -> None:
+    workflows = {path.name for path in Path(".github/workflows").glob("*.yml")}
+
+    assert workflows == {
+        "ci.yml",
+        "docker.yml",
+        "docs.yml",
+        "release.yml",
+        "security.yml",
+    }

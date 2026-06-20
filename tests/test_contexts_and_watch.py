@@ -27,6 +27,7 @@ from sftpwarden.contexts import (
 )
 from sftpwarden.providers import empty_provider_text
 from sftpwarden.refresh import refresh_context, resolve_refresh_targets
+from sftpwarden.remote.deploy import deploy_context
 from sftpwarden.utils.errors import ContextError
 from sftpwarden.watcher import derive_watch_targets
 
@@ -486,10 +487,10 @@ def test_deploy_remote_local_sync_dry_run_includes_sync_and_compose(
     runner = CliRunner()
 
     result = runner.invoke(app, ["deploy", "--context", "prod", "--dry-run"])
-    output = result.output.replace("\n", " ")
+    output = " ".join(result.output.split())
 
     assert result.exit_code == 0, result.output
-    assert "mkdir -p  /opt/sftpwarden" in output
+    assert "mkdir -p /opt/sftpwarden" in output
     assert "rsync" in output
     assert "docker compose -f docker-compose.yml pull" in output
     assert "docker compose -f docker-compose.yml up -d" in output
@@ -513,9 +514,28 @@ def test_deploy_remote_only_dry_run_validates_remote_files(
     runner = CliRunner()
 
     result = runner.invoke(app, ["deploy", "--context", "archive", "--dry-run"])
-    output = result.output.replace("\n", " ")
+    output = " ".join(result.output.split())
 
     assert result.exit_code == 0, result.output
-    assert "test -f  /opt/sftpwarden/sftpwarden.yaml" in output
+    assert "test -f /opt/sftpwarden/sftpwarden.yaml" in output
     assert "rsync" not in output
     assert "docker compose -f docker-compose.yml up -d" in output
+
+
+def test_deploy_context_accepts_injected_runner(tmp_path: Path) -> None:
+    root = tmp_path / "dev-project"
+    root.mkdir()
+    config = default_project_config("dev")
+    write_config(root / "sftpwarden.yaml", config)
+    (root / "users.yaml").write_text(empty_provider_text(config.provider.type), encoding="utf-8")
+    entry = local_context("dev", root, config.provider.type)
+    calls: list[tuple[list[str], str | None]] = []
+
+    def fake_runner(command: list[str], *, cwd: str | None = None) -> None:
+        calls.append((command, cwd))
+
+    result = deploy_context(entry, runner=fake_runner)
+
+    assert result == "Deployed dev."
+    assert calls[0][0] == ["docker", "compose", "-f", "docker-compose.yml", "pull"]
+    assert {cwd for _, cwd in calls} == {str(root)}

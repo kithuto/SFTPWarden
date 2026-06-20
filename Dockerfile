@@ -13,15 +13,14 @@ RUN apk add --no-cache openssh-server shadow tini \
 
 WORKDIR /opt/sftpwarden
 COPY pyproject.toml README.md LICENSE ./
-COPY src ./src
+COPY sftpwarden ./sftpwarden
 RUN pip install --no-cache-dir . \
     && rm -rf /root/.cache /opt/sftpwarden
 
-COPY docker/sshd_config /etc/ssh/sshd_config
-COPY docker/entrypoint.sh /usr/local/bin/sftpwarden-entrypoint
+COPY docker/runtime/sshd_config.template /etc/ssh/sshd_config
+COPY docker/runtime/entrypoint.sh /usr/local/bin/sftpwarden-entrypoint
 RUN chmod 0755 /usr/local/bin/sftpwarden-entrypoint
 
 EXPOSE 22
 ENTRYPOINT ["tini", "--", "sftpwarden-entrypoint"]
 CMD ["/usr/sbin/sshd", "-D", "-e"]
-

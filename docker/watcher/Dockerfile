@@ -11,7 +11,7 @@ RUN apk add --no-cache openssh-client rsync tini
 
 WORKDIR /opt/sftpwarden
 COPY pyproject.toml README.md LICENSE ./
-COPY src ./src
+COPY sftpwarden ./sftpwarden
 RUN pip install --no-cache-dir ".[watch]" \
     && rm -rf /root/.cache /opt/sftpwarden
 
@@ -19,4 +19,3 @@ COPY docker/watcher/entrypoint.sh /usr/local/bin/sftpwarden-watcher-entrypoint
 RUN chmod 0755 /usr/local/bin/sftpwarden-watcher-entrypoint
 
 ENTRYPOINT ["tini", "--", "sftpwarden-watcher-entrypoint"]
-

@@ -21,3 +21,6 @@ docker-compose.yml
 sftpwarden.yaml
 users.yaml
 users.csv
+.tox/
+# temporally ignore .github for now
+.github

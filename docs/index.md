@@ -1,20 +1,16 @@
-# SFTPWarden Documentation
+# SFTPWarden
 
-- [Installation](installation.md)
-- [Getting Started](getting-started.md)
-- [Configuration](configuration.md)
-- [CLI](cli.md)
-- [Contexts](contexts.md)
-- [Remote Contexts](remote-contexts.md)
-- [Watcher](watcher.md)
-- [Refresh](refresh.md)
-- [Users](users.md)
-- [Providers](providers.md)
-- [Runtime](runtime.md)
-- [Isolation Model](isolation-model.md)
-- [Security](security.md)
-- [Operations](operations.md)
-- [Troubleshooting](troubleshooting.md)
-- [Architecture](architecture.md)
-- [Roadmap](roadmap.md)
+```{include} ../README.md
+:relative-docs: docs/
+:relative-images:
+```
 
+```{toctree}
+:maxdepth: 2
+:caption: Specific guides
+
+configuration
+operations
+security
+cli-reference
+```

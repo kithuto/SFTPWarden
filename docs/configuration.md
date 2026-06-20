@@ -1,10 +1,12 @@
 # Configuration
 
-SFTPWarden uses two CLI-level files and one project-level file.
+SFTPWarden has three configuration layers:
+
+- global CLI defaults in `~/.sftpwarden/config.toml`;
+- registered contexts in `~/.sftpwarden/contexts.toml`;
+- project settings in `<project-root>/sftpwarden.yaml`.
 
 ## Global CLI Config
-
-Path: `~/.sftpwarden/config.toml`
 
 ```toml
 version = 1
@@ -23,20 +25,10 @@ Provider selection order:
 
 1. `--provider`
 2. `SFTPWARDEN_DEFAULT_PROVIDER`
-3. `~/.sftpwarden/config.toml`
+3. `default_provider` from the global config
 4. built-in fallback `yaml`
 
-## Context Registry
-
-Path: `~/.sftpwarden/contexts.toml`
-
-The registry stores local, remote local-sync, and remote-only contexts. It does not store provider secrets.
-
-When a remote context has `ssh_key = "default"`, SSH uses the default identity lookup for that user instead of an explicit `-i` key path.
-
 ## Project Config
-
-Path: `<project-root>/sftpwarden.yaml`
 
 Minimum valid config:
 
@@ -49,43 +41,116 @@ provider:
   path: /etc/sftpwarden/users.yaml
 ```
 
-`project.name` is required. `server.container_port` is invalid because the container SSH port is always `22`; use `server.port` for the host port.
-
-Password authentication is enabled by default:
+Common runtime settings:
 
 ```yaml
+server:
+  host: "0.0.0.0"
+  port: 2222
+  data_dir: /data
+  host_keys_dir: /etc/sftpwarden/host_keys
+  state_dir: /var/lib/sftpwarden
+
+sync:
+  interval_seconds: 60
+  apply_on_startup: true
+  disable_missing_users: true
+
 auth:
   allow_public_key: true
   allow_password: true
   recommended: password
 ```
 
-For key-only deployments, add public keys to users and disable password login:
+`server.container_port` is not supported. The container SSH port is always `22`;
+`server.port` controls the host port exposed by Docker Compose.
+
+## Providers
+
+YAML:
 
 ```yaml
-auth:
-  allow_public_key: true
-  allow_password: false
-  recommended: public_key
+provider:
+  type: yaml
+  path: /etc/sftpwarden/users.yaml
 ```
 
-Watcher config is intentionally small:
+CSV:
 
 ```yaml
-watcher:
-  enabled: false
-  mode: systemd
+provider:
+  type: csv
+  path: /etc/sftpwarden/users.csv
 ```
 
-Docker watcher mode may include an image:
+MySQL:
 
 ```yaml
-watcher:
-  enabled: true
-  mode: docker
-  image: sftpwarden-watcher:local
+provider:
+  type: mysql
+  dsn: "${SFTPWARDEN_MYSQL_DSN}"
+  table: sftp_users
 ```
 
-`watcher.include` and `watcher.exclude` are not valid project config. The CLI derives watched files from context and provider configuration.
+PostgreSQL:
 
-Provider paths and upload directories reject parent-directory traversal. Usernames are restricted to OpenSSH-safe account names.
+```yaml
+provider:
+  type: postgresql
+  dsn: "${SFTPWARDEN_POSTGRES_DSN}"
+  table: sftp_users
+```
+
+SQL providers read and mutate the configured users table. The default columns are:
+
+```text
+username, public_keys, password_hash, uid, gid, upload_dir, comment, disabled
+```
+
+## Contexts
+
+Local context:
+
+```toml
+[contexts.dev]
+name = "dev"
+type = "local"
+root = "/Users/example/sftpwarden-dev"
+config = "/Users/example/sftpwarden-dev/sftpwarden.yaml"
+provider = "yaml"
+critical = false
+```
+
+Remote local-sync context:
+
+```toml
+[contexts.prod]
+name = "prod"
+type = "remote"
+storage = "local-sync"
+root = "/Users/example/sftpwarden-prod"
+config = "/Users/example/sftpwarden-prod/sftpwarden.yaml"
+provider = "yaml"
+critical = true
+watcher_required = true
+
+[contexts.prod.remote]
+host = "sftp-prod.example.com"
+user = "deploy"
+port = 22
+remote_root = "/opt/sftpwarden"
+remote_config = "/opt/sftpwarden/sftpwarden.yaml"
+compose_file = "docker-compose.yml"
+```
+
+Remote-only contexts keep top-level `root` and `config` empty because the source of
+truth is already on the remote server.
+
+## Validation
+
+```bash
+sftpwarden validate --config sftpwarden.yaml
+sftpwarden validate --config sftpwarden.yaml --json
+```
+
+CI should validate every example config before release.

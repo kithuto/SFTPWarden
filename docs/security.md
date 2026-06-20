@@ -1,33 +1,73 @@
 # Security
 
-SFTPWarden follows conservative defaults for an SFTP gateway.
+SFTPWarden is designed for conservative SFTP operations, but it still runs on
+your hosts and networks. Treat it as infrastructure.
 
 ## Defaults
 
-- No users or secrets are baked into the image.
-- The generated `.dockerignore` excludes `.env`, `old/`, runtime data, state, and host keys.
-- Password authentication is enabled by default.
-- Plaintext passwords are rejected in provider data; `sftpwarden user add --password` hashes the value before saving it.
-- SSH public key auth is optional and can be used for key-only deployments.
-- User data is not deleted when a user is removed from the provider.
-- Core workflows do not manage host firewall rules and do not require `sudo`.
-- Remote watcher design does not require Docker socket access.
-- SSH private keys should be mounted read-only when a Docker watcher is used.
-- Provider paths, usernames, and upload directories are validated to prevent traversal and unsafe account names.
+- Users and secrets are not baked into Docker images.
+- Plaintext passwords are rejected in provider data.
+- `sftpwarden user add --password` hashes before writing provider data.
+- Host keys, user data, and UID/GID state are persisted outside the image.
+- Removed users are disabled; their data is not deleted.
+- `.env`, `data/`, `state/`, `host_keys/`, Git metadata, and Python caches are not
+  watched or synced by the watcher.
+- SSH private keys for watcher containers should be mounted read-only.
 
 ## SSH Restrictions
 
-The runtime disables root login, empty passwords, SSH forwarding, tunneling, X11 forwarding, gateway ports, and user-provided environments. SFTP users are matched by group and forced into `internal-sftp`.
+The runtime disables:
+
+- root login;
+- empty passwords;
+- TCP forwarding;
+- agent forwarding;
+- X11 forwarding;
+- tunnels;
+- user environments.
+
+SFTP users are matched by group and forced into `internal-sftp`.
+
+## Chroot Layout
+
+Each user is isolated under:
+
+```text
+/data/<username>/
+  upload/
+```
+
+Expected permissions:
+
+```text
+/data/<username>         root:root      755
+/data/<username>/upload  <uid>:<gid>    750
+```
+
+OpenSSH requires the chroot directory itself to be owned by root and not writable
+by the user.
+
+## Key-Only Deployments
+
+Add valid public keys for every active user, then disable password login:
+
+```yaml
+auth:
+  allow_public_key: true
+  allow_password: false
+  recommended: public_key
+```
 
 ## Limitations
 
-Chroot isolation is not a substitute for host hardening. Operators should still patch hosts, restrict network exposure, monitor logs, back up persistent volumes, and use strong SSH key management.
+OpenSSH chroot inside a container is useful isolation for SFTP workflows. It is
+not a replacement for:
 
-Password authentication is the default path. For key-only deployments, set `auth.allow_password: false` after adding valid public keys for every active user.
+- host hardening;
+- network firewalling;
+- patch management;
+- backups;
+- log monitoring;
+- secret management.
 
-## References
-
-- Python packaging metadata follows the PyPA `pyproject.toml` specification.
-- Dockerfile choices follow Docker build best practices for small, reproducible images.
-- OpenSSH restrictions use documented `sshd_config` behavior for `ChrootDirectory` and `internal-sftp`.
-- Password guidance follows OWASP password storage guidance: never store plaintext passwords.
+Expose SFTP only to the networks that need it.

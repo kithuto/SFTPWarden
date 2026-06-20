@@ -6,6 +6,7 @@ __pycache__
 .pytest_cache
 .ruff_cache
 .mypy_cache
+.tox
 .DS_Store
 .env
 .env.*
@@ -15,5 +16,5 @@ state
 host_keys
 dist
 build
+docs/_build
 *.egg-info
-

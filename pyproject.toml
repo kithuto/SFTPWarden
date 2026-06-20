@@ -33,9 +33,16 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "build",
   "pytest",
   "pytest-cov",
   "ruff",
+  "tox",
+]
+docs = [
+  "myst-parser",
+  "sphinx",
+  "sphinx-rtd-theme",
 ]
 watch = [
   "watchdog",
@@ -49,18 +56,18 @@ postgres = [
 
 [project.urls]
 Homepage = "https://github.com/kithuto/sftpwarden"
-Documentation = "https://github.com/kithuto/sftpwarden#readme"
+Documentation = "https://kithuto.github.io/sftpwarden/"
 Issues = "https://github.com/kithuto/sftpwarden/issues"
 
 [project.scripts]
 sftpwarden = "sftpwarden.cli:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/sftpwarden"]
+packages = ["sftpwarden"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q --import-mode=importlib"
 
 [tool.ruff]
 line-length = 100

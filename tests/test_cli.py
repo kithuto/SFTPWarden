@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 from typer.testing import CliRunner
 
-import sftpwarden.cli as cli_module
+import sftpwarden.services.cli_workflows as cli_workflows
 from sftpwarden.cli import app
 from sftpwarden.config import load_config
 
@@ -173,7 +173,7 @@ def test_user_add_runs_real_refresh_by_default(tmp_path: Path, monkeypatch) -> N
         calls.append(dry_run)
         return f"refreshed {entry.name}"
 
-    monkeypatch.setattr(cli_module, "refresh_context", fake_refresh_context)
+    monkeypatch.setattr(cli_workflows, "refresh_context", fake_refresh_context)
 
     result = runner.invoke(
         app,
@@ -264,7 +264,7 @@ def test_user_update_comment_only_does_not_refresh(tmp_path: Path, monkeypatch) 
         calls.append(dry_run)
         return f"refreshed {entry.name}"
 
-    monkeypatch.setattr(cli_module, "refresh_context", fake_refresh_context)
+    monkeypatch.setattr(cli_workflows, "refresh_context", fake_refresh_context)
 
     result = runner.invoke(
         app,
