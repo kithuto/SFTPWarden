@@ -9,9 +9,9 @@ from rich import box
 from rich.prompt import Prompt
 from rich.table import Table
 
-from sftpwarden import __version__
 from sftpwarden.runtime import RuntimePlan
 from sftpwarden.security.passwords import resolve_password_hash
+from sftpwarden.utils._version import get_version
 from sftpwarden.utils.console import console
 from sftpwarden.utils.errors import SFTPWardenError
 
@@ -187,7 +187,7 @@ def version_callback(value: bool) -> None:
         Whether the version flag was provided.
     """
     if value:
-        console.print(f"SFTPWarden {__version__}")
+        console.print(f"SFTPWarden {get_version()}")
         raise typer.Exit()
 
 

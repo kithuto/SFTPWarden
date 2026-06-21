@@ -23,7 +23,7 @@ class _ImageSourceParser(HTMLParser):
                 self.sources.append(value)
 
 
-def test_package_version_matches_module_version() -> None:
+def test_package_version_is_read_from_pyproject() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
     assert pyproject["project"]["version"] == sftpwarden.__version__

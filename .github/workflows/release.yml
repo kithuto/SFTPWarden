@@ -28,7 +28,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify package versions and change
+      - name: Check package version change
         id: version
         env:
           BEFORE_SHA: ${{ github.event.before }}
@@ -39,17 +39,10 @@ jobs:
           import tomllib
           from pathlib import Path
 
-          import sftpwarden
-
           def read_version(text: str) -> str:
               return tomllib.loads(text)["project"]["version"]
 
           package_version = read_version(Path("pyproject.toml").read_text(encoding="utf-8"))
-          module_version = sftpwarden.__version__
-          if package_version != module_version:
-              raise SystemExit(
-                  f"pyproject={package_version} module={module_version}"
-              )
 
           previous = ""
           before = os.environ.get("BEFORE_SHA", "")
