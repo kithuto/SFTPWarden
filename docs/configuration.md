@@ -115,6 +115,19 @@ provider:
   table: sftp_users
 ```
 
+The DSN follows the standard database URL convention:
+
+```text
+mysql://user:password@host:3306/database
+postgresql://user:password@host:5432/database
+```
+
+Using an environment variable is recommended for real deployments:
+
+```bash
+export SFTPWARDEN_POSTGRES_DSN='postgresql://sftpwarden:change-me@db.example.com:5432/sftpwarden'
+```
+
 SQL providers read and mutate the configured users table. The default columns are:
 
 ```text
@@ -128,11 +141,13 @@ abort so you can apply the schema manually.
 ```bash
 sftpwarden init prod \
   --provider mysql \
-  --dsn '${SFTPWARDEN_MYSQL_DSN}' \
+  --dsn 'mysql://sftpwarden:change-me@db.example.com:3306/sftpwarden' \
   --create-table
 ```
 
-Use `--no-create-table` to force init to abort when the table is missing.
+Use `--no-create-table` to force init to abort when the table is missing. If you
+omit `--dsn` in interactive SQL init, SFTPWarden asks for host, port, database,
+username, and password, then builds the DSN.
 
 ## Contexts
 

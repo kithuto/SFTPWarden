@@ -171,9 +171,31 @@ Use these when the users provider is MySQL or PostgreSQL:
 ```bash
 sftpwarden init prod \
   --provider mysql \
+  --dsn 'mysql://sftpwarden:change-me@db.example.com:3306/sftpwarden' \
+  --create-table
+```
+
+`--dsn` is a conventional SQL database URL:
+
+```text
+mysql://user:password@host:3306/database
+postgresql://user:password@host:5432/database
+```
+
+For production or shared environments, prefer an environment variable and pass
+the reference:
+
+```bash
+export SFTPWARDEN_MYSQL_DSN='mysql://sftpwarden:change-me@db.example.com:3306/sftpwarden'
+
+sftpwarden init prod \
+  --provider mysql \
   --dsn '${SFTPWARDEN_MYSQL_DSN}' \
   --create-table
 ```
+
+If `--dsn` is omitted during interactive SQL init, SFTPWarden prompts for host,
+port, database, username, and password, then builds the DSN.
 
 Important flags:
 
@@ -181,7 +203,7 @@ Important flags:
 | --- | --- |
 | `--provider mysql` | Uses the MySQL provider. |
 | `--provider postgresql` | Uses the PostgreSQL provider. |
-| `--dsn` | Sets the SQL connection string. Environment variable references are allowed. |
+| `--dsn` | Sets the SQL database URL/DSN. Environment variable references are allowed. |
 | `--query` | Sets a custom read-only user query. |
 | `--table` | Sets the users table name. Default: `sftp_users`. |
 | `--create-table` | Creates the SQL table if it is missing. |

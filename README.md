@@ -34,6 +34,24 @@ SFTPWarden runs OpenSSH in a container and keeps users, host keys, data, and run
 state outside the image. You manage environments with `sftpwarden`, and the runtime
 keeps Linux users synchronized from YAML, CSV, MySQL, or PostgreSQL.
 
+## Table of Contents
+
+- [Key Features](#key-features)
+- [Installation](#installation)
+- [Shell Autocomplete](#shell-autocomplete)
+- [5-Minute Quick Start](#5-minute-quick-start)
+- [Deployment Choices](#deployment-choices)
+- [Project Files](#project-files)
+- [User Management](#user-management)
+- [Providers](#providers)
+- [Operations](#operations)
+- [Security](#security)
+- [Documentation](#documentation)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+
+---
+
 ## Key Features
 
 - **Fast adoption for real SFTP needs:** create a local or remote SFTP environment
@@ -58,24 +76,6 @@ keeps Linux users synchronized from YAML, CSV, MySQL, or PostgreSQL.
 SFTPWarden is intentionally lightweight. It is not a full identity platform, a file
 sharing suite, or VM-grade isolation. It gives you a conservative OpenSSH-based SFTP
 runtime that is easy to understand, deploy, and operate.
-
-## Table of Contents
-
-- [Key Features](#key-features)
-- [Installation](#installation)
-- [Shell Autocomplete](#shell-autocomplete)
-- [5-Minute Quick Start](#5-minute-quick-start)
-- [Deployment Choices](#deployment-choices)
-- [Project Files](#project-files)
-- [User Management](#user-management)
-- [Providers](#providers)
-- [Operations](#operations)
-- [Security](#security)
-- [Documentation](#documentation)
-- [Roadmap](#roadmap)
-- [Contributing](#contributing)
-
----
 
 ## Installation
 
@@ -317,9 +317,32 @@ manually:
 ```bash
 sftpwarden init prod \
   --provider postgresql \
+  --dsn 'postgresql://sftpwarden:change-me@db.example.com:5432/sftpwarden' \
+  --create-table
+```
+
+`--dsn` uses the standard database URL/DSN convention:
+
+```text
+postgresql://user:password@host:5432/database
+mysql://user:password@host:3306/database
+```
+
+For real environments, prefer an environment variable so the secret is not typed
+directly in shell history or committed in project files:
+
+```bash
+export SFTPWARDEN_POSTGRES_DSN='postgresql://sftpwarden:change-me@db.example.com:5432/sftpwarden'
+
+sftpwarden init prod \
+  --provider postgresql \
   --dsn '${SFTPWARDEN_POSTGRES_DSN}' \
   --create-table
 ```
+
+If you run interactive `init` with a SQL provider and omit `--dsn`, SFTPWarden
+asks for the SQL host, port, database, username, and password, then writes the
+equivalent DSN for you.
 
 ## Operations
 

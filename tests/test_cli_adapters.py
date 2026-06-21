@@ -714,7 +714,7 @@ def test_init_direct_helpers_cover_prompts_sql_and_remote_checks(
             table="sftp_users",
             yes=True,
         )
-    answers_for_dsn = iter(["mysql://user:pass@db/sftp"])
+    answers_for_dsn = iter(["db.example.com", "3307", "sftp", "user", "pass"])
     monkeypatch.setattr(
         init_commands.Prompt, "ask", lambda *_args, **_kwargs: next(answers_for_dsn)
     )
@@ -726,7 +726,19 @@ def test_init_direct_helpers_cover_prompts_sql_and_remote_checks(
         table="sftp_users",
         yes=False,
     )
-    assert prompted_sql.provider.dsn == "mysql://user:pass@db/sftp"
+    assert prompted_sql.provider.dsn == "mysql://user:pass@db.example.com:3307/sftp"
+    example_secret = "p@ss/w:rd"
+    assert (
+        init_commands.build_sql_dsn(
+            scheme="postgresql",
+            username="sftp user",
+            password=example_secret,
+            host="db.example.com",
+            port=5432,
+            database="sftp/db",
+        )
+        == "postgresql://sftp%20user:p%40ss%2Fw%3Ard@db.example.com:5432/sftp%2Fdb"
+    )
 
     sql_config = default_project_config("dev", ProviderType.MYSQL, dsn="mysql://db/sftp")
 
