@@ -12,8 +12,14 @@ RUN apk add --no-cache openssh-client rsync tini
 WORKDIR /opt/sftpwarden
 COPY pyproject.toml README.md LICENSE ./
 COPY sftpwarden ./sftpwarden
-RUN pip install --no-cache-dir ".[watch]" \
-    && rm -rf /root/.cache /opt/sftpwarden
+RUN PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_ROOT_USER_ACTION=ignore \
+    pip install --no-cache-dir --no-compile ".[watch]" \
+    && rm -rf /root/.cache /opt/sftpwarden \
+        /usr/local/bin/pip* \
+        /usr/local/lib/python3.14/ensurepip \
+        /usr/local/lib/python3.14/site-packages/pip* \
+    && find /usr/local -depth -type d -name __pycache__ -exec rm -rf '{}' + \
+    && find /usr/local -type f -name '*.pyc' -delete
 
 COPY docker/watcher/entrypoint.sh /usr/local/bin/sftpwarden-watcher-entrypoint
 RUN chmod 0755 /usr/local/bin/sftpwarden-watcher-entrypoint
