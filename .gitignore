@@ -38,3 +38,4 @@ users.yaml
 users.csv
 !examples/**/users.csv
 .tox/
+version-release-plan.md
