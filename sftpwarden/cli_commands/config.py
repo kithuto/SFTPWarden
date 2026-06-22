@@ -5,8 +5,8 @@ from typing import Annotated
 import typer
 import yaml
 
-from sftpwarden.cli_commands.common import (
-    config_app,
+from sftpwarden.cli_commands.app import config_app
+from sftpwarden.cli_commands.output import (
     handle_error,
     print_json,
 )

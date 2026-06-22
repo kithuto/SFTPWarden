@@ -5,14 +5,16 @@ from typing import Annotated
 
 import typer
 from rich import box
-from rich.prompt import Confirm, Prompt
+from rich.prompt import Confirm
 from rich.table import Table
 
-from sftpwarden.cli_commands.common import (
-    context_app,
+from sftpwarden.cli_commands.app import context_app
+from sftpwarden.cli_commands.output import (
     handle_error,
     print_json,
+    print_watcher_without_local_sync_targets,
 )
+from sftpwarden.cli_commands.prompts import prompt_remote_url
 from sftpwarden.config import (
     load_config,
     write_config,
@@ -37,7 +39,7 @@ from sftpwarden.contexts import (
 )
 from sftpwarden.remote.checks import verify_remote_runtime_requirements
 from sftpwarden.services.cli_workflows import install_context_watcher
-from sftpwarden.utils.console import console, print_success, print_warning
+from sftpwarden.utils.console import console, print_success
 from sftpwarden.utils.constants import CONFIG_FILENAME
 from sftpwarden.utils.dotted import format_value, get_dotted, parse_cli_value, set_dotted
 from sftpwarden.utils.errors import SFTPWardenError
@@ -299,10 +301,10 @@ def convert_context_type(
         raise SFTPWardenError("Context type must be local or remote.")
     final_remote_url = remote_url
     if not final_remote_url:
-        host = Prompt.ask("Remote host")
-        final_user = remote_user or Prompt.ask("Remote user")
-        final_remote_root = remote_root or Prompt.ask("Remote root", default="~/sftpwarden")
-        final_remote_url = f"{final_user}@{host}:{final_remote_root}"
+        final_remote_url = prompt_remote_url(
+            remote_user=remote_user,
+            remote_root=remote_root,
+        )
     provider = entry.provider
     return remote_context(
         name=entry.name,
@@ -349,9 +351,7 @@ def warn_if_watcher_has_no_local_sync_targets(registry: ContextRegistry) -> None
         for entry in registry.contexts.values()
     )
     if not has_local_sync:
-        message = "Watcher is installed but there are no remote local-sync contexts left."
-        print_warning(message)
-        console.print("Run `sftpwarden watcher uninstall` if you no longer need it.")
+        print_watcher_without_local_sync_targets()
 
 
 CONTEXT_FIELD_COMMANDS = {

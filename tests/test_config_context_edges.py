@@ -18,8 +18,6 @@ from sftpwarden.config import (
     default_project_config,
     load_config,
     provider_local_path,
-    validate_octal_permissions,
-    validate_relative_safe_path,
     validation_error_to_config_error,
     write_config,
 )
@@ -37,6 +35,7 @@ from sftpwarden.contexts import (
     set_default_context,
 )
 from sftpwarden.utils.errors import ConfigError, ContextError
+from sftpwarden.utils.validation import validate_octal_permissions, validate_relative_safe_path
 
 
 def test_config_validation_edges(tmp_path: Path) -> None:

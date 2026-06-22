@@ -4,11 +4,11 @@ from typing import Annotated
 
 import typer
 
-from sftpwarden.cli_commands.common import (
+from sftpwarden.cli_commands.app import runtime_app
+from sftpwarden.cli_commands.output import (
     handle_error,
     print_json,
     print_runtime_plan,
-    runtime_app,
     runtime_plan_explanation,
     runtime_plan_to_json,
 )

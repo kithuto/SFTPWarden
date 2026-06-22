@@ -122,6 +122,27 @@ def parse_remote_url(value: str) -> ParsedRemoteURL:
     )
 
 
+def remote_url_from_parts(*, host: str, remote_root: str, remote_user: str | None) -> str:
+    """Build a compact remote URL from context parts.
+
+    Parameters
+    ----------
+    host
+        Remote SSH host.
+    remote_root
+        Remote project root.
+    remote_user
+        Optional SSH user.
+
+    Returns
+    -------
+    str
+        URL in ``user@host:/path`` or ``host:/path`` form.
+    """
+    prefix = f"{remote_user}@" if remote_user else ""
+    return f"{prefix}{host}:{remote_root}"
+
+
 def load_registry(path: Path | None = None) -> ContextRegistry:
     """Load the context registry.
 

@@ -2,15 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import quote
 
 import typer
 from rich.prompt import Confirm, Prompt
 
-from sftpwarden.cli_commands.common import (
-    app,
-    handle_error,
-)
+from sftpwarden.cli_commands.app import app
+from sftpwarden.cli_commands.output import handle_error
+from sftpwarden.cli_commands.prompts import prompt_sql_dsn
 from sftpwarden.config import (
     ProviderType,
     default_project_config,
@@ -29,6 +27,7 @@ from sftpwarden.contexts import (
     parse_remote_url,
     register_context,
     remote_context,
+    remote_url_from_parts,
     set_default_context,
 )
 from sftpwarden.providers import (
@@ -37,7 +36,7 @@ from sftpwarden.providers import (
 )
 from sftpwarden.remote.checks import verify_remote_runtime_requirements
 from sftpwarden.render.compose import write_compose
-from sftpwarden.services.cli_workflows import install_context_watcher, remote_url_from_parts
+from sftpwarden.services.cli_workflows import install_context_watcher
 from sftpwarden.utils.console import print_info, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
 from sftpwarden.utils.files import write_private_text
@@ -400,112 +399,6 @@ def init_project_config(
         query=query,
         table=table,
     )
-
-
-def prompt_sql_dsn(provider: ProviderType) -> str:
-    """Prompt for SQL connection fields and build a provider DSN.
-
-    Parameters
-    ----------
-    provider
-        SQL provider type.
-
-    Returns
-    -------
-    str
-        Conventional database URL for the selected provider.
-    """
-    scheme = sql_dsn_scheme(provider)
-    port = sql_default_port(provider)
-    host = Prompt.ask("SQL host", default="localhost")
-    port_text = Prompt.ask("SQL port", default=str(port))
-    database = Prompt.ask("SQL database", default="sftpwarden")
-    username = Prompt.ask("SQL username", default="sftpwarden")
-    password = Prompt.ask("SQL password", password=True, default="")
-    return build_sql_dsn(
-        scheme=scheme,
-        username=username,
-        password=password,
-        host=host,
-        port=int(port_text),
-        database=database,
-    )
-
-
-def sql_dsn_scheme(provider: ProviderType) -> str:
-    """Return the conventional database URL scheme for a SQL provider.
-
-    Parameters
-    ----------
-    provider
-        SQL provider type.
-
-    Returns
-    -------
-    str
-        URL scheme used in provider DSNs.
-    """
-    if provider == ProviderType.MYSQL:
-        return "mysql"
-    return "postgresql"
-
-
-def sql_default_port(provider: ProviderType) -> int:
-    """Return the default TCP port for a SQL provider.
-
-    Parameters
-    ----------
-    provider
-        SQL provider type.
-
-    Returns
-    -------
-    int
-        Default database port.
-    """
-    if provider == ProviderType.MYSQL:
-        return 3306
-    return 5432
-
-
-def build_sql_dsn(
-    *,
-    scheme: str,
-    username: str,
-    password: str,
-    host: str,
-    port: int,
-    database: str,
-) -> str:
-    """Build a SQL database URL with URL-escaped credentials.
-
-    Parameters
-    ----------
-    scheme
-        Database URL scheme.
-    username
-        Database username.
-    password
-        Database password.
-    host
-        Database host.
-    port
-        Database TCP port.
-    database
-        Database name.
-
-    Returns
-    -------
-    str
-        Database URL/DSN.
-    """
-    quoted_user = quote(username, safe="")
-    quoted_password = quote(password, safe="")
-    quoted_database = quote(database, safe="")
-    credentials = quoted_user
-    if password:
-        credentials = f"{quoted_user}:{quoted_password}"
-    return f"{scheme}://{credentials}@{host}:{port}/{quoted_database}"
 
 
 def ensure_sql_table_for_init(

@@ -7,13 +7,12 @@ from rich import box
 from rich.prompt import Confirm
 from rich.table import Table
 
-from sftpwarden.cli_commands.common import (
-    app,
+from sftpwarden.cli_commands.app import app, user_app
+from sftpwarden.cli_commands.output import (
     handle_error,
     print_json,
-    prompt_password_hash,
-    user_app,
 )
+from sftpwarden.cli_commands.prompts import prompt_password_hash
 from sftpwarden.services.cli_workflows import print_refresh_after_user_change
 from sftpwarden.services.users import UserService
 from sftpwarden.utils.console import console, print_success

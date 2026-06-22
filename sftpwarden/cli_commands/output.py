@@ -1,38 +1,15 @@
 from __future__ import annotations
 
-import hmac
 import json
-from typing import Annotated, Any
+from typing import Any
 
 import typer
 from rich import box
-from rich.prompt import Prompt
 from rich.table import Table
 
 from sftpwarden.runtime import RuntimePlan
-from sftpwarden.security.passwords import resolve_password_hash
-from sftpwarden.utils._version import get_version
-from sftpwarden.utils.console import console
+from sftpwarden.utils.console import console, print_info, print_success
 from sftpwarden.utils.errors import SFTPWardenError
-
-app = typer.Typer(help="Container-native SFTP gateway powered by OpenSSH.")
-config_app = typer.Typer(
-    help="Global CLI configuration.",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-context_app = typer.Typer(
-    help="Context registry management.",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
-runtime_app = typer.Typer(help="Runtime-only commands used inside the container.")
-user_app = typer.Typer(help="Manage users in mutable providers.")
-watcher_app = typer.Typer(help="Watcher management.")
-
-app.add_typer(config_app, name="config")
-app.add_typer(context_app, name="context")
-app.add_typer(runtime_app, name="runtime")
-app.add_typer(user_app, name="user")
-app.add_typer(watcher_app, name="watcher")
 
 
 def handle_error(exc: SFTPWardenError) -> None:
@@ -47,39 +24,6 @@ def handle_error(exc: SFTPWardenError) -> None:
     if exc.suggestion:
         console.print(f"[bold yellow]Fix:[/bold yellow] {exc.suggestion}")
     raise typer.Exit(1)
-
-
-def prompt_password_hash(
-    *,
-    password: str | None,
-    password_hash: str | None,
-    prompt_if_missing: bool = False,
-) -> str | None:
-    """Resolve password options into a stored password hash.
-
-    Parameters
-    ----------
-    password
-        Plaintext password provided through the CLI.
-    password_hash
-        Precomputed password hash provided through the CLI.
-    prompt_if_missing
-        Whether to prompt interactively when neither password option is set.
-
-    Returns
-    -------
-    str or None
-        Password hash ready to persist, or ``None`` when no password was provided.
-    """
-    if password is not None and password_hash is not None:
-        return resolve_password_hash(password=password, password_hash=password_hash)
-    if password is None and password_hash is None and prompt_if_missing:
-        first = Prompt.ask("Password", password=True)
-        second = Prompt.ask("Repeat password", password=True)
-        if not hmac.compare_digest(first, second):
-            raise SFTPWardenError("Passwords do not match.")
-        password = first
-    return resolve_password_hash(password=password, password_hash=password_hash)
 
 
 def runtime_plan_to_json(runtime_plan: RuntimePlan) -> str:
@@ -178,33 +122,26 @@ def print_runtime_plan(runtime_plan: RuntimePlan) -> None:
     console.print(table)
 
 
-def version_callback(value: bool) -> None:
-    """Handle the eager ``--version`` option.
+def print_deploy_config_plan(reasons: list[str]) -> None:
+    """Print deploy-level configuration plan details.
 
     Parameters
     ----------
-    value
-        Whether the version flag was provided.
+    reasons
+        Detected configuration changes.
     """
-    if value:
-        console.print(f"SFTPWarden {get_version()}")
-        raise typer.Exit()
+    if not reasons:
+        print_success("No deploy-level configuration changes detected.")
+        return
+    print_info(
+        "Configuration/deploy changes detected. These changes will be applied by "
+        "`sftpwarden deploy`; `sftpwarden refresh` only applies user/provider changes."
+    )
+    for reason in reasons:
+        console.print(f"  [cyan]-[/cyan] {reason}")
 
 
-@app.callback()
-def main(
-    version: Annotated[
-        bool,
-        typer.Option(
-            "--version", callback=version_callback, is_eager=True, help="Show version and exit."
-        ),
-    ] = False,
-) -> None:
-    """Configure root CLI options.
-
-    Parameters
-    ----------
-    version
-        Eager version flag handled by Typer before command dispatch.
-    """
-    _ = version
+def print_watcher_without_local_sync_targets() -> None:
+    """Print guidance for an installed watcher with no local-sync targets."""
+    print_info("Watcher is installed but there are no remote local-sync contexts left.")
+    console.print("Run `sftpwarden watcher uninstall` if you no longer need it.")

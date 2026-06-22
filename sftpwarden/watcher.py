@@ -18,6 +18,7 @@ from sftpwarden.remote.ssh import (
     uses_default_ssh_identity,
 )
 from sftpwarden.system.commands import command_text, run_checked
+from sftpwarden.utils.collections import unique_items
 from sftpwarden.utils.errors import ContextError
 from sftpwarden.utils.paths import app_home, contexts_path
 
@@ -84,8 +85,8 @@ def remote_root_path(context: ContextEntry, local_path: Path) -> str:
     return f"{context.remote.remote_root.rstrip('/')}/{relative_path.as_posix()}"
 
 
-def editable_sync_targets(context: ContextEntry, config: SFTPWardenConfig) -> list[WatchTarget]:
-    """Return user-provider files that should be synced for a context.
+def editable_sync_target(context: ContextEntry, config: SFTPWardenConfig) -> WatchTarget | None:
+    """Return the user-provider file that should be synced for a context.
 
     Parameters
     ----------
@@ -96,20 +97,20 @@ def editable_sync_targets(context: ContextEntry, config: SFTPWardenConfig) -> li
 
     Returns
     -------
-    list[WatchTarget]
-        Existing user-provider files to sync.
+    WatchTarget | None
+        Existing user-provider file to sync, or ``None`` when the context has no local
+        editable user file.
     """
     if not context.remote or config.provider.type not in FILE_PROVIDER_TYPES:
-        return []
+        return None
     provider_path = provider_local_path(context.root, config)
-    candidates = [
-        WatchTarget(
-            context=context.name,
-            local_path=provider_path,
-            remote_path=remote_root_path(context, provider_path),
-        )
-    ]
-    return [target for target in candidates if target.local_path.exists()]
+    if not provider_path.exists():
+        return None
+    return WatchTarget(
+        context=context.name,
+        local_path=provider_path,
+        remote_path=remote_root_path(context, provider_path),
+    )
 
 
 def derive_watch_targets() -> list[WatchTarget]:
@@ -135,7 +136,9 @@ def derive_watch_targets() -> list[WatchTarget]:
         if not config_path.exists():
             continue
         config = load_config(config_path)
-        targets.extend(editable_sync_targets(context, config))
+        target = editable_sync_target(context, config)
+        if target:
+            targets.append(target)
     return sorted(targets, key=lambda target: (target.context, str(target.local_path)))
 
 
@@ -478,22 +481,6 @@ def render_docker_watcher_compose(*, image: str | None = None) -> str:
         }
     }
     return yaml.safe_dump(model, sort_keys=False)
-
-
-def unique_items(values: list[str]) -> list[str]:
-    """Return a list with duplicates removed while preserving order.
-
-    Parameters
-    ----------
-    values
-        Input values.
-
-    Returns
-    -------
-    list[str]
-        Unique values.
-    """
-    return list(dict.fromkeys(values))
 
 
 def docker_watcher_ssh_volumes() -> list[str]:

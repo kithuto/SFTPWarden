@@ -4,7 +4,7 @@ import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from sftpwarden.config import validate_relative_safe_path
+from sftpwarden.utils.validation import validate_relative_safe_path
 
 USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 PUBLIC_KEY_PREFIXES = (

@@ -5,10 +5,10 @@ from typing import Annotated
 import typer
 from rich.prompt import Confirm
 
-from sftpwarden.cli_commands.common import (
+from sftpwarden.cli_commands.app import watcher_app
+from sftpwarden.cli_commands.output import (
     handle_error,
     print_json,
-    watcher_app,
 )
 from sftpwarden.contexts import require_initialized_context
 from sftpwarden.utils.console import console, print_success, terminal_status

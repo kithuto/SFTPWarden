@@ -18,6 +18,11 @@ from sftpwarden.utils.constants import (
 from sftpwarden.utils.errors import ConfigError, ProviderError
 from sftpwarden.utils.files import write_private_text
 from sftpwarden.utils.paths import expand_path
+from sftpwarden.utils.validation import (
+    validate_octal_permissions,
+    validate_provider_path,
+    validate_relative_safe_path,
+)
 
 SQL_TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
 
@@ -549,47 +554,3 @@ def validate_raw_config_keys(data: dict[str, Any]) -> None:
             "server.container_port is not supported. The container SSH port is always 22.",
             suggestion="Use server.port to configure the host port exposed by Docker.",
         )
-
-
-def validate_relative_safe_path(value: str, *, field_name: str) -> None:
-    """Validate a relative path that cannot traverse directories.
-
-    Parameters
-    ----------
-    value
-        Path value to validate.
-    field_name
-        Config field name used in error messages.
-    """
-    path = Path(value)
-    if path.is_absolute():
-        raise ValueError(f"{field_name} must be relative.")
-    if not value or any(part in {"", ".", ".."} for part in path.parts):
-        raise ValueError(f"{field_name} must not contain empty, current, or parent segments.")
-
-
-def validate_provider_path(value: str | Path) -> None:
-    """Validate a provider path for unsafe segments.
-
-    Parameters
-    ----------
-    value
-        Provider path value.
-    """
-    path = Path(value)
-    if any(part in {"", ".", ".."} for part in path.parts):
-        raise ValueError("provider.path must not contain empty, current, or parent segments.")
-
-
-def validate_octal_permissions(value: str, *, field_name: str) -> None:
-    """Validate an octal permission string.
-
-    Parameters
-    ----------
-    value
-        Permission string.
-    field_name
-        Config field name used in error messages.
-    """
-    if not re.fullmatch(r"0?[0-7]{3}", value):
-        raise ValueError(f"{field_name} must be a three-digit octal permission string.")

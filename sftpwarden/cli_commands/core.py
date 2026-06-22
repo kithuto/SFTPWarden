@@ -10,9 +10,10 @@ from rich import box
 from rich.prompt import Confirm
 from rich.table import Table
 
-from sftpwarden.cli_commands.common import (
-    app,
+from sftpwarden.cli_commands.app import app
+from sftpwarden.cli_commands.output import (
     handle_error,
+    print_deploy_config_plan,
     print_json,
     print_runtime_plan,
     runtime_plan_explanation,
@@ -166,25 +167,6 @@ def deploy_config_change_reasons(entry, loaded) -> list[str]:
     elif compose_path.read_text(encoding="utf-8") != expected_compose:
         reasons.append(f"{loaded.docker.compose_file} differs from current configuration")
     return reasons
-
-
-def print_deploy_config_plan(reasons: list[str]) -> None:
-    """Print deploy-level configuration plan details.
-
-    Parameters
-    ----------
-    reasons
-        Detected configuration changes.
-    """
-    if not reasons:
-        print_success("No deploy-level configuration changes detected.")
-        return
-    print_info(
-        "Configuration/deploy changes detected. These changes will be applied by "
-        "`sftpwarden deploy`; `sftpwarden refresh` only applies user/provider changes."
-    )
-    for reason in reasons:
-        console.print(f"  [cyan]-[/cyan] {reason}")
 
 
 @app.command()

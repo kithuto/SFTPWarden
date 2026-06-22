@@ -10,11 +10,12 @@ import typer
 from typer.testing import CliRunner
 
 import sftpwarden.cli as cli_module
-import sftpwarden.cli_commands.common as common_commands
+import sftpwarden.cli_commands.app as app_commands
 import sftpwarden.cli_commands.config as config_commands
 import sftpwarden.cli_commands.context as context_commands
 import sftpwarden.cli_commands.core as core_commands
 import sftpwarden.cli_commands.init as init_commands
+import sftpwarden.cli_commands.prompts as prompt_commands
 import sftpwarden.cli_commands.runtime as runtime_commands
 import sftpwarden.cli_commands.users as user_commands
 import sftpwarden.cli_commands.watcher as watcher_commands
@@ -32,6 +33,7 @@ from sftpwarden.contexts import (
     local_context,
     save_registry,
 )
+from sftpwarden.utils.dsn import build_sql_dsn
 from sftpwarden.utils.errors import SFTPWardenError
 from sftpwarden.watcher import WatcherInstallMode, WatchTarget
 
@@ -74,9 +76,9 @@ def test_cli_version_callback_and_module_entrypoint(monkeypatch: pytest.MonkeyPa
     calls: list[str] = []
     monkeypatch.setattr(cli_module, "app", lambda: calls.append("called"))
 
-    common_commands.version_callback(False)
+    app_commands.version_callback(False)
     with pytest.raises(typer.Exit):
-        common_commands.version_callback(True)
+        app_commands.version_callback(True)
     runpy.run_module("sftpwarden", run_name="__main__", alter_sys=True)
 
     assert calls == ["called"]
@@ -86,23 +88,23 @@ def test_prompt_password_hash_prompts_and_rejects_mismatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     answers = iter(["secret-one", "secret-two"])
-    monkeypatch.setattr(common_commands.Prompt, "ask", lambda *_args, **_kwargs: next(answers))
+    monkeypatch.setattr(prompt_commands.Prompt, "ask", lambda *_args, **_kwargs: next(answers))
 
     with pytest.raises(SFTPWardenError, match="Passwords do not match"):
-        common_commands.prompt_password_hash(
+        prompt_commands.prompt_password_hash(
             password=None, password_hash=None, prompt_if_missing=True
         )
 
     answers = iter(["secret-one", "secret-one"])
-    monkeypatch.setattr(common_commands.Prompt, "ask", lambda *_args, **_kwargs: next(answers))
+    monkeypatch.setattr(prompt_commands.Prompt, "ask", lambda *_args, **_kwargs: next(answers))
     monkeypatch.setattr(
-        common_commands,
+        prompt_commands,
         "resolve_password_hash",
         lambda *, password, password_hash: f"hash:{password or password_hash}",
     )
 
     assert (
-        common_commands.prompt_password_hash(
+        prompt_commands.prompt_password_hash(
             password=None, password_hash=None, prompt_if_missing=True
         )
         == "hash:secret-one"
@@ -480,7 +482,7 @@ def test_context_update_helpers_cover_root_and_type_transitions(
         )
 
     answers = iter(["example.com", "deploy", "/srv/sftpwarden"])
-    monkeypatch.setattr(context_commands.Prompt, "ask", lambda *_args, **_kwargs: next(answers))
+    monkeypatch.setattr(prompt_commands.Prompt, "ask", lambda *_args, **_kwargs: next(answers))
     remote_entry = context_commands.convert_context_type(
         entry,
         "remote",
@@ -716,7 +718,7 @@ def test_init_direct_helpers_cover_prompts_sql_and_remote_checks(
         )
     answers_for_dsn = iter(["db.example.com", "3307", "sftp", "user", "pass"])
     monkeypatch.setattr(
-        init_commands.Prompt, "ask", lambda *_args, **_kwargs: next(answers_for_dsn)
+        prompt_commands.Prompt, "ask", lambda *_args, **_kwargs: next(answers_for_dsn)
     )
     prompted_sql = init_commands.init_project_config(
         "sql",
@@ -729,7 +731,7 @@ def test_init_direct_helpers_cover_prompts_sql_and_remote_checks(
     assert prompted_sql.provider.dsn == "mysql://user:pass@db.example.com:3307/sftp"
     example_secret = "p@ss/w:rd"
     assert (
-        init_commands.build_sql_dsn(
+        build_sql_dsn(
             scheme="postgresql",
             username="sftp user",
             password=example_secret,
