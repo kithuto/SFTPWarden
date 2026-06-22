@@ -93,7 +93,7 @@ git clone https://github.com/kithuto/sftpwarden.git
 cd sftpwarden
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[watch,mysql,postgres]"
+python -m pip install -e ".[mysql,postgres]"
 sftpwarden --version
 ```
 
@@ -101,10 +101,9 @@ Optional extras:
 
 | Need | Install |
 | --- | --- |
-| File watcher support | `pip install "sftpwarden[watch]"` |
 | MySQL provider | `pip install "sftpwarden[mysql]"` |
 | PostgreSQL provider | `pip install "sftpwarden[postgres]"` |
-| Documentation/development | `pip install -e ".[dev,docs,watch,mysql,postgres]"` |
+| Documentation/development | `pip install -e ".[dev,docs,mysql,postgres]"` |
 
 Build the runtime image locally:
 

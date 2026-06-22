@@ -46,7 +46,7 @@ git checkout dev
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev,docs,watch,mysql,postgres]"
+python -m pip install -e ".[dev,docs,mysql,postgres]"
 sftpwarden --version
 ```
 

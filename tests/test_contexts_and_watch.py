@@ -259,6 +259,32 @@ def test_watch_sql_provider_has_no_user_file_targets(
     assert targets == []
 
 
+def test_watch_skips_missing_local_provider_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(home))
+    project = tmp_path / "project"
+    project.mkdir()
+    config = default_project_config("prod")
+    write_config(project / "sftpwarden.yaml", config)
+    entry = remote_context(
+        name="prod",
+        provider=config.provider.type,
+        remote_url="deploy@example.com:/opt/sftpwarden",
+        local_root=project,
+        remote_root="~/sftpwarden",
+        remote_only=False,
+        ssh_key=None,
+        critical=True,
+    )
+    save_registry(ContextRegistry(default="prod", contexts={"prod": entry}))
+
+    targets = derive_watch_targets()
+
+    assert targets == []
+
+
 def test_watch_derivation_skips_non_sync_or_incomplete_contexts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -341,6 +367,14 @@ def test_refresh_all_requires_registered_contexts(
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
 
     with pytest.raises(ContextError, match="No SFTPWarden context has been initialized"):
+        resolve_refresh_targets(all_contexts=True)
+
+    project = tmp_path / "project"
+    project.mkdir()
+    write_config(project / "sftpwarden.yaml", default_project_config("dev"))
+    monkeypatch.chdir(project)
+    save_registry(ContextRegistry())
+    with pytest.raises(ContextError, match="No contexts are registered"):
         resolve_refresh_targets(all_contexts=True)
 
 

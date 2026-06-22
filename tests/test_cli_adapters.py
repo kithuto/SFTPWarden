@@ -330,6 +330,22 @@ def test_context_commands_show_list_and_manage_defaults(
     assert rename_missing.exit_code == 1
 
 
+def test_context_clear_reports_registry_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner, _root = init_project(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        context_commands,
+        "require_initialized_context",
+        lambda: (_ for _ in ()).throw(SFTPWardenError("clear broken")),
+    )
+
+    result = runner.invoke(app, ["context", "clear"])
+
+    assert result.exit_code == 1
+    assert "clear broken" in result.output
+
+
 def test_context_dynamic_field_commands_read_update_and_report_errors(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -667,6 +683,50 @@ def test_core_deploy_critical_confirmation_can_cancel(
     result = runner.invoke(app, ["deploy"], input="n\n")
 
     assert result.exit_code == 1
+
+
+def test_refresh_command_runs_selected_context_without_dry_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner, _root = init_project(tmp_path, monkeypatch)
+    entry = load_registry().contexts["dev"]
+    calls: list[tuple[str, bool]] = []
+
+    monkeypatch.setattr(core_commands, "resolve_refresh_targets", lambda **_kwargs: [entry])
+
+    def fake_refresh_context(target, *, dry_run=False):
+        calls.append((target.name, dry_run))
+        return f"refreshed {target.name}"
+
+    monkeypatch.setattr(core_commands, "refresh_context", fake_refresh_context)
+
+    result = runner.invoke(app, ["refresh"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [("dev", False)]
+    assert "refreshed dev" in result.output
+
+
+def test_deploy_command_runs_selected_context_without_dry_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner, _root = init_project(tmp_path, monkeypatch)
+    entry = load_registry().contexts["dev"].model_copy(update={"critical": False})
+    calls: list[str] = []
+
+    monkeypatch.setattr(core_commands, "resolve_context", lambda **_kwargs: entry)
+
+    def fake_deploy_context(target, *, dry_run=False):
+        calls.append(f"{target.name}:{dry_run}")
+        return f"deployed {target.name}"
+
+    monkeypatch.setattr(core_commands, "deploy_context", fake_deploy_context)
+
+    result = runner.invoke(app, ["deploy"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == ["dev:False"]
+    assert "deployed dev" in result.output
 
 
 def test_init_command_prompt_and_error_paths(

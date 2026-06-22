@@ -8,7 +8,13 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import sftpwarden
-from sftpwarden.utils._version import _is_distribution_pyproject, _read_pyproject_version
+import sftpwarden.utils._version as version_module
+from sftpwarden.utils._version import (
+    _is_distribution_pyproject,
+    _pyproject_path,
+    _read_pyproject_version,
+    get_version,
+)
 
 
 class _ImageSourceParser(HTMLParser):
@@ -46,6 +52,25 @@ def test_version_pyproject_must_match_distribution_name(tmp_path: Path) -> None:
     assert not _is_distribution_pyproject(other_project)
     assert _is_distribution_pyproject(sftpwarden_project)
     assert _read_pyproject_version(sftpwarden_project) == "1.2.3"
+
+
+def test_version_helpers_ignore_invalid_pyprojects_and_fall_back_to_metadata(
+    tmp_path: Path, monkeypatch
+) -> None:
+    missing_project = tmp_path / "missing-project.toml"
+    missing_project.write_text('name = "sftpwarden"\n', encoding="utf-8")
+    invalid_toml = tmp_path / "invalid.toml"
+    invalid_toml.write_text("project = [\n", encoding="utf-8")
+
+    assert not _is_distribution_pyproject(missing_project)
+    assert not _is_distribution_pyproject(invalid_toml)
+
+    monkeypatch.setattr(version_module, "_is_distribution_pyproject", lambda _path: False)
+    assert _pyproject_path() is None
+
+    monkeypatch.setattr(version_module, "_pyproject_path", lambda: None)
+    monkeypatch.setattr(version_module.metadata, "version", lambda _name: "9.9.9")
+    assert get_version() == "9.9.9"
 
 
 def test_package_metadata_is_public_release_ready() -> None:

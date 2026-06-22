@@ -36,6 +36,7 @@ from sftpwarden.services.users import UserService
 from sftpwarden.users import SFTPUser
 from sftpwarden.users.service import remove_user
 from sftpwarden.utils.collections import unique_items
+from sftpwarden.utils.console import print_warning
 from sftpwarden.utils.dotted import format_value, get_dotted, parse_cli_value, set_dotted
 from sftpwarden.utils.dsn import sql_default_port, sql_dsn_scheme
 from sftpwarden.utils.errors import ConfigError, ProviderError, RuntimeError
@@ -56,6 +57,12 @@ def test_collection_and_dsn_utilities_are_stable() -> None:
     assert sql_dsn_scheme(ProviderType.POSTGRESQL) == "postgresql"
     assert sql_default_port(ProviderType.MYSQL) == 3306
     assert sql_default_port(ProviderType.POSTGRESQL) == 5432
+
+
+def test_warning_output_uses_standard_prefix(capsys: pytest.CaptureFixture[str]) -> None:
+    print_warning("check this")
+
+    assert "Warning" in capsys.readouterr().out
 
 
 def test_provider_wrapper_functions_round_trip_yaml(tmp_path: Path) -> None:
