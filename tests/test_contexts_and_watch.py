@@ -6,9 +6,9 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-import sftpwarden.refresh as refresh_module
+import sftpwarden.refresh.core as refresh_module
 import sftpwarden.remote.deploy as deploy_module
-import sftpwarden.watcher as watcher_module
+import sftpwarden.watcher.core as watcher_module
 from sftpwarden.cli import app
 from sftpwarden.config import (
     ProjectConfig,
@@ -29,11 +29,11 @@ from sftpwarden.contexts import (
     save_registry,
 )
 from sftpwarden.providers import empty_provider_text
-from sftpwarden.refresh import refresh_context, resolve_refresh_targets
+from sftpwarden.refresh.core import refresh_context, resolve_refresh_targets
 from sftpwarden.remote.deploy import deploy_context
 from sftpwarden.utils.errors import ContextError
 from sftpwarden.utils.errors import RuntimeError as SFTPWardenRuntimeError
-from sftpwarden.watcher import (
+from sftpwarden.watcher.core import (
     WatcherInstallMode,
     default_watcher_mode,
     derive_watch_targets,

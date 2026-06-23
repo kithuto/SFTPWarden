@@ -475,16 +475,20 @@ sphinx-build -b html docs docs/_build/html
 
 ## Roadmap
 
-### v1.1 - Providers, Backup, Import/Export, and Health
-
-Released in `1.1.0`: SQLite, MariaDB, MongoDB, provider transfer,
-backup/restore, and healthchecks.
+See the [changelog](https://github.com/kithuto/sftpwarden/blob/main/CHANGELOG.md)
+for released versions and the longer future roadmap.
 
 ### v1.2 - Kubernetes
 
 - Add Helm chart and Kubernetes manifests.
 - Add ConfigMap/Secret/PVC examples.
 - Add liveness/readiness probes.
+
+### v1.3 - Audit and Observability
+
+- Add audit logging for CLI and runtime operations.
+- Add commands for listing, tailing, and exporting audit events.
+- Add richer runtime status and operational visibility.
 
 ## Contributing
 

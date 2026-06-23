@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 
-import sftpwarden.runtime as runtime_module
+import sftpwarden.runtime.core as runtime_module
 from sftpwarden.config import ProjectConfig, SFTPWardenConfig, write_config
 from sftpwarden.providers import ProviderUsers, SFTPUser
-from sftpwarden.runtime import (
+from sftpwarden.runtime.core import (
     ResolvedUser,
     RuntimeState,
     RuntimeUserState,
