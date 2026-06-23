@@ -28,6 +28,20 @@ html_title = "SFTPWarden"
 html_static_path = ["_static"]
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+html_theme_options = {
+    "collapse_navigation": False,
+    "navigation_depth": 2,
+    "sticky_navigation": True,
+    "titles_only": False,
+}
+html_css_files = [
+    "custom.css",
+]
+html_js_files = [
+    "sidebar_scroll.js",
+    "search_modal.js",
+    "sidebar_sections.js",
+]
 
 myst_heading_anchors = 3
 myst_enable_extensions = ["colon_fence"]

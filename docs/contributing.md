@@ -46,9 +46,12 @@ git checkout dev
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev,docs,watch,mysql,postgres]"
+python -m pip install -e ".[dev,docs,mysql,postgres,mongodb]"
 sftpwarden --version
 ```
+
+The `mysql` extra also enables MariaDB because both providers use PyMySQL. The
+`mariadb` extra is an alias for the same dependency.
 
 Use Python 3.11, 3.12, 3.13, or 3.14. Install the Python versions locally before
 running the full `tox` matrix.
@@ -176,10 +179,15 @@ docker build -t sftpwarden:local -f docker/runtime/Dockerfile .
 docker build -t sftpwarden-watcher:local -f docker/watcher/Dockerfile .
 sftpwarden validate --config examples/yaml/sftpwarden.yaml
 sftpwarden validate --config examples/csv/sftpwarden.yaml
+sftpwarden validate --config examples/sqlite/sftpwarden.yaml
 SFTPWARDEN_MYSQL_DSN=mysql://user:pass@localhost/sftp \
   sftpwarden validate --config examples/mysql/sftpwarden.yaml
+SFTPWARDEN_MARIADB_DSN=mariadb://user:pass@localhost/sftp \
+  sftpwarden validate --config examples/mariadb/sftpwarden.yaml
 SFTPWARDEN_POSTGRES_DSN=postgresql://user:pass@localhost/sftp \
   sftpwarden validate --config examples/postgres/sftpwarden.yaml
+SFTPWARDEN_MONGODB_DSN=mongodb://localhost:27017/sftp \
+  sftpwarden validate --config examples/mongodb/sftpwarden.yaml
 ```
 
 Also check the repository-level security workflow before making the repository

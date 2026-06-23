@@ -71,6 +71,6 @@ def test_release_workflow_publishes_from_main_only_when_version_changes() -> Non
     assert "changed: ${{ steps.version.outputs.changed }}" in text
     assert "if: needs.verify.outputs.changed == 'true'" in text
     assert "pyproject.toml" in text
-    assert "sftpwarden.__version__" in text
+    assert "sftpwarden.__version__" not in text
     assert "pypa/gh-action-pypi-publish" in text
     assert "softprops/action-gh-release" in text

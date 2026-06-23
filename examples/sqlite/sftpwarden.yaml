@@ -1,0 +1,6 @@
+version: 1
+project:
+  name: sqlite-example
+provider:
+  type: sqlite
+  path: /etc/sftpwarden/users.sqlite

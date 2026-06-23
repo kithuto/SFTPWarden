@@ -37,7 +37,7 @@ def test_user_service_add_show_update_and_remove(
 
     assert shown.username == "alice"
     assert result.user.comment == "Accounting"
-    assert result.runtime_changed is False
+    assert not result.runtime_changed
     assert service.list_users().users[0].comment == "Accounting"
 
     service.remove_user("alice")
@@ -55,4 +55,4 @@ def test_user_service_runtime_update_reports_refresh_needed(
     result = service.update_user("alice", uid=12001)
 
     assert result.user.uid == 12001
-    assert result.runtime_changed is True
+    assert result.runtime_changed

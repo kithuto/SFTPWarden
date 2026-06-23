@@ -12,6 +12,7 @@ from typing import Any, Literal
 from sftpwarden.config import SFTPWardenConfig, load_config
 from sftpwarden.providers import ProviderUsers, SFTPUser, load_users, users_fingerprint
 from sftpwarden.system.commands import run, run_checked
+from sftpwarden.utils.console import console
 from sftpwarden.utils.constants import CONTAINER_CONFIG_PATH
 from sftpwarden.utils.errors import RuntimeError
 
@@ -872,6 +873,7 @@ def load_runtime_inputs(
         dsn=config.provider.dsn,
         query=config.provider.query,
         table=config.provider.table,
+        collection=config.provider.collection,
     )
     state = RuntimeState.load(state_path(config))
     return config, users, state
@@ -929,5 +931,5 @@ def run_sync_loop(config_path: str | Path = CONTAINER_CONFIG_PATH) -> None:
         if config.sync.enabled:
             result = apply_once(config_path)
             if result != "No user changes detected.":
-                print(result, flush=True)
+                console.print(result)
         time.sleep(config.sync.interval_seconds)

@@ -58,8 +58,11 @@ updates:
   - package-ecosystem: "docker-compose"
     directories:
       - "/examples/csv"
+      - "/examples/mariadb"
       - "/examples/mysql"
+      - "/examples/mongodb"
       - "/examples/postgres"
+      - "/examples/sqlite"
       - "/examples/watcher-docker"
       - "/examples/yaml"
     target-branch: "dev"

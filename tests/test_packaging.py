@@ -3,26 +3,111 @@ from __future__ import annotations
 import subprocess
 import sys
 import tomllib
+from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urlparse
 
 import sftpwarden
+import sftpwarden.utils._version as version_module
+from sftpwarden.utils._version import (
+    _is_distribution_pyproject,
+    _pyproject_path,
+    _read_pyproject_version,
+    get_version,
+)
 
 
-def test_package_version_matches_module_version() -> None:
+class _ImageSourceParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sources: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "img":
+            return
+        for name, value in attrs:
+            if name == "src" and value:
+                self.sources.append(value)
+
+
+def test_package_version_is_read_from_pyproject() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
     assert pyproject["project"]["version"] == sftpwarden.__version__
+
+
+def test_version_pyproject_must_match_distribution_name(tmp_path: Path) -> None:
+    other_project = tmp_path / "pyproject.toml"
+    other_project.write_text(
+        '[project]\nname = "other-project"\nversion = "9.9.9"\n',
+        encoding="utf-8",
+    )
+
+    sftpwarden_project = tmp_path / "sftpwarden.toml"
+    sftpwarden_project.write_text(
+        '[project]\nname = "sftpwarden"\nversion = "1.2.3"\n',
+        encoding="utf-8",
+    )
+
+    assert not _is_distribution_pyproject(other_project)
+    assert _is_distribution_pyproject(sftpwarden_project)
+    assert _read_pyproject_version(sftpwarden_project) == "1.2.3"
+
+
+def test_version_helpers_ignore_invalid_pyprojects_and_fall_back_to_metadata(
+    tmp_path: Path, monkeypatch
+) -> None:
+    missing_project = tmp_path / "missing-project.toml"
+    missing_project.write_text('name = "sftpwarden"\n', encoding="utf-8")
+    invalid_toml = tmp_path / "invalid.toml"
+    invalid_toml.write_text("project = [\n", encoding="utf-8")
+
+    assert not _is_distribution_pyproject(missing_project)
+    assert not _is_distribution_pyproject(invalid_toml)
+
+    monkeypatch.setattr(version_module, "_is_distribution_pyproject", lambda _path: False)
+    assert _pyproject_path() is None
+
+    monkeypatch.setattr(version_module, "_pyproject_path", lambda: None)
+    monkeypatch.setattr(version_module.metadata, "version", lambda _name: "9.9.9")
+    assert get_version() == "9.9.9"
 
 
 def test_package_metadata_is_public_release_ready() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     project = pyproject["project"]
 
-    assert project["version"] == "1.0.0"
+    assert project["version"] == "1.1.0"
     assert "Development Status :: 5 - Production/Stable" in project["classifiers"]
-    assert project["license"] == "Apache-2.0"
+    assert project["license"] == "MIT"
+    assert project["license-files"] == ["LICENSE"]
     assert project["readme"] == "README.md"
     assert project["urls"]["Documentation"] == "https://kithuto.github.io/sftpwarden/"
+
+
+def test_database_extras_cover_public_provider_aliases() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    extras = pyproject["project"]["optional-dependencies"]
+
+    assert extras["mysql"] == extras["mariadb"] == ["pymysql"]
+    assert extras["mongodb"] == ["pymongo"]
+
+
+def test_readme_uses_pypi_safe_logo_url() -> None:
+    readme = Path("README.md").read_text(encoding="utf-8")
+    parser = _ImageSourceParser()
+    parser.feed(readme)
+
+    logo_sources = [source for source in parser.sources if "logo-sftpwarden.png" in source]
+
+    assert logo_sources == [
+        "https://raw.githubusercontent.com/kithuto/SFTPWarden/main/docs/_static/logo-sftpwarden.png"
+    ]
+    parsed = urlparse(logo_sources[0])
+    assert parsed.scheme == "https"
+    assert parsed.netloc == "raw.githubusercontent.com"
+    assert "logo%20sftpwarden" not in readme
+    assert 'src="docs/_static/' not in readme
 
 
 def test_installed_console_script_reports_version() -> None:

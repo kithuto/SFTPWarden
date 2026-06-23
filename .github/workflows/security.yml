@@ -29,7 +29,7 @@ jobs:
       - name: Install scan tools
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[watch,mysql,postgres]" pip-audit
+          python -m pip install -e ".[mysql,postgres,mongodb]" pip-audit
 
       - name: Audit Python dependencies
         run: pip-audit

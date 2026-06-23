@@ -200,7 +200,7 @@ def test_runtime_plan_creates_new_user() -> None:
 
     plan = build_runtime_plan(config, ProviderUsers(users=[user("alice")]), RuntimeState(users={}))
 
-    assert plan.changed is True
+    assert plan.changed
     assert plan.actions[0].action == "create"
     assert plan.actions[0].username == "alice"
 
@@ -216,7 +216,7 @@ def test_runtime_plan_noops_when_fingerprint_matches() -> None:
 
     plan = build_runtime_plan(config, users, state)
 
-    assert plan.changed is False
+    assert not plan.changed
     assert plan.actions == []
 
 
@@ -238,7 +238,7 @@ def test_runtime_plan_force_updates_existing_user() -> None:
 
     plan = build_runtime_plan(config, users, state, force=True)
 
-    assert plan.changed is True
+    assert plan.changed
     assert plan.actions[0].action == "update"
 
 
@@ -274,7 +274,7 @@ def test_runtime_plan_disables_missing_user() -> None:
 
     plan = build_runtime_plan(config, ProviderUsers(users=[]), state)
 
-    assert plan.changed is True
+    assert plan.changed
     assert plan.actions[0].action == "disable"
     assert plan.actions[0].reason == "missing from provider"
 
@@ -450,7 +450,7 @@ def test_disable_missing_marks_existing_system_users_disabled(
     disable_missing(config, ProviderUsers(users=[]), state)
 
     assert commands == [["usermod", "-p", "!", "alice"]]
-    assert state.users["alice"].disabled is True
+    assert state.users["alice"].disabled
 
 
 def test_disable_missing_returns_when_feature_is_disabled(
@@ -477,13 +477,13 @@ def test_disable_missing_returns_when_feature_is_disabled(
 
 def test_user_exists_handles_present_and_missing_users(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(runtime_module.pwd, "getpwnam", lambda username: object())
-    assert runtime_module.user_exists("alice") is True
+    assert runtime_module.user_exists("alice")
 
     def missing_user(_username: str) -> object:
         raise KeyError
 
     monkeypatch.setattr(runtime_module.pwd, "getpwnam", missing_user)
-    assert runtime_module.user_exists("alice") is False
+    assert not runtime_module.user_exists("alice")
 
 
 def test_write_authorized_keys_uses_restricted_key_options(

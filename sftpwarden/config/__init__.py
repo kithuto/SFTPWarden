@@ -18,6 +18,11 @@ from sftpwarden.utils.constants import (
 from sftpwarden.utils.errors import ConfigError, ProviderError
 from sftpwarden.utils.files import write_private_text
 from sftpwarden.utils.paths import expand_path
+from sftpwarden.utils.validation import (
+    validate_octal_permissions,
+    validate_provider_path,
+    validate_relative_safe_path,
+)
 
 SQL_TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
 
@@ -27,8 +32,32 @@ class ProviderType(StrEnum):
 
     YAML = "yaml"
     CSV = "csv"
+    SQLITE = "sqlite"
     MYSQL = "mysql"
     POSTGRESQL = "postgresql"
+    MARIADB = "mariadb"
+    MONGODB = "mongodb"
+
+
+FILE_PROVIDER_TYPES = {ProviderType.YAML, ProviderType.CSV, ProviderType.SQLITE}
+RELATIONAL_PROVIDER_TYPES = {
+    ProviderType.SQLITE,
+    ProviderType.MYSQL,
+    ProviderType.POSTGRESQL,
+    ProviderType.MARIADB,
+}
+EXTERNAL_DSN_PROVIDER_TYPES = {
+    ProviderType.MYSQL,
+    ProviderType.POSTGRESQL,
+    ProviderType.MARIADB,
+    ProviderType.MONGODB,
+}
+SQL_QUERY_PROVIDER_TYPES = {
+    ProviderType.MYSQL,
+    ProviderType.POSTGRESQL,
+    ProviderType.MARIADB,
+}
+WATCHER_SYNC_PROVIDER_TYPES = FILE_PROVIDER_TYPES
 
 
 class RemoteStorage(StrEnum):
@@ -208,6 +237,7 @@ class ProviderConfig(BaseModel):
     dsn: str | None = None
     query: str | None = None
     table: str = "sftp_users"
+    collection: str = "sftp_users"
 
     @field_validator("path")
     @classmethod
@@ -255,7 +285,7 @@ class ProviderConfig(BaseModel):
         ProviderConfig
             Validated provider config.
         """
-        if self.type in {ProviderType.MYSQL, ProviderType.POSTGRESQL}:
+        if self.type in SQL_QUERY_PROVIDER_TYPES:
             if not self.dsn:
                 raise ValueError(f"{self.type.value} provider requires dsn.")
             if self.query:
@@ -265,8 +295,24 @@ class ProviderConfig(BaseModel):
                     validate_sql_read_query(self.query)
                 except ProviderError as exc:
                     raise ValueError(str(exc)) from exc
-        elif self.dsn or self.query or self.table != "sftp_users":
-            raise ValueError("dsn/query/table are only supported for SQL providers.")
+            if self.collection != "sftp_users":
+                raise ValueError("provider.collection is only supported for mongodb providers.")
+        elif self.type == ProviderType.MONGODB:
+            if not self.dsn:
+                raise ValueError("mongodb provider requires dsn.")
+            if self.query or self.table != "sftp_users":
+                raise ValueError("provider.query/table are not supported for mongodb providers.")
+        elif self.type == ProviderType.SQLITE:
+            if self.dsn or self.query or self.collection != "sftp_users":
+                raise ValueError(
+                    "provider.dsn/query/collection are not supported for sqlite providers."
+                )
+        elif (
+            self.dsn or self.query or self.table != "sftp_users" or self.collection != "sftp_users"
+        ):
+            raise ValueError(
+                "provider.dsn/query/table/collection are only supported for SQL/database providers."
+            )
         return self
 
 
@@ -450,6 +496,7 @@ def default_project_config(
     dsn: str | None = None,
     query: str | None = None,
     table: str = "sftp_users",
+    collection: str = "sftp_users",
 ) -> SFTPWardenConfig:
     """Create a default project configuration.
 
@@ -474,7 +521,9 @@ def default_project_config(
     provider_path = f"{CONTAINER_PROVIDER_DIR}/users.yaml"
     if provider == ProviderType.CSV:
         provider_path = f"{CONTAINER_PROVIDER_DIR}/users.csv"
-    if provider in {ProviderType.MYSQL, ProviderType.POSTGRESQL}:
+    if provider == ProviderType.SQLITE:
+        provider_path = f"{CONTAINER_PROVIDER_DIR}/users.sqlite"
+    if provider in SQL_QUERY_PROVIDER_TYPES:
         return SFTPWardenConfig(
             project=ProjectConfig(name=name),
             provider=ProviderConfig(
@@ -483,6 +532,16 @@ def default_project_config(
                 dsn=dsn,
                 query=query,
                 table=table,
+            ),
+        )
+    if provider == ProviderType.MONGODB:
+        return SFTPWardenConfig(
+            project=ProjectConfig(name=name),
+            provider=ProviderConfig(
+                type=provider,
+                path=provider_path,
+                dsn=dsn,
+                collection=collection,
             ),
         )
     return SFTPWardenConfig(
@@ -549,47 +608,3 @@ def validate_raw_config_keys(data: dict[str, Any]) -> None:
             "server.container_port is not supported. The container SSH port is always 22.",
             suggestion="Use server.port to configure the host port exposed by Docker.",
         )
-
-
-def validate_relative_safe_path(value: str, *, field_name: str) -> None:
-    """Validate a relative path that cannot traverse directories.
-
-    Parameters
-    ----------
-    value
-        Path value to validate.
-    field_name
-        Config field name used in error messages.
-    """
-    path = Path(value)
-    if path.is_absolute():
-        raise ValueError(f"{field_name} must be relative.")
-    if not value or any(part in {"", ".", ".."} for part in path.parts):
-        raise ValueError(f"{field_name} must not contain empty, current, or parent segments.")
-
-
-def validate_provider_path(value: str | Path) -> None:
-    """Validate a provider path for unsafe segments.
-
-    Parameters
-    ----------
-    value
-        Provider path value.
-    """
-    path = Path(value)
-    if any(part in {"", ".", ".."} for part in path.parts):
-        raise ValueError("provider.path must not contain empty, current, or parent segments.")
-
-
-def validate_octal_permissions(value: str, *, field_name: str) -> None:
-    """Validate an octal permission string.
-
-    Parameters
-    ----------
-    value
-        Permission string.
-    field_name
-        Config field name used in error messages.
-    """
-    if not re.fullmatch(r"0?[0-7]{3}", value):
-        raise ValueError(f"{field_name} must be a three-digit octal permission string.")

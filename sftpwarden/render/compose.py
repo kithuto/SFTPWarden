@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from sftpwarden.config import ProviderType, SFTPWardenConfig, provider_local_path
+from sftpwarden.config import FILE_PROVIDER_TYPES, SFTPWardenConfig, provider_local_path
 from sftpwarden.utils.constants import CONTAINER_CONFIG_PATH
 from sftpwarden.utils.paths import expand_path
 
@@ -31,7 +31,7 @@ def compose_model(config: SFTPWardenConfig, project_root: str | Path = ".") -> d
         "./state:/var/lib/sftpwarden",
         "./host_keys:/etc/sftpwarden/host_keys",
     ]
-    if config.provider.type not in {ProviderType.MYSQL, ProviderType.POSTGRESQL}:
+    if config.provider.type in FILE_PROVIDER_TYPES:
         provider_path = provider_local_path(root, config)
         volumes.insert(1, f"./{provider_path.name}:{config.provider.path}:ro")
     return {
@@ -48,6 +48,20 @@ def compose_model(config: SFTPWardenConfig, project_root: str | Path = ".") -> d
                 "security_opt": ["no-new-privileges:true"],
                 "cap_drop": ["ALL"],
                 "cap_add": ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID", "SYS_CHROOT"],
+                "healthcheck": {
+                    "test": [
+                        "CMD",
+                        "sftpwarden",
+                        "runtime",
+                        "health",
+                        "--config",
+                        CONTAINER_CONFIG_PATH,
+                    ],
+                    "interval": "30s",
+                    "timeout": "10s",
+                    "retries": 3,
+                    "start_period": "20s",
+                },
             }
         }
     }

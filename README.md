@@ -1,6 +1,6 @@
 <p align="center">
   <img
-    src="docs/_static/logo-sftpwarden.png"
+    src="https://raw.githubusercontent.com/kithuto/SFTPWarden/main/docs/_static/logo-sftpwarden.png"
     alt="SFTPWarden - Container-native SFTP management"
     width="760"
   >
@@ -32,37 +32,14 @@
 
 SFTPWarden runs OpenSSH in a container and keeps users, host keys, data, and runtime
 state outside the image. You manage environments with `sftpwarden`, and the runtime
-keeps Linux users synchronized from YAML, CSV, MySQL, or PostgreSQL.
-
-## Key Features
-
-- **Fast adoption for real SFTP needs:** create a local or remote SFTP environment
-  with `sftpwarden init`, add users, and deploy with Docker Compose without
-  hand-writing OpenSSH container plumbing.
-- **Declarative user sources:** manage accounts from YAML, CSV, MySQL, or
-  PostgreSQL, so small teams can start with files and larger systems can use SQL.
-- **Safe user isolation:** every SFTP user is forced into OpenSSH `internal-sftp`
-  and isolated under `/data/<username>` with chroot-oriented defaults.
-- **Docker-native operations:** generated Compose files, `sftpwarden deploy`,
-  `plan`, `refresh`, `watch`, `--dry-run`, and `--json` make it practical for
-  local development, CI, and production runbooks.
-- **Context-based workflow:** use Docker-style active contexts for `dev`, `prod`,
-  remote local-sync, and remote-only deployments instead of repeating long flags
-  on every command.
-- **Remote deployment built in:** deploy through SSH, rsync, and Docker Compose,
-  with systemd or Docker watcher modes for syncing user-provider changes.
-- **Operationally conservative defaults:** secrets are not baked into images,
-  plaintext provider passwords are rejected, host keys and state are persisted,
-  and user data is never deleted unless explicitly requested.
-
-SFTPWarden is intentionally lightweight. It is not a full identity platform, a file
-sharing suite, or VM-grade isolation. It gives you a conservative OpenSSH-based SFTP
-runtime that is easy to understand, deploy, and operate.
+keeps Linux users synchronized from YAML, CSV, SQLite, MySQL, MariaDB,
+PostgreSQL, or MongoDB.
 
 ## Table of Contents
 
 - [Key Features](#key-features)
 - [Installation](#installation)
+- [Shell Autocomplete](#shell-autocomplete)
 - [5-Minute Quick Start](#5-minute-quick-start)
 - [Deployment Choices](#deployment-choices)
 - [Project Files](#project-files)
@@ -75,6 +52,34 @@ runtime that is easy to understand, deploy, and operate.
 - [Contributing](#contributing)
 
 ---
+
+## Key Features
+
+- **Fast adoption for real SFTP needs:** create a local or remote SFTP environment
+  with `sftpwarden init`, add users, and deploy with Docker Compose without
+  hand-writing OpenSSH container plumbing.
+- **Declarative user sources:** manage accounts from YAML, CSV, SQLite, MySQL,
+  MariaDB, PostgreSQL, or MongoDB, so small teams can start with files and larger
+  systems can use databases.
+- **Safe user isolation:** every SFTP user is forced into OpenSSH `internal-sftp`
+  and isolated under `/data/<username>` with chroot-oriented defaults.
+- **Docker-native operations:** generated Compose files, `sftpwarden deploy`,
+  `plan`, `refresh`, `watch`, `--dry-run`, and `--json` make it practical for
+  local development, CI, and production runbooks.
+- **Context-based workflow:** use Docker-style active contexts for `dev`, `prod`,
+  remote local-sync, and remote-only deployments instead of repeating long flags
+  on every command.
+- **Remote deployment built in:** deploy through SSH, rsync, and Docker Compose,
+  with systemd or Docker watcher modes for syncing user-provider changes.
+- **Portable operations:** copy users between providers, export/import user
+  snapshots, create backups, restore safely, and run project/runtime healthchecks.
+- **Operationally conservative defaults:** secrets are not baked into images,
+  plaintext provider passwords are rejected, host keys and state are persisted,
+  and user data is never deleted unless explicitly requested.
+
+SFTPWarden is intentionally lightweight. It is not a full identity platform, a file
+sharing suite, or VM-grade isolation. It gives you a conservative OpenSSH-based SFTP
+runtime that is easy to understand, deploy, and operate.
 
 ## Installation
 
@@ -92,7 +97,7 @@ git clone https://github.com/kithuto/sftpwarden.git
 cd sftpwarden
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[watch,mysql,postgres]"
+python -m pip install -e ".[mysql,postgres,mongodb]"
 sftpwarden --version
 ```
 
@@ -100,15 +105,43 @@ Optional extras:
 
 | Need | Install |
 | --- | --- |
-| File watcher support | `pip install "sftpwarden[watch]"` |
+| SQLite provider | Included, no extra |
 | MySQL provider | `pip install "sftpwarden[mysql]"` |
+| MariaDB provider | `pip install "sftpwarden[mariadb]"` |
 | PostgreSQL provider | `pip install "sftpwarden[postgres]"` |
-| Documentation/development | `pip install -e ".[dev,docs,watch,mysql,postgres]"` |
+| MongoDB provider | `pip install "sftpwarden[mongodb]"` |
+| Documentation/development | `pip install -e ".[dev,docs,mysql,postgres,mongodb]"` |
+
+`mariadb` is an alias of the MySQL extra. Installing either
+`sftpwarden[mysql]` or `sftpwarden[mariadb]` enables both MySQL and MariaDB
+providers because they share PyMySQL.
 
 Build the runtime image locally:
 
 ```bash
 docker build -t sftpwarden:local -f docker/runtime/Dockerfile .
+```
+
+## Shell Autocomplete
+
+SFTPWarden can install shell autocomplete through the Typer/Click helpers included
+in the CLI:
+
+```bash
+sftpwarden --install-completion
+```
+
+Open a new terminal, then use `<TAB>` to complete commands and options:
+
+```bash
+sftpwarden con<TAB>
+sftpwarden user add --<TAB>
+```
+
+To inspect the generated completion script without installing it:
+
+```bash
+sftpwarden --show-completion
 ```
 
 ## 5-Minute Quick Start
@@ -216,7 +249,7 @@ require confirmation unless marked with `--critical` or accepted with `--yes`.
 
 ```text
 sftpwarden.yaml
-users.yaml              # or users.csv
+users.yaml              # or users.csv / users.sqlite
 docker-compose.yml
 data/
 state/
@@ -276,8 +309,11 @@ Updating only `comment` does not refresh the runtime because comments are metada
 | --- | ---: | ---: | --- |
 | YAML | Yes | Yes | Quick start, GitOps-style small deployments |
 | CSV | Yes | Yes | Spreadsheet-friendly user handoff |
+| SQLite | Yes | Yes | Single-host/self-hosted deployments without an external database |
 | MySQL | Yes | Yes | Existing application databases |
+| MariaDB | Yes | Yes | MySQL-compatible MariaDB deployments |
 | PostgreSQL | Yes | Yes | Existing platform or product databases |
+| MongoDB | Yes | Yes | Existing document databases |
 
 SQL providers read from `sftp_users` by default. The table should include:
 
@@ -285,18 +321,73 @@ SQL providers read from `sftp_users` by default. The table should include:
 username, public_keys, password_hash, uid, gid, upload_dir, comment, disabled
 ```
 
-See `examples/mysql/schema.sql` and `examples/postgres/schema.sql`.
+See `examples/mysql/schema.sql`, `examples/mariadb/schema.sql`, and
+`examples/postgres/schema.sql`.
 
-During `init`, SFTPWarden checks whether the configured SQL table exists. If it is
-missing, it asks whether to create the table or abort so you can create it
-manually:
+SQLite is built in:
 
 ```bash
+sftpwarden init dev --provider sqlite --yes
+```
+
+SQLite is a good lightweight option for one host and one writer. Avoid it for NFS,
+high-concurrency, or multi-writer deployments.
+
+During `init`, SFTPWarden checks whether external provider storage exists. For
+MySQL, MariaDB, and PostgreSQL that means the configured SQL table. For MongoDB
+that means the configured collection and username index. If storage is missing,
+interactive init asks whether to create it or abort so you can create it manually:
+
+```bash
+sftpwarden init prod \
+  --provider postgresql \
+  --dsn 'postgresql://sftpwarden:change-me@db.example.com:5432/sftpwarden' \
+  --create-table
+```
+
+MariaDB uses the same compatible implementation as MySQL:
+
+```bash
+sftpwarden init prod \
+  --provider mariadb \
+  --dsn 'mariadb://sftpwarden:change-me@db.example.com:3306/sftpwarden' \
+  --create-table
+```
+
+MongoDB stores one document per user with `_id = username`:
+
+```bash
+sftpwarden init prod \
+  --provider mongodb \
+  --dsn 'mongodb://mongo.example.com:27017/sftpwarden' \
+  --collection sftp_users
+```
+
+`--dsn` uses the standard database URL/DSN convention:
+
+```text
+postgresql://user:password@host:5432/database
+mysql://user:password@host:3306/database
+mariadb://user:password@host:3306/database
+mongodb://user:password@host:27017/database
+```
+
+For real environments, prefer an environment variable so the secret is not typed
+directly in shell history or committed in project files:
+
+```bash
+export SFTPWARDEN_POSTGRES_DSN='postgresql://sftpwarden:change-me@db.example.com:5432/sftpwarden'
+
 sftpwarden init prod \
   --provider postgresql \
   --dsn '${SFTPWARDEN_POSTGRES_DSN}' \
   --create-table
 ```
+
+If you run interactive `init` with MySQL, MariaDB, or PostgreSQL and omit
+`--dsn`, SFTPWarden asks for host, port, database, username, and password, then
+writes the equivalent DSN for you. For MongoDB, interactive init asks for the
+MongoDB DSN directly.
 
 ## Operations
 
@@ -310,13 +401,23 @@ sftpwarden deploy --dry-run
 sftpwarden plan --json
 sftpwarden refresh --dry-run
 sftpwarden watcher status --json
+sftpwarden health --json
+sftpwarden backup --output sftpwarden-dev.tar.gz --yes
+sftpwarden provider export --format json > users.json
 ```
 
 `watch` and `refresh` are different on purpose:
 
-- `sftpwarden watch` syncs YAML/CSV user provider files for remote `local-sync` contexts.
+- `sftpwarden watch` syncs YAML/CSV/SQLite user provider files for remote
+  `local-sync` contexts.
 - `sftpwarden refresh` tells a running runtime to reload users immediately.
 - Configuration and Docker Compose changes require `sftpwarden deploy`.
+- `sftpwarden health` validates config, provider readability, Compose drift, and
+  runtime health where available.
+- `sftpwarden backup` stores config, provider snapshot, host keys, and runtime
+  state. It excludes `data/` unless `--include-data` is explicitly used.
+- `sftpwarden provider copy` moves users between contexts/providers with explicit
+  `--merge` or `--replace` semantics.
 
 `sftpwarden deploy` checks for Docker Compose before starting local deployments.
 For remote deployments, the remote host must have Docker Compose v2 available as
@@ -374,7 +475,12 @@ sphinx-build -b html docs docs/_build/html
 
 ## Roadmap
 
-### v1.1 - Kubernetes
+### v1.1 - Providers, Backup, Import/Export, and Health
+
+Released in `1.1.0`: SQLite, MariaDB, MongoDB, provider transfer,
+backup/restore, and healthchecks.
+
+### v1.2 - Kubernetes
 
 - Add Helm chart and Kubernetes manifests.
 - Add ConfigMap/Secret/PVC examples.

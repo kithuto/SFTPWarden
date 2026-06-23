@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TypeVar
 
 from sftpwarden.config import ProviderConfig, ProviderType, SFTPWardenConfig, provider_local_path
 from sftpwarden.providers.base import BaseProvider
 from sftpwarden.utils.errors import ProviderError
 
+_ProviderT = TypeVar("_ProviderT", bound=BaseProvider)
 ProviderClass = type[BaseProvider]
 _PROVIDERS: dict[ProviderType, ProviderClass] = {}
 
 
-def register_provider(provider_class: ProviderClass) -> ProviderClass:
+def register_provider(provider_class: type[_ProviderT]) -> type[_ProviderT]:
     """Register a provider class.
 
     Parameters
@@ -20,7 +22,7 @@ def register_provider(provider_class: ProviderClass) -> ProviderClass:
 
     Returns
     -------
-    ProviderClass
+    type[_ProviderT]
         The same class, enabling decorator usage.
     """
     _PROVIDERS[provider_class.provider_type] = provider_class
@@ -59,6 +61,7 @@ def build_provider(
     dsn: str | None = None,
     query: str | None = None,
     table: str = "sftp_users",
+    collection: str = "sftp_users",
 ) -> BaseProvider:
     """Build a provider instance from explicit provider settings.
 
@@ -74,6 +77,8 @@ def build_provider(
         Optional SQL read query.
     table
         SQL table name.
+    collection
+        MongoDB collection name.
 
     Returns
     -------
@@ -81,7 +86,13 @@ def build_provider(
         Provider instance.
     """
     normalized = ProviderType(provider_type)
-    provider_config = ProviderConfig(type=normalized, dsn=dsn, query=query, table=table)
+    provider_config = ProviderConfig(
+        type=normalized,
+        dsn=dsn,
+        query=query,
+        table=table,
+        collection=collection,
+    )
     provider_path = Path(path) if path is not None else None
     return provider_class(normalized)(provider_config, path=provider_path)
 

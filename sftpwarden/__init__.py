@@ -1,3 +1,5 @@
 """SFTPWarden package."""
 
-__version__ = "1.0.0"
+from sftpwarden.utils._version import get_version
+
+__version__ = get_version()

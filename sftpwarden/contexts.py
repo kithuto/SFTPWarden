@@ -122,6 +122,27 @@ def parse_remote_url(value: str) -> ParsedRemoteURL:
     )
 
 
+def remote_url_from_parts(*, host: str, remote_root: str, remote_user: str | None) -> str:
+    """Build a compact remote URL from context parts.
+
+    Parameters
+    ----------
+    host
+        Remote SSH host.
+    remote_root
+        Remote project root.
+    remote_user
+        Optional SSH user.
+
+    Returns
+    -------
+    str
+        URL in ``user@host:/path`` or ``host:/path`` form.
+    """
+    prefix = f"{remote_user}@" if remote_user else ""
+    return f"{prefix}{host}:{remote_root}"
+
+
 def load_registry(path: Path | None = None) -> ContextRegistry:
     """Load the context registry.
 
@@ -166,6 +187,48 @@ def save_registry(registry: ContextRegistry, path: Path | None = None) -> None:
     )
     with suppress(OSError):
         os.chmod(registry_path, 0o600)
+
+
+def has_initialized_context(*, cwd: Path | None = None) -> bool:
+    """Return whether at least one context or local project exists.
+
+    Parameters
+    ----------
+    cwd
+        Optional working directory used to detect an initialized local project.
+
+    Returns
+    -------
+    bool
+        ``True`` when the registry has contexts or the working directory contains
+        ``sftpwarden.yaml``.
+    """
+    registry = load_registry()
+    if registry.contexts:
+        return True
+    working_dir = cwd or Path.cwd()
+    return (working_dir / CONFIG_FILENAME).exists()
+
+
+def require_initialized_context(*, cwd: Path | None = None) -> None:
+    """Require that SFTPWarden has been initialized at least once.
+
+    Parameters
+    ----------
+    cwd
+        Optional working directory used to detect an initialized local project.
+
+    Raises
+    ------
+    ContextError
+        Raised when no context registry entry or local project config exists.
+    """
+    if has_initialized_context(cwd=cwd):
+        return
+    raise ContextError(
+        "No SFTPWarden context has been initialized.",
+        suggestion="Run `sftpwarden init <name>` first.",
+    )
 
 
 def register_context(entry: ContextEntry) -> ContextRegistry:
@@ -399,11 +462,10 @@ def resolve_context(
             config=str(local_config),
             provider=config.provider.type,
         )
+    require_initialized_context(cwd=working_dir)
     raise ContextError(
-        "No SFTPWarden context could be resolved.",
-        suggestion=(
-            "Run `sftpwarden init <name>`, `sftpwarden context use <name>`, or pass --config."
-        ),
+        "No active SFTPWarden context could be resolved.",
+        suggestion="Run `sftpwarden context use <name>` or pass --context.",
     )
 
 

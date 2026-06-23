@@ -4,11 +4,11 @@ from typing import Annotated
 
 import typer
 
-from sftpwarden.cli_commands.common import (
-    handle_error,
+from sftpwarden.cli_commands.app import runtime_app
+from sftpwarden.cli_commands.errors import handle_error
+from sftpwarden.cli_commands.output import (
     print_json,
     print_runtime_plan,
-    runtime_app,
     runtime_plan_explanation,
     runtime_plan_to_json,
 )
@@ -18,7 +18,8 @@ from sftpwarden.runtime import (
     load_runtime_inputs,
     run_sync_loop,
 )
-from sftpwarden.utils.console import console
+from sftpwarden.services.health import runtime_health as runtime_health_report
+from sftpwarden.utils.console import console, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
 
 
@@ -34,7 +35,9 @@ def runtime_refresh(
         Runtime config path inside the container.
     """
     try:
-        console.print(apply_once(config, force=True))
+        with terminal_status("Refreshing runtime users"):
+            output = apply_once(config, force=True)
+        console.print(output)
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -80,6 +83,33 @@ def runtime_sync(
         Runtime config path inside the container.
     """
     try:
+        console.print("[bold]Starting runtime sync loop[/bold]")
         run_sync_loop(config)
+    except SFTPWardenError as exc:
+        handle_error(exc)
+
+
+@runtime_app.command("health")
+def runtime_health(
+    config: Annotated[str, typer.Option("--config")] = "/etc/sftpwarden/sftpwarden.yaml",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Check runtime-internal health without applying changes.
+
+    Parameters
+    ----------
+    config
+        Runtime config path inside the container.
+    json_output
+        Whether to emit JSON.
+    """
+    try:
+        report = runtime_health_report(config)
+        if json_output:
+            print_json(report.as_dict())
+            raise typer.Exit(0 if report.healthy else 1)
+        for check in report.checks:
+            console.print(f"[bold]{check.name}[/bold]: {check.status} - {check.message}")
+        raise typer.Exit(0 if report.healthy else 1)
     except SFTPWardenError as exc:
         handle_error(exc)

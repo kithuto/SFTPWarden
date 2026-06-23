@@ -18,6 +18,8 @@ your hosts and networks. Treat it as infrastructure.
   normal `ssh-agent`, `~/.ssh/config`, known hosts, and default identity.
 - Docker watcher mode requires an explicit dedicated SSH key; it never mounts
   the whole `~/.ssh` directory.
+- Backup archives can contain sensitive config, DSNs, host keys, runtime state,
+  and provider snapshots. Protect them like infrastructure secrets.
 
 ## SSH Restrictions
 
@@ -69,6 +71,21 @@ Use systemd watcher mode for production when the host's SSH configuration,
 default identity, agent, `ProxyJump`, or bastion rules matter. Docker watcher mode
 is intentionally stricter: every watched remote context must define `--ssh-key`
 with an existing dedicated deployment key.
+
+## Backups
+
+`sftpwarden backup` excludes SFTP user data under `data/` by default, but it still
+captures operational material that can be sensitive:
+
+- `sftpwarden.yaml`, including DSNs or environment variable names;
+- raw YAML/CSV/SQLite provider files when they are local;
+- exported `provider/users.json`;
+- `host_keys/`;
+- runtime `state/`.
+
+Use `--include-data` only when the actual SFTP files must be part of the archive.
+Store backups encrypted or in a restricted location, and avoid attaching them to
+issues or support tickets.
 
 ## Limitations
 

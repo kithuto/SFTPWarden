@@ -56,6 +56,26 @@ def test_init_without_root_uses_current_directory_and_sets_active_context(
     assert current.output.strip() == "dev"
 
 
+def test_context_commands_require_init_before_first_context(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+
+    commands = [
+        ["info"],
+        ["context", "ls"],
+        ["sync", "--dry-run"],
+        ["watcher", "status"],
+    ]
+
+    for command in commands:
+        result = runner.invoke(app, command)
+
+        assert result.exit_code == 1, result.output
+        assert "No SFTPWarden context has been initialized." in result.output
+        assert "Run `sftpwarden init <name>` first." in result.output
+
+
 def test_deploy_uses_active_local_context_and_builds_compose(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     root = tmp_path / "dev-project"
@@ -126,7 +146,7 @@ def test_plan_json_reports_detected_config_changes(tmp_path: Path, monkeypatch) 
     data = json.loads(result.output)
 
     assert result.exit_code == 0, result.output
-    assert data["deploy_config_changed"] is True
+    assert data["deploy_config_changed"]
     assert data["deploy_config_reasons"] == [
         "docker-compose.yml differs from current configuration"
     ]
@@ -375,7 +395,7 @@ def test_validate_json_reports_config_and_provider(tmp_path: Path, monkeypatch) 
     data = json.loads(result.output)
 
     assert result.exit_code == 0, result.output
-    assert data["valid"] is True
+    assert data["valid"]
     assert data["project"] == "dev"
     assert data["provider"] == "yaml"
     assert data["provider_path"] == str(root / "users.yaml")

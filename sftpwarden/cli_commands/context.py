@@ -4,14 +4,17 @@ import shutil
 from typing import Annotated
 
 import typer
-from rich.prompt import Confirm, Prompt
+from rich import box
+from rich.prompt import Confirm
 from rich.table import Table
 
-from sftpwarden.cli_commands.common import (
-    context_app,
-    handle_error,
+from sftpwarden.cli_commands.app import context_app
+from sftpwarden.cli_commands.errors import cli_error_from_exception, handle_error
+from sftpwarden.cli_commands.output import (
     print_json,
+    print_watcher_without_local_sync_targets,
 )
+from sftpwarden.cli_commands.prompts import prompt_remote_url
 from sftpwarden.config import (
     load_config,
     write_config,
@@ -29,13 +32,14 @@ from sftpwarden.contexts import (
     register_context,
     remote_context,
     remove_context,
+    require_initialized_context,
     resolve_context,
     save_registry,
     set_default_context,
 )
 from sftpwarden.remote.checks import verify_remote_runtime_requirements
 from sftpwarden.services.cli_workflows import install_context_watcher
-from sftpwarden.utils.console import console
+from sftpwarden.utils.console import console, print_success
 from sftpwarden.utils.constants import CONFIG_FILENAME
 from sftpwarden.utils.dotted import format_value, get_dotted, parse_cli_value, set_dotted
 from sftpwarden.utils.errors import SFTPWardenError
@@ -109,12 +113,12 @@ def context_value(
             delete_old_root=delete_old_root,
             yes=yes,
         )
-        console.print(f"Updated context [bold]{updated_name}[/bold] field [bold]{field}[/bold].")
+        print_success(f"Updated context [bold]{updated_name}[/bold] field [bold]{field}[/bold].")
         raise typer.Exit()
     except SFTPWardenError as exc:
         handle_error(exc)
     except ValueError as exc:
-        handle_error(SFTPWardenError(str(exc)))
+        handle_error(cli_error_from_exception(exc))
 
 
 def normalize_context_field(field: str) -> str:
@@ -297,10 +301,10 @@ def convert_context_type(
         raise SFTPWardenError("Context type must be local or remote.")
     final_remote_url = remote_url
     if not final_remote_url:
-        host = Prompt.ask("Remote host")
-        final_user = remote_user or Prompt.ask("Remote user")
-        final_remote_root = remote_root or Prompt.ask("Remote root", default="~/sftpwarden")
-        final_remote_url = f"{final_user}@{host}:{final_remote_root}"
+        final_remote_url = prompt_remote_url(
+            remote_user=remote_user,
+            remote_root=remote_root,
+        )
     provider = entry.provider
     return remote_context(
         name=entry.name,
@@ -347,9 +351,7 @@ def warn_if_watcher_has_no_local_sync_targets(registry: ContextRegistry) -> None
         for entry in registry.contexts.values()
     )
     if not has_local_sync:
-        message = "Watcher is installed but there are no remote local-sync contexts left."
-        console.print(f"[yellow]{message}[/yellow]")
-        console.print("Run `sftpwarden watcher uninstall` if you no longer need it.")
+        print_watcher_without_local_sync_targets()
 
 
 CONTEXT_FIELD_COMMANDS = {
@@ -425,13 +427,13 @@ def register_context_field_command(command_name: str, field: str) -> None:
                 delete_old_root=delete_old_root,
                 yes=yes,
             )
-            console.print(
+            print_success(
                 f"Updated context [bold]{updated_name}[/bold] field [bold]{command_name}[/bold]."
             )
         except SFTPWardenError as exc:
             handle_error(exc)
         except ValueError as exc:
-            handle_error(SFTPWardenError(str(exc)))
+            handle_error(cli_error_from_exception(exc))
 
     command.__name__ = f"context_{command_name.replace('.', '_').replace('-', '_')}"
     command.__doc__ = f"Show or update context field `{field}`."
@@ -451,25 +453,29 @@ def context_ls(json_output: Annotated[bool, typer.Option("--json")] = False) -> 
     json_output
         Whether to emit raw registry JSON.
     """
-    registry = load_registry()
-    if json_output:
-        print_json(registry.model_dump_json(indent=2))
-        return
-    table = Table(title="SFTPWarden contexts")
-    table.add_column("Default")
-    table.add_column("Name")
-    table.add_column("Type")
-    table.add_column("Provider")
-    table.add_column("Root")
-    for name, entry in registry.contexts.items():
-        table.add_row(
-            "*" if registry.default == name else "",
-            name,
-            entry.type.value,
-            entry.provider.value,
-            entry.root,
-        )
-    console.print(table)
+    try:
+        require_initialized_context()
+        registry = load_registry()
+        if json_output:
+            print_json(registry.model_dump_json(indent=2))
+            return
+        table = Table(title="SFTPWarden contexts", box=box.SIMPLE_HEAVY, header_style="bold cyan")
+        table.add_column("Default", justify="center")
+        table.add_column("Name", style="bold")
+        table.add_column("Type", style="cyan")
+        table.add_column("Provider")
+        table.add_column("Root")
+        for name, entry in registry.contexts.items():
+            table.add_row(
+                "*" if registry.default == name else "",
+                name,
+                entry.type.value,
+                entry.provider.value,
+                entry.root,
+            )
+        console.print(table)
+    except SFTPWardenError as exc:
+        handle_error(exc)
 
 
 @context_app.command("current")
@@ -492,7 +498,7 @@ def context_default(name: str) -> None:
     """
     try:
         set_default_context(name)
-        console.print(f"Default context set to [bold]{name}[/bold].")
+        print_success(f"Default context set to [bold]{name}[/bold].")
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -512,12 +518,16 @@ def context_use(name: str) -> None:
 @context_app.command("clear")
 def context_clear() -> None:
     """Clear the default context from the registry."""
-    registry = load_registry()
-    registry.default = None
-    from sftpwarden.contexts import save_registry
+    try:
+        require_initialized_context()
+        registry = load_registry()
+        registry.default = None
+        from sftpwarden.contexts import save_registry
 
-    save_registry(registry)
-    console.print("Default context cleared.")
+        save_registry(registry)
+        print_success("Default context cleared.")
+    except SFTPWardenError as exc:
+        handle_error(exc)
 
 
 @context_app.command("show")
@@ -551,7 +561,7 @@ def context_remove(name: str, yes: Annotated[bool, typer.Option("--yes", "-y")] 
         if not yes and not Confirm.ask(f"Remove context {name} from registry?", default=False):
             raise typer.Exit(1)
         remove_context(name)
-        console.print(f"Removed context [bold]{name}[/bold].")
+        print_success(f"Removed context [bold]{name}[/bold].")
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -581,7 +591,7 @@ def context_rename(old_name: str, new_name: str) -> None:
         from sftpwarden.contexts import save_registry
 
         save_registry(registry)
-        console.print(f"Renamed [bold]{old_name}[/bold] to [bold]{new_name}[/bold].")
+        print_success(f"Renamed [bold]{old_name}[/bold] to [bold]{new_name}[/bold].")
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -669,6 +679,6 @@ def context_add(
             entry = local_context(name, selected_root, loaded.provider.type, critical)
         register_context(entry)
         install_context_watcher(entry, requested_mode=watcher_mode, yes=yes)
-        console.print(f"Registered context [bold]{name}[/bold].")
+        print_success(f"Registered context [bold]{name}[/bold].")
     except SFTPWardenError as exc:
         handle_error(exc)

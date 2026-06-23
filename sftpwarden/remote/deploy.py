@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from sftpwarden.config import ProviderType, RemoteStorage, load_config, provider_local_path
+from sftpwarden.config import FILE_PROVIDER_TYPES, RemoteStorage, load_config, provider_local_path
 from sftpwarden.contexts import ContextEntry, ContextType, RemoteEndpoint
 from sftpwarden.remote.checks import verify_remote_runtime_requirements
 from sftpwarden.remote.ssh import rsync_ssh_transport, ssh_base_command
@@ -230,7 +230,7 @@ def required_sync_files(root: Path, *, config_path: Path, compose_path: Path) ->
     """
     config = load_config(config_path)
     files = [config_path, compose_path]
-    if config.provider.type not in {ProviderType.MYSQL, ProviderType.POSTGRESQL}:
+    if config.provider.type in FILE_PROVIDER_TYPES:
         files.insert(1, provider_local_path(root, config))
     for path in files:
         relative_parts = path.resolve().relative_to(root.resolve()).parts

@@ -6,12 +6,28 @@
 ```
 
 ```{toctree}
+:hidden:
 :maxdepth: 2
-:caption: Specific guides
+:caption: Start Here
 
-configuration
+self
 operations
+configuration
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 2
+:caption: Reference
+
 security
 cli-reference
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 2
+:caption: Project
+
 contributing
 ```

@@ -65,7 +65,7 @@ def test_remote_only_context_has_empty_top_level_paths() -> None:
     assert entry.storage == "remote-only"
     assert entry.root == ""
     assert entry.config == ""
-    assert entry.watcher_required is False
+    assert not entry.watcher_required
     assert entry.remote is not None
     assert entry.remote.remote_config == "/opt/sftpwarden/sftpwarden.yaml"
 
@@ -189,7 +189,7 @@ def test_sync_json_lists_watch_targets(tmp_path: Path, monkeypatch: pytest.Monke
     data = json.loads(result.output)
 
     assert result.exit_code == 0, result.output
-    assert data["dry_run"] is True
+    assert data["dry_run"]
     assert {target["remote_path"] for target in data["targets"]} == {"/opt/sftpwarden/users.yaml"}
 
 
@@ -242,6 +242,32 @@ def test_watch_sql_provider_has_no_user_file_targets(
     write_config(project / "sftpwarden.yaml", config)
     (project / "users.yaml").write_text("users: []\n", encoding="utf-8")
 
+    entry = remote_context(
+        name="prod",
+        provider=config.provider.type,
+        remote_url="deploy@example.com:/opt/sftpwarden",
+        local_root=project,
+        remote_root="~/sftpwarden",
+        remote_only=False,
+        ssh_key=None,
+        critical=True,
+    )
+    save_registry(ContextRegistry(default="prod", contexts={"prod": entry}))
+
+    targets = derive_watch_targets()
+
+    assert targets == []
+
+
+def test_watch_skips_missing_local_provider_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(home))
+    project = tmp_path / "project"
+    project.mkdir()
+    config = default_project_config("prod")
+    write_config(project / "sftpwarden.yaml", config)
     entry = remote_context(
         name="prod",
         provider=config.provider.type,
@@ -330,7 +356,7 @@ def test_refresh_json_reports_dry_run_results(
     data = json.loads(result.output)
 
     assert result.exit_code == 0, result.output
-    assert data["dry_run"] is True
+    assert data["dry_run"]
     assert data["targets"][0]["context"] == "dev"
     assert "docker compose" in data["targets"][0]["result"]
 
@@ -340,6 +366,14 @@ def test_refresh_all_requires_registered_contexts(
 ) -> None:
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
 
+    with pytest.raises(ContextError, match="No SFTPWarden context has been initialized"):
+        resolve_refresh_targets(all_contexts=True)
+
+    project = tmp_path / "project"
+    project.mkdir()
+    write_config(project / "sftpwarden.yaml", default_project_config("dev"))
+    monkeypatch.chdir(project)
+    save_registry(ContextRegistry())
     with pytest.raises(ContextError, match="No contexts are registered"):
         resolve_refresh_targets(all_contexts=True)
 
@@ -405,7 +439,7 @@ def test_init_remote_creates_local_sync_context(
     assert entry.storage == "local-sync"
     assert entry.remote is not None
     assert entry.remote.remote_root == "/opt/sftpwarden"
-    assert load_global_config().watcher.installed is True
+    assert load_global_config().watcher.installed
     assert load_global_config().watcher.mode == "systemd"
     assert registry.default == "prod"
 
@@ -470,7 +504,7 @@ def test_init_remote_only_does_not_install_watcher(
     )
 
     assert result.exit_code == 0, result.output
-    assert load_global_config().watcher.installed is False
+    assert not load_global_config().watcher.installed
 
 
 def test_watcher_install_is_idempotent_and_can_replace(
@@ -478,6 +512,8 @@ def test_watcher_install_is_idempotent_and_can_replace(
 ) -> None:
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     runner = CliRunner()
+    init = runner.invoke(app, ["init", "dev", "--root", str(tmp_path / "project"), "--yes"])
+    assert init.exit_code == 0, init.output
 
     first = runner.invoke(
         app, ["watcher", "install", "--watcher", "systemd", "--yes", "--no-activate"]
@@ -553,7 +589,7 @@ def test_uninstall_watcher_dry_run_keeps_metadata(
     message = uninstall_watcher(dry_run=True)
 
     assert message.startswith("Would uninstall systemd watcher")
-    assert load_global_config().watcher.installed is True
+    assert load_global_config().watcher.installed
 
 
 def test_run_watcher_commands_runs_each_command(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -707,13 +743,15 @@ def test_watcher_status_json_reports_state_and_targets(
 ) -> None:
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     runner = CliRunner()
+    init = runner.invoke(app, ["init", "dev", "--root", str(tmp_path / "project"), "--yes"])
+    assert init.exit_code == 0, init.output
     runner.invoke(app, ["watcher", "install", "--watcher", "systemd", "--yes", "--no-activate"])
 
     result = runner.invoke(app, ["watcher", "status", "--json"])
     data = json.loads(result.output)
 
     assert result.exit_code == 0, result.output
-    assert data["installed"] is True
+    assert data["installed"]
     assert data["mode"] == "systemd"
     assert data["targets"] == []
 
@@ -723,12 +761,14 @@ def test_watcher_uninstall_clears_global_metadata(
 ) -> None:
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     runner = CliRunner()
+    init = runner.invoke(app, ["init", "dev", "--root", str(tmp_path / "project"), "--yes"])
+    assert init.exit_code == 0, init.output
     runner.invoke(app, ["watcher", "install", "--watcher", "systemd", "--yes", "--no-activate"])
 
     result = runner.invoke(app, ["watcher", "uninstall", "--yes"])
 
     assert result.exit_code == 0, result.output
-    assert load_global_config().watcher.installed is False
+    assert not load_global_config().watcher.installed
 
 
 def test_systemd_watcher_install_plan_uses_sudo(
@@ -736,6 +776,8 @@ def test_systemd_watcher_install_plan_uses_sudo(
 ) -> None:
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     runner = CliRunner()
+    init = runner.invoke(app, ["init", "dev", "--root", str(tmp_path / "project"), "--yes"])
+    assert init.exit_code == 0, init.output
 
     result = runner.invoke(
         app,
@@ -774,7 +816,7 @@ def test_context_add_remote_local_sync_auto_installs_watcher(
     )
 
     assert result.exit_code == 0, result.output
-    assert load_global_config().watcher.installed is True
+    assert load_global_config().watcher.installed
     assert load_global_config().watcher.mode == "systemd"
 
 
@@ -1125,7 +1167,7 @@ def test_docker_watcher_ignores_context_without_remote(
 ) -> None:
     entry = local_context("dev", tmp_path / "dev", ProviderType.YAML)
     entry.type = ContextType.REMOTE
-    entry.storage = "local-sync"
+    entry.storage = "local-sync"  # type: ignore
     entry.remote = None
     monkeypatch.setattr(watcher_module, "docker_watcher_remote_contexts", lambda: [entry])
 

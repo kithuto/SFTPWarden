@@ -7,6 +7,7 @@ from sftpwarden.contexts import (
     ContextRegistry,
     ContextType,
     load_registry,
+    require_initialized_context,
     resolve_context,
 )
 from sftpwarden.remote.ssh import ssh_base_command
@@ -126,12 +127,13 @@ def resolve_refresh_targets(
         Raised when no context can be resolved.
     """
     if all_contexts:
+        require_initialized_context()
         registry: ContextRegistry = load_registry()
         targets = list(registry.contexts.values())
         if not targets:
             raise ContextError(
                 "No contexts are registered.",
-                suggestion="Run `sftpwarden init <name>` or `sftpwarden context add <name>`.",
+                suggestion="Run `sftpwarden init <name>` first.",
             )
         return targets
     return [resolve_context(config_path=config_path, context_name=context_name)]

@@ -13,7 +13,12 @@ import sftpwarden.system.commands as command_services
 from sftpwarden.cli import app
 from sftpwarden.config import ProviderConfig, ProviderType, default_project_config, write_config
 from sftpwarden.config.global_config import load_global_config, resolve_provider, save_global_config
-from sftpwarden.contexts import ContextRegistry, remote_context, save_registry
+from sftpwarden.contexts import (
+    ContextRegistry,
+    remote_context,
+    remote_url_from_parts,
+    save_registry,
+)
 from sftpwarden.providers import (
     ProviderUsers,
     empty_provider_text,
@@ -30,7 +35,10 @@ from sftpwarden.security.passwords import hash_password, resolve_password_hash
 from sftpwarden.services.users import UserService
 from sftpwarden.users import SFTPUser
 from sftpwarden.users.service import remove_user
+from sftpwarden.utils.collections import unique_items
+from sftpwarden.utils.console import print_warning
 from sftpwarden.utils.dotted import format_value, get_dotted, parse_cli_value, set_dotted
+from sftpwarden.utils.dsn import sql_default_port, sql_dsn_scheme
 from sftpwarden.utils.errors import ConfigError, ProviderError, RuntimeError
 from sftpwarden.utils.paths import (
     app_home,
@@ -41,6 +49,22 @@ from sftpwarden.utils.paths import (
 )
 
 TEST_HASH = "$6$rounds=500000$saltstring$hashvalue"
+
+
+def test_collection_and_dsn_utilities_are_stable() -> None:
+    assert unique_items(["a", "b", "a", "c", "b"]) == ["a", "b", "c"]
+    assert sql_dsn_scheme(ProviderType.MYSQL) == "mysql"
+    assert sql_dsn_scheme(ProviderType.MARIADB) == "mariadb"
+    assert sql_dsn_scheme(ProviderType.POSTGRESQL) == "postgresql"
+    assert sql_default_port(ProviderType.MYSQL) == 3306
+    assert sql_default_port(ProviderType.MARIADB) == 3306
+    assert sql_default_port(ProviderType.POSTGRESQL) == 5432
+
+
+def test_warning_output_uses_standard_prefix(capsys: pytest.CaptureFixture[str]) -> None:
+    print_warning("check this")
+
+    assert "Warning" in capsys.readouterr().out
 
 
 def test_provider_wrapper_functions_round_trip_yaml(tmp_path: Path) -> None:
@@ -234,15 +258,13 @@ def test_global_config_and_command_edges(tmp_path: Path, monkeypatch: pytest.Mon
 
 def test_cli_workflow_helpers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert (
-        workflow_services.remote_url_from_parts(
+        remote_url_from_parts(
             host="example.com", remote_root="/opt/sftpwarden", remote_user="deploy"
         )
         == "deploy@example.com:/opt/sftpwarden"
     )
     assert (
-        workflow_services.remote_url_from_parts(
-            host="example.com", remote_root="/opt/sftpwarden", remote_user=None
-        )
+        remote_url_from_parts(host="example.com", remote_root="/opt/sftpwarden", remote_user=None)
         == "example.com:/opt/sftpwarden"
     )
 

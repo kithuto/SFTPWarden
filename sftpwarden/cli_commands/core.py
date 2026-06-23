@@ -6,12 +6,14 @@ from pathlib import Path
 from typing import Annotated
 
 import typer
+from rich import box
 from rich.prompt import Confirm
 from rich.table import Table
 
-from sftpwarden.cli_commands.common import (
-    app,
-    handle_error,
+from sftpwarden.cli_commands.app import app
+from sftpwarden.cli_commands.errors import handle_error
+from sftpwarden.cli_commands.output import (
+    print_deploy_config_plan,
     print_json,
     print_runtime_plan,
     runtime_plan_explanation,
@@ -22,6 +24,7 @@ from sftpwarden.config import (
     provider_local_path,
 )
 from sftpwarden.contexts import (
+    require_initialized_context,
     resolve_context,
 )
 from sftpwarden.providers import (
@@ -34,7 +37,9 @@ from sftpwarden.runtime import (
     RuntimeState,
     build_runtime_plan,
 )
-from sftpwarden.utils.console import console
+from sftpwarden.services.backup import create_backup, restore_backup
+from sftpwarden.services.health import project_health
+from sftpwarden.utils.console import console, print_info, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
 from sftpwarden.utils.paths import expand_path
 from sftpwarden.watcher import (
@@ -65,8 +70,8 @@ def info(
         if json_output:
             print_json(entry.model_dump_json(indent=2))
             return
-        table = Table(title=f"Context {entry.name}")
-        table.add_column("Field")
+        table = Table(title=f"Context {entry.name}", box=box.SIMPLE_HEAVY, header_style="bold cyan")
+        table.add_column("Field", style="bold")
         table.add_column("Value")
         for key, value in entry.model_dump(mode="json", exclude_none=True).items():
             table.add_row(key, json.dumps(value) if isinstance(value, dict) else str(value))
@@ -104,10 +109,8 @@ def validate(
                 }
             )
             return
-        console.print(
-            f"[green]Valid config[/green] for project [bold]{loaded.project.name}[/bold]."
-        )
-        console.print(f"Provider: {loaded.provider.type.value} at {provider_path}")
+        print_success(f"Valid config for project [bold]{loaded.project.name}[/bold].")
+        print_info(f"Provider [bold]{loaded.provider.type.value}[/bold] at {provider_path}")
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -131,7 +134,7 @@ def compose(
         loaded = load_config(path)
         if write:
             target = write_compose(loaded, path.parent)
-            console.print(f"[green]Wrote[/green] {target}")
+            print_success(f"Wrote {target}")
             return
         console.print(compose_text(loaded, path.parent))
     except SFTPWardenError as exc:
@@ -166,25 +169,6 @@ def deploy_config_change_reasons(entry, loaded) -> list[str]:
     elif compose_path.read_text(encoding="utf-8") != expected_compose:
         reasons.append(f"{loaded.docker.compose_file} differs from current configuration")
     return reasons
-
-
-def print_deploy_config_plan(reasons: list[str]) -> None:
-    """Print deploy-level configuration plan details.
-
-    Parameters
-    ----------
-    reasons
-        Detected configuration changes.
-    """
-    if not reasons:
-        console.print("No deploy-level configuration changes detected.")
-        return
-    console.print(
-        "Configuration/deploy changes detected. These changes will be applied by "
-        "`sftpwarden deploy`; `sftpwarden refresh` only applies user/provider changes."
-    )
-    for reason in reasons:
-        console.print(f"- {reason}")
 
 
 @app.command()
@@ -222,8 +206,8 @@ def plan(
             data["deploy_config_reasons"] = config_change_reasons
             print_json(data)
             return
-        console.print(f"Context: [bold]{entry.name}[/bold]")
-        console.print(f"Provider users: {len(users.users)}")
+        print_info(f"Context [bold]{entry.name}[/bold]")
+        print_info(f"Provider users [bold]{len(users.users)}[/bold]")
         console.print(runtime_plan_explanation(runtime_plan, apply_command="sftpwarden refresh"))
         console.print(runtime_plan.summary())
         print_deploy_config_plan(config_change_reasons)
@@ -261,7 +245,11 @@ def refresh(
         )
         results = []
         for target in targets:
-            output = refresh_context(target, dry_run=dry_run)
+            if dry_run:
+                output = refresh_context(target, dry_run=True)
+            else:
+                with terminal_status(f"Refreshing context {target.name}"):
+                    output = refresh_context(target)
             results.append({"context": target.name, "result": output})
             if not json_output:
                 console.print(output)
@@ -286,6 +274,7 @@ def sync(
         Whether to emit sync targets as JSON.
     """
     try:
+        require_initialized_context()
         targets = derive_watch_targets()
         if json_output:
             print_json(
@@ -303,9 +292,12 @@ def sync(
             )
             return
         for target in targets:
-            console.print(f"{target.context}: {target.local_path} -> {target.remote_path}")
+            console.print(
+                f"[bold]{target.context}[/bold]: {target.local_path} [cyan]->[/cyan] "
+                f"{target.remote_path}"
+            )
         if dry_run:
-            console.print("Dry run only; no files synced.")
+            print_info("Dry run only; no files synced.")
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -325,7 +317,8 @@ def watch(
         Whether to report changes without syncing files.
     """
     try:
-        console.print("Watching remote local-sync contexts.")
+        require_initialized_context()
+        print_info("Watching remote local-sync contexts.")
         poll_watch(interval_seconds=interval, dry_run=dry_run)
     except SFTPWardenError as exc:
         handle_error(exc)
@@ -357,7 +350,12 @@ def deploy(
             and not Confirm.ask(f"Deploy critical context {entry.name}?", default=False)
         ):
             raise typer.Exit(1)
-        console.print(deploy_context(entry, dry_run=dry_run))
+        if dry_run:
+            console.print(deploy_context(entry, dry_run=True))
+            return
+        with terminal_status(f"Deploying context {entry.name}"):
+            output = deploy_context(entry)
+        print_success(output)
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -378,7 +376,183 @@ def doctor(json_output: Annotated[bool, typer.Option("--json")] = False) -> None
     if json_output:
         print_json({"checks": checks})
         return
-    console.print("SFTPWarden doctor")
+    console.print("[bold]SFTPWarden doctor[/bold]")
     for check in checks:
-        status = "available" if check["available"] else "check PATH"
-        console.print(f"- {check['name']}: {status}")
+        status = "[green]available[/green]" if check["available"] else "[yellow]check PATH[/yellow]"
+        console.print(f"  [cyan]-[/cyan] [bold]{check['name']}[/bold]: {status}")
+
+
+@app.command()
+def health(
+    context: Annotated[str | None, typer.Option("--context", "-c")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Check project and runtime health.
+
+    Parameters
+    ----------
+    context
+        Optional context name.
+    json_output
+        Whether to emit JSON.
+    """
+    try:
+        report = project_health(context)
+        if json_output:
+            print_json(report.as_dict())
+            raise typer.Exit(0 if report.healthy else 1)
+        table = Table(
+            title=f"Health for {report.context}",
+            box=box.SIMPLE_HEAVY,
+            header_style="bold cyan",
+        )
+        table.add_column("Check", style="bold")
+        table.add_column("Status")
+        table.add_column("Message")
+        table.add_column("Fix")
+        for check in report.checks:
+            style = {"pass": "green", "warn": "yellow", "fail": "red"}[check.status]
+            table.add_row(
+                check.name,
+                f"[{style}]{check.status}[/{style}]",
+                check.message,
+                check.suggestion or "",
+            )
+        console.print(table)
+        raise typer.Exit(0 if report.healthy else 1)
+    except SFTPWardenError as exc:
+        handle_error(exc)
+
+
+@app.command()
+def backup(
+    context: Annotated[str | None, typer.Option("--context", "-c")] = None,
+    output: Annotated[str | None, typer.Option("--output", "-o")] = None,
+    include_data: Annotated[bool, typer.Option("--include-data")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
+) -> None:
+    """Create a project backup.
+
+    Parameters
+    ----------
+    context
+        Optional context name.
+    output
+        Optional output archive path.
+    include_data
+        Whether to include SFTP user data.
+    dry_run
+        Whether to avoid writing.
+    json_output
+        Whether to emit JSON.
+    yes
+        Whether to skip include-data confirmation.
+    """
+    try:
+        if (
+            include_data
+            and not yes
+            and not dry_run
+            and not Confirm.ask(
+                "Include SFTP user data in the backup?",
+                default=False,
+            )
+        ):
+            raise typer.Exit(1)
+        result = create_backup(
+            context_name=context,
+            output=output,
+            include_data=include_data,
+            dry_run=dry_run,
+        )
+        data = {
+            "path": str(result.path),
+            "entries": result.entries,
+            "dry_run": dry_run,
+        }
+        if json_output:
+            print_json(data)
+            return
+        if dry_run:
+            print_info(f"Backup would be written to [bold]{result.path}[/bold].")
+        else:
+            print_success(f"Wrote backup [bold]{result.path}[/bold].")
+        for entry in result.entries:
+            console.print(f"  [cyan]-[/cyan] {entry}")
+    except SFTPWardenError as exc:
+        handle_error(exc)
+
+
+@app.command()
+def restore(
+    backup_path: Annotated[str, typer.Argument(help="Backup archive path.")],
+    context: Annotated[str | None, typer.Option("--context", "-c")] = None,
+    include_data: Annotated[bool, typer.Option("--include-data")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
+) -> None:
+    """Restore a project backup.
+
+    Parameters
+    ----------
+    backup_path
+        Backup archive path.
+    context
+        Optional context name.
+    include_data
+        Whether to restore SFTP user data.
+    dry_run
+        Whether to avoid writing.
+    json_output
+        Whether to emit JSON.
+    yes
+        Whether to skip confirmation.
+    """
+    try:
+        if (
+            not yes
+            and not dry_run
+            and not Confirm.ask(
+                "Restore backup and overwrite project files?",
+                default=False,
+            )
+        ):
+            raise typer.Exit(1)
+        if (
+            include_data
+            and not yes
+            and not dry_run
+            and not Confirm.ask(
+                "Restore SFTP user data from the backup?",
+                default=False,
+            )
+        ):
+            raise typer.Exit(1)
+        result = restore_backup(
+            context_name=context,
+            backup_path=backup_path,
+            include_data=include_data,
+            dry_run=dry_run,
+        )
+        data = {
+            "path": str(result.path),
+            "entries": result.entries,
+            "safety_backup": str(result.safety_backup) if result.safety_backup else None,
+            "dry_run": dry_run,
+        }
+        if json_output:
+            print_json(data)
+            return
+        if dry_run:
+            print_info(f"Backup [bold]{result.path}[/bold] can be restored.")
+        else:
+            print_success(f"Restored backup [bold]{result.path}[/bold].")
+            if result.safety_backup:
+                print_info(f"Safety backup: [bold]{result.safety_backup}[/bold]")
+        for entry in result.entries:
+            console.print(f"  [cyan]-[/cyan] {entry}")
+    except SFTPWardenError as exc:
+        handle_error(exc)

@@ -13,6 +13,11 @@ def test_dockerfile_keeps_runtime_lightweight() -> None:
     assert "apt-get" not in dockerfile
     assert "tini" in dockerfile
     assert "--no-cache-dir" in dockerfile
+    assert "--no-compile" in dockerfile
+    assert "/usr/local/bin/pip*" in dockerfile
+    assert "site-packages/pip*" in dockerfile
+    assert "__pycache__" in dockerfile
+    assert "*.pyc" in dockerfile
     assert "COPY sftpwarden ./sftpwarden" in dockerfile
     assert "docker/runtime/entrypoint.sh" in dockerfile
     assert "docker/runtime/sshd_config.template" in dockerfile
@@ -25,6 +30,10 @@ def test_watcher_dockerfile_uses_flat_package_layout() -> None:
     dockerfile = Path("docker/watcher/Dockerfile").read_text(encoding="utf-8")
 
     assert "COPY sftpwarden ./sftpwarden" in dockerfile
+    assert "--no-cache-dir --no-compile" in dockerfile
+    assert "/usr/local/bin/pip*" in dockerfile
+    assert "site-packages/pip*" in dockerfile
+    assert "__pycache__" in dockerfile
 
 
 def test_release_workflows_exist() -> None:

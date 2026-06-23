@@ -5,12 +5,11 @@ from typing import Annotated
 import typer
 from rich.prompt import Confirm
 
-from sftpwarden.cli_commands.common import (
-    handle_error,
-    print_json,
-    watcher_app,
-)
-from sftpwarden.utils.console import console
+from sftpwarden.cli_commands.app import watcher_app
+from sftpwarden.cli_commands.errors import handle_error
+from sftpwarden.cli_commands.output import print_json
+from sftpwarden.contexts import require_initialized_context
+from sftpwarden.utils.console import console, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
 from sftpwarden.watcher import (
     install_watcher,
@@ -30,10 +29,14 @@ def watcher_status(json_output: Annotated[bool, typer.Option("--json")] = False)
     json_output
         Whether to emit machine-readable JSON.
     """
-    if json_output:
-        print_json(watcher_status_data())
-        return
-    console.print(watcher_status_text())
+    try:
+        require_initialized_context()
+        if json_output:
+            print_json(watcher_status_data())
+            return
+        console.print(watcher_status_text())
+    except SFTPWardenError as exc:
+        handle_error(exc)
 
 
 @watcher_app.command("install")
@@ -68,6 +71,7 @@ def watcher_install(
         Whether to print planned commands without changing files.
     """
     try:
+        require_initialized_context()
         existing = installed_watcher_mode()
         if existing and watcher_mode and existing.value != watcher_mode and not yes:
             if not Confirm.ask(
@@ -76,15 +80,26 @@ def watcher_install(
             ):
                 raise typer.Exit(1)
             yes = True
-        console.print(
-            install_watcher(
+        if dry_run:
+            console.print(
+                install_watcher(
+                    mode=watcher_mode,
+                    yes=yes,
+                    dry_run=True,
+                    image=image,
+                    activate=activate,
+                )
+            )
+            return
+        with terminal_status("Installing watcher"):
+            result = install_watcher(
                 mode=watcher_mode,
                 yes=yes,
-                dry_run=dry_run,
+                dry_run=False,
                 image=image,
                 activate=activate,
             )
-        )
+        print_success(result)
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -104,8 +119,14 @@ def watcher_uninstall(
         Whether to print planned commands without changing files.
     """
     try:
+        require_initialized_context()
         if not yes and not dry_run and not Confirm.ask("Uninstall watcher?", default=False):
             raise typer.Exit(1)
-        console.print(uninstall_watcher(dry_run=dry_run))
+        if dry_run:
+            console.print(uninstall_watcher(dry_run=True))
+            return
+        with terminal_status("Uninstalling watcher"):
+            result = uninstall_watcher(dry_run=False)
+        print_success(result)
     except SFTPWardenError as exc:
         handle_error(exc)
