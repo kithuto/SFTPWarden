@@ -5,7 +5,13 @@ from pathlib import Path
 from sftpwarden.config import ProviderConfig, ProviderType, provider_local_path
 from sftpwarden.providers.base import BaseProvider
 from sftpwarden.providers.csv_provider import CSVProvider
-from sftpwarden.providers.mysql_provider import MySQLProvider, mysql_connect_kwargs
+from sftpwarden.providers.mongodb_provider import MongoDBProvider
+from sftpwarden.providers.mysql_provider import (
+    MariaDBProvider,
+    MySQLProvider,
+    mariadb_connect_kwargs,
+    mysql_connect_kwargs,
+)
 from sftpwarden.providers.postgres_provider import PostgreSQLProvider
 from sftpwarden.providers.registry import (
     build_provider,
@@ -15,6 +21,7 @@ from sftpwarden.providers.registry import (
     registered_providers,
 )
 from sftpwarden.providers.sql import sql_select_users_query, users_from_sql_rows
+from sftpwarden.providers.sqlite_provider import SQLiteProvider
 from sftpwarden.providers.yaml_provider import YAMLProvider
 from sftpwarden.users import (
     ProviderUsers,
@@ -28,16 +35,20 @@ from sftpwarden.users import (
 __all__ = [
     "BaseProvider",
     "CSVProvider",
+    "MariaDBProvider",
+    "MongoDBProvider",
     "MySQLProvider",
     "PostgreSQLProvider",
     "ProviderUsers",
     "SFTPUser",
+    "SQLiteProvider",
     "YAMLProvider",
     "build_provider",
     "empty_provider_text",
     "find_user",
     "load_users",
     "load_users_from_project",
+    "mariadb_connect_kwargs",
     "mysql_connect_kwargs",
     "provider_class",
     "provider_from_config",
@@ -93,6 +104,7 @@ def load_users(
     dsn: str | None = None,
     query: str | None = None,
     table: str = "sftp_users",
+    collection: str = "sftp_users",
 ) -> ProviderUsers:
     """Load users from an explicit provider.
 
@@ -108,13 +120,22 @@ def load_users(
         Optional SQL read query.
     table
         SQL table name.
+    collection
+        MongoDB collection name.
 
     Returns
     -------
     ProviderUsers
         Loaded provider users.
     """
-    return build_provider(provider_type, path=path, dsn=dsn, query=query, table=table).read()
+    return build_provider(
+        provider_type,
+        path=path,
+        dsn=dsn,
+        query=query,
+        table=table,
+        collection=collection,
+    ).read()
 
 
 def save_users(
@@ -124,6 +145,7 @@ def save_users(
     *,
     dsn: str | None = None,
     table: str = "sftp_users",
+    collection: str = "sftp_users",
 ) -> None:
     """Save users to an explicit provider.
 
@@ -139,8 +161,16 @@ def save_users(
         Optional SQL DSN.
     table
         SQL table name.
+    collection
+        MongoDB collection name.
     """
-    build_provider(provider_type, path=path, dsn=dsn, table=table).write(users)
+    build_provider(
+        provider_type,
+        path=path,
+        dsn=dsn,
+        table=table,
+        collection=collection,
+    ).write(users)
 
 
 def provider_for_project(project_root: str | Path, config) -> BaseProvider:

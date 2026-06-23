@@ -9,6 +9,7 @@ from sftpwarden.providers.sql import (
     create_sql_users_table_statement,
     delete_missing_sql_users,
     delete_sql_user,
+    execute_validated_sql,
     sql_check_table_query,
     sql_select_users_query,
     upsert_sql_user,
@@ -72,7 +73,7 @@ class PostgreSQLProvider(BaseProvider):
             query = self.config.query or sql_select_users_query(self.config.table)
             if self.config.query:
                 validate_sql_read_query(query)
-            cursor.execute(query)  # type: ignore
+            execute_validated_sql(cursor, query)
             return users_from_sql_rows(cursor.fetchall())  # type: ignore
 
     def write(self, users: ProviderUsers) -> None:
@@ -171,7 +172,7 @@ class PostgreSQLProvider(BaseProvider):
                 psycopg.connect(os.path.expandvars(self.config.dsn)) as connection,
                 connection.cursor() as cursor,
             ):
-                cursor.execute(sql_check_table_query(self.config.table))
+                execute_validated_sql(cursor, sql_check_table_query(self.config.table))
                 return True
         except Exception as exc:
             sqlstate = getattr(exc, "sqlstate", None) or getattr(exc, "pgcode", None)
@@ -195,4 +196,4 @@ class PostgreSQLProvider(BaseProvider):
             psycopg.connect(os.path.expandvars(self.config.dsn)) as connection,
             connection.cursor() as cursor,
         ):
-            cursor.execute(create_sql_users_table_statement(self.config.table))
+            execute_validated_sql(cursor, create_sql_users_table_statement(self.config.table))

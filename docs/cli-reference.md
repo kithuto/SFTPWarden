@@ -10,7 +10,7 @@ project. You do not need to know SFTPWarden internals to use these commands.
 - [Shell Autocomplete](#shell-autocomplete)
 - [Main Commands](#main-commands)
   - [sftpwarden init](#sftpwarden-init)
-  - [SQL init flags](#sql-init-flags)
+  - [Database init flags](#database-init-flags)
   - [sftpwarden deploy](#sftpwarden-deploy)
   - [sftpwarden validate](#sftpwarden-validate)
   - [sftpwarden compose](#sftpwarden-compose)
@@ -20,6 +20,13 @@ project. You do not need to know SFTPWarden internals to use these commands.
   - [sftpwarden watch](#sftpwarden-watch)
   - [sftpwarden info](#sftpwarden-info)
   - [sftpwarden doctor](#sftpwarden-doctor)
+  - [sftpwarden health](#sftpwarden-health)
+  - [sftpwarden backup](#sftpwarden-backup)
+  - [sftpwarden restore](#sftpwarden-restore)
+- [Provider Transfer Commands](#provider-transfer-commands)
+  - [sftpwarden provider export](#sftpwarden-provider-export)
+  - [sftpwarden provider import](#sftpwarden-provider-import)
+  - [sftpwarden provider copy](#sftpwarden-provider-copy)
 - [User Commands](#user-commands)
   - [sftpwarden users](#sftpwarden-users)
   - [sftpwarden user show](#sftpwarden-user-show)
@@ -45,6 +52,7 @@ project. You do not need to know SFTPWarden internals to use these commands.
   - [sftpwarden watcher install](#sftpwarden-watcher-install)
   - [sftpwarden watcher uninstall](#sftpwarden-watcher-uninstall)
 - [Runtime Commands](#runtime-commands)
+  - [sftpwarden runtime health](#sftpwarden-runtime-health)
 
 ## How the CLI Thinks
 
@@ -164,9 +172,9 @@ sftpwarden init archive \
 Use `context add` instead of `init` only when the SFTPWarden project already exists
 and you just want to register it on this machine.
 
-### SQL init flags
+### Database init flags
 
-Use these when the users provider is MySQL or PostgreSQL:
+Use these when the users provider is MySQL, MariaDB, PostgreSQL, or MongoDB:
 
 ```bash
 sftpwarden init prod \
@@ -175,11 +183,13 @@ sftpwarden init prod \
   --create-table
 ```
 
-`--dsn` is a conventional SQL database URL:
+`--dsn` is a conventional database URL:
 
 ```text
 mysql://user:password@host:3306/database
+mariadb://user:password@host:3306/database
 postgresql://user:password@host:5432/database
+mongodb://user:password@host:27017/database
 ```
 
 For production or shared environments, prefer an environment variable and pass
@@ -194,23 +204,27 @@ sftpwarden init prod \
   --create-table
 ```
 
-If `--dsn` is omitted during interactive SQL init, SFTPWarden prompts for host,
-port, database, username, and password, then builds the DSN.
+If `--dsn` is omitted during interactive MySQL, MariaDB, or PostgreSQL init,
+SFTPWarden prompts for host, port, database, username, and password, then builds
+the DSN. For MongoDB, interactive init asks for the MongoDB DSN directly.
 
 Important flags:
 
 | Flag | What it does |
 | --- | --- |
 | `--provider mysql` | Uses the MySQL provider. |
+| `--provider mariadb` | Uses the MariaDB provider. |
 | `--provider postgresql` | Uses the PostgreSQL provider. |
-| `--dsn` | Sets the SQL database URL/DSN. Environment variable references are allowed. |
+| `--provider mongodb` | Uses the MongoDB provider. |
+| `--dsn` | Sets the database URL/DSN. Environment variable references are allowed. |
 | `--query` | Sets a custom read-only user query. |
 | `--table` | Sets the users table name. Default: `sftp_users`. |
-| `--create-table` | Creates the SQL table if it is missing. |
-| `--no-create-table` | Aborts if the SQL table is missing. |
+| `--collection` | Sets the MongoDB collection name. Default: `sftp_users`. |
+| `--create-table` | Creates the SQL table or MongoDB collection/index if missing. |
+| `--no-create-table` | Aborts if the SQL table or MongoDB collection is missing. |
 
 If neither `--create-table` nor `--no-create-table` is passed, interactive `init`
-asks whether to create the table or abort.
+asks whether to create the storage or abort.
 
 ### `sftpwarden deploy`
 
@@ -328,7 +342,7 @@ hosts.
 
 ### `sftpwarden watch`
 
-Keeps watching local YAML/CSV user provider files and syncs user changes to
+Keeps watching local YAML/CSV/SQLite user provider files and syncs user changes to
 remote local-sync contexts.
 
 ```bash
@@ -360,6 +374,91 @@ sftpwarden doctor --json
 ```
 
 It checks tools such as `docker`, `ssh`, and `rsync`.
+
+### `sftpwarden health`
+
+Checks the active project and, when available, the running runtime.
+
+```bash
+sftpwarden health
+sftpwarden health --json
+```
+
+The report includes config validation, provider readability, Compose drift, and
+runtime health. JSON output is useful for monitoring or CI.
+
+### `sftpwarden backup`
+
+Creates a `.tar.gz` backup of the operational project state.
+
+```bash
+sftpwarden backup --output sftpwarden-prod.tar.gz --yes
+sftpwarden backup --include-data --output full-backup.tar.gz
+sftpwarden backup --dry-run --json
+```
+
+By default, backup includes config, Compose, provider snapshot, raw local provider
+files, host keys, and runtime state. User data under `data/` is included only with
+`--include-data`.
+
+### `sftpwarden restore`
+
+Restores a backup into the active or selected context.
+
+```bash
+sftpwarden restore sftpwarden-prod.tar.gz
+sftpwarden restore sftpwarden-prod.tar.gz --yes
+sftpwarden restore sftpwarden-prod.tar.gz --include-data
+```
+
+Restore creates a safety backup before overwriting files. Restoring data with
+`--include-data` requires explicit confirmation unless `--yes` is used.
+
+## Provider Transfer Commands
+
+Provider transfer commands are for moving users between providers or contexts.
+They require explicit `--merge` or `--replace` when writing to a destination.
+
+### `sftpwarden provider export`
+
+Exports users from a context/provider.
+
+```bash
+sftpwarden provider export --format json
+sftpwarden provider export --output users.yaml
+sftpwarden provider export --context prod --format csv --output users.csv
+```
+
+Without `--output`, export writes raw YAML/CSV/JSON to stdout without Rich
+decoration so it can be redirected.
+
+### `sftpwarden provider import`
+
+Imports users into a context/provider.
+
+```bash
+sftpwarden provider import --input users.json --merge
+sftpwarden provider import --input users.yaml --replace --dry-run
+sftpwarden provider import --input users.csv --merge --json
+```
+
+`--merge` upserts imported users and keeps destination-only users. `--replace`
+makes the destination exactly match the input file.
+
+### `sftpwarden provider copy`
+
+Copies users between two registered contexts.
+
+```bash
+sftpwarden provider copy \
+  --from-context dev \
+  --to-context prod \
+  --merge \
+  --dry-run
+```
+
+Copy supports all readable/mutable providers. Comment-only changes do not refresh
+the runtime because they do not affect runtime user state.
 
 ## User Commands
 
@@ -628,7 +727,7 @@ sftpwarden config default-provider csv
 
 ## Watcher Commands
 
-The watcher is only useful for remote `local-sync` contexts. It syncs YAML/CSV
+The watcher is only useful for remote `local-sync` contexts. It syncs YAML/CSV/SQLite
 user provider files to remote hosts. It does not sync `sftpwarden.yaml`; config
 changes require `sftpwarden deploy`.
 
@@ -683,6 +782,19 @@ not need to call them directly.
 sftpwarden runtime plan --config /etc/sftpwarden/sftpwarden.yaml
 sftpwarden runtime refresh --config /etc/sftpwarden/sftpwarden.yaml
 sftpwarden runtime sync --config /etc/sftpwarden/sftpwarden.yaml
+sftpwarden runtime health --config /etc/sftpwarden/sftpwarden.yaml
 ```
 
 They are used by the container to apply provider data to Linux users and OpenSSH.
+
+### `sftpwarden runtime health`
+
+Checks runtime-internal requirements without changing state.
+
+```bash
+sftpwarden runtime health --config /etc/sftpwarden/sftpwarden.yaml
+sftpwarden runtime health --json
+```
+
+The generated Docker Compose file uses this command as the container healthcheck.
+It exits `0` when critical runtime checks pass and `1` when they fail.

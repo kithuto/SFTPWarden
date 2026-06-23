@@ -78,7 +78,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install tox
-          python -m pip install -e ".[watch,mysql,postgres]"
+          python -m pip install -e ".[mysql,postgres,mongodb]"
 
       - name: Run lint and package checks
         run: tox -e lint,package
@@ -87,8 +87,11 @@ jobs:
         run: |
           sftpwarden validate --config examples/yaml/sftpwarden.yaml
           sftpwarden validate --config examples/csv/sftpwarden.yaml
+          sftpwarden validate --config examples/sqlite/sftpwarden.yaml
           SFTPWARDEN_MYSQL_DSN=mysql://user:pass@localhost/sftp sftpwarden validate --config examples/mysql/sftpwarden.yaml
+          SFTPWARDEN_MARIADB_DSN=mariadb://user:pass@localhost/sftp sftpwarden validate --config examples/mariadb/sftpwarden.yaml
           SFTPWARDEN_POSTGRES_DSN=postgresql://user:pass@localhost/sftp sftpwarden validate --config examples/postgres/sftpwarden.yaml
+          SFTPWARDEN_MONGODB_DSN=mongodb://localhost:27017/sftp sftpwarden validate --config examples/mongodb/sftpwarden.yaml
 
       - name: Validate compose generation
         run: |

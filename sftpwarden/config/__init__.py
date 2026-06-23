@@ -32,8 +32,32 @@ class ProviderType(StrEnum):
 
     YAML = "yaml"
     CSV = "csv"
+    SQLITE = "sqlite"
     MYSQL = "mysql"
     POSTGRESQL = "postgresql"
+    MARIADB = "mariadb"
+    MONGODB = "mongodb"
+
+
+FILE_PROVIDER_TYPES = {ProviderType.YAML, ProviderType.CSV, ProviderType.SQLITE}
+RELATIONAL_PROVIDER_TYPES = {
+    ProviderType.SQLITE,
+    ProviderType.MYSQL,
+    ProviderType.POSTGRESQL,
+    ProviderType.MARIADB,
+}
+EXTERNAL_DSN_PROVIDER_TYPES = {
+    ProviderType.MYSQL,
+    ProviderType.POSTGRESQL,
+    ProviderType.MARIADB,
+    ProviderType.MONGODB,
+}
+SQL_QUERY_PROVIDER_TYPES = {
+    ProviderType.MYSQL,
+    ProviderType.POSTGRESQL,
+    ProviderType.MARIADB,
+}
+WATCHER_SYNC_PROVIDER_TYPES = FILE_PROVIDER_TYPES
 
 
 class RemoteStorage(StrEnum):
@@ -213,6 +237,7 @@ class ProviderConfig(BaseModel):
     dsn: str | None = None
     query: str | None = None
     table: str = "sftp_users"
+    collection: str = "sftp_users"
 
     @field_validator("path")
     @classmethod
@@ -260,7 +285,7 @@ class ProviderConfig(BaseModel):
         ProviderConfig
             Validated provider config.
         """
-        if self.type in {ProviderType.MYSQL, ProviderType.POSTGRESQL}:
+        if self.type in SQL_QUERY_PROVIDER_TYPES:
             if not self.dsn:
                 raise ValueError(f"{self.type.value} provider requires dsn.")
             if self.query:
@@ -270,8 +295,24 @@ class ProviderConfig(BaseModel):
                     validate_sql_read_query(self.query)
                 except ProviderError as exc:
                     raise ValueError(str(exc)) from exc
-        elif self.dsn or self.query or self.table != "sftp_users":
-            raise ValueError("dsn/query/table are only supported for SQL providers.")
+            if self.collection != "sftp_users":
+                raise ValueError("provider.collection is only supported for mongodb providers.")
+        elif self.type == ProviderType.MONGODB:
+            if not self.dsn:
+                raise ValueError("mongodb provider requires dsn.")
+            if self.query or self.table != "sftp_users":
+                raise ValueError("provider.query/table are not supported for mongodb providers.")
+        elif self.type == ProviderType.SQLITE:
+            if self.dsn or self.query or self.collection != "sftp_users":
+                raise ValueError(
+                    "provider.dsn/query/collection are not supported for sqlite providers."
+                )
+        elif (
+            self.dsn or self.query or self.table != "sftp_users" or self.collection != "sftp_users"
+        ):
+            raise ValueError(
+                "provider.dsn/query/table/collection are only supported for SQL/database providers."
+            )
         return self
 
 
@@ -455,6 +496,7 @@ def default_project_config(
     dsn: str | None = None,
     query: str | None = None,
     table: str = "sftp_users",
+    collection: str = "sftp_users",
 ) -> SFTPWardenConfig:
     """Create a default project configuration.
 
@@ -479,7 +521,9 @@ def default_project_config(
     provider_path = f"{CONTAINER_PROVIDER_DIR}/users.yaml"
     if provider == ProviderType.CSV:
         provider_path = f"{CONTAINER_PROVIDER_DIR}/users.csv"
-    if provider in {ProviderType.MYSQL, ProviderType.POSTGRESQL}:
+    if provider == ProviderType.SQLITE:
+        provider_path = f"{CONTAINER_PROVIDER_DIR}/users.sqlite"
+    if provider in SQL_QUERY_PROVIDER_TYPES:
         return SFTPWardenConfig(
             project=ProjectConfig(name=name),
             provider=ProviderConfig(
@@ -488,6 +532,16 @@ def default_project_config(
                 dsn=dsn,
                 query=query,
                 table=table,
+            ),
+        )
+    if provider == ProviderType.MONGODB:
+        return SFTPWardenConfig(
+            project=ProjectConfig(name=name),
+            provider=ProviderConfig(
+                type=provider,
+                path=provider_path,
+                dsn=dsn,
+                collection=collection,
             ),
         )
     return SFTPWardenConfig(

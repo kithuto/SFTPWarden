@@ -46,6 +46,7 @@ PROJECT_CONFIG_PATHS = [
     "provider.dsn",
     "provider.query",
     "provider.table",
+    "provider.collection",
     "logging.level",
     "logging.format",
     "docker.image",

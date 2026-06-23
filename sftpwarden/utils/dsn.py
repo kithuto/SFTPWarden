@@ -20,6 +20,8 @@ def sql_dsn_scheme(provider: ProviderType) -> str:
     """
     if provider == ProviderType.MYSQL:
         return "mysql"
+    if provider == ProviderType.MARIADB:
+        return "mariadb"
     return "postgresql"
 
 
@@ -37,6 +39,8 @@ def sql_default_port(provider: ProviderType) -> int:
         Default database port.
     """
     if provider == ProviderType.MYSQL:
+        return 3306
+    if provider == ProviderType.MARIADB:
         return 3306
     return 5432
 

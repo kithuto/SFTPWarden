@@ -74,6 +74,17 @@ def prompt_sql_dsn(provider: ProviderType) -> str:
     )
 
 
+def prompt_mongodb_dsn() -> str:
+    """Prompt for a MongoDB DSN.
+
+    Returns
+    -------
+    str
+        MongoDB database URL.
+    """
+    return Prompt.ask("MongoDB DSN", default="mongodb://localhost:27017/sftpwarden")
+
+
 def prompt_remote_url(
     *,
     host: str | None = None,

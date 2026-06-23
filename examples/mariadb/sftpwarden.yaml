@@ -1,0 +1,8 @@
+version: 1
+project:
+  name: mariadb-example
+provider:
+  type: mariadb
+  path: /etc/sftpwarden/users.yaml
+  dsn: "${SFTPWARDEN_MARIADB_DSN}"
+  query: "select username, public_keys, password_hash, uid, gid, upload_dir, comment, disabled from sftp_users"

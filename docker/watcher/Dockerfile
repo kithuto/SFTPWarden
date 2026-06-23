@@ -13,7 +13,7 @@ WORKDIR /opt/sftpwarden
 COPY pyproject.toml README.md LICENSE ./
 COPY sftpwarden ./sftpwarden
 RUN PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_ROOT_USER_ACTION=ignore \
-    pip install --no-cache-dir --no-compile ".[watch]" \
+    pip install --no-cache-dir --no-compile "." \
     && rm -rf /root/.cache /opt/sftpwarden \
         /usr/local/bin/pip* \
         /usr/local/lib/python3.14/ensurepip \

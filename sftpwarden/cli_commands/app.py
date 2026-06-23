@@ -18,12 +18,14 @@ context_app = typer.Typer(
 )
 runtime_app = typer.Typer(help="Runtime-only commands used inside the container.")
 user_app = typer.Typer(help="Manage users in mutable providers.")
+provider_app = typer.Typer(help="Import, export, and copy provider users.")
 watcher_app = typer.Typer(help="Watcher management.")
 
 app.add_typer(config_app, name="config")
 app.add_typer(context_app, name="context")
 app.add_typer(runtime_app, name="runtime")
 app.add_typer(user_app, name="user")
+app.add_typer(provider_app, name="provider")
 app.add_typer(watcher_app, name="watcher")
 
 

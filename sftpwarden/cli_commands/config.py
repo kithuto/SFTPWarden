@@ -6,10 +6,8 @@ import typer
 import yaml
 
 from sftpwarden.cli_commands.app import config_app
-from sftpwarden.cli_commands.output import (
-    handle_error,
-    print_json,
-)
+from sftpwarden.cli_commands.errors import cli_error_from_exception, handle_error
+from sftpwarden.cli_commands.output import print_json
 from sftpwarden.config import (
     ProviderType,
     SFTPWardenConfig,
@@ -77,7 +75,7 @@ def config_value(
     except SFTPWardenError as exc:
         handle_error(exc)
     except ValueError as exc:
-        handle_error(SFTPWardenError(str(exc)))
+        handle_error(cli_error_from_exception(exc))
 
 
 def rename_context_for_project_name(old_name: str, new_name: str) -> None:
@@ -162,7 +160,7 @@ def register_project_config_path(path: str) -> None:
         except SFTPWardenError as exc:
             handle_error(exc)
         except ValueError as exc:
-            handle_error(SFTPWardenError(str(exc)))
+            handle_error(cli_error_from_exception(exc))
 
     command.__name__ = f"config_{path.replace('.', '_')}"
     command.__doc__ = f"Show or update `{path}` in sftpwarden.yaml."
@@ -210,4 +208,4 @@ def config_default_provider(provider: Annotated[str | None, typer.Argument()] = 
         save_global_config(config)
         print_success(f"Default provider set to [bold]{config.default_provider.value}[/bold].")
     except (SFTPWardenError, ValueError) as exc:
-        handle_error(exc if isinstance(exc, SFTPWardenError) else SFTPWardenError(str(exc)))
+        handle_error(cli_error_from_exception(exc))

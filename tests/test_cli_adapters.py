@@ -116,14 +116,14 @@ def test_config_callback_reads_updates_and_validates_usage(
 ) -> None:
     init_project(tmp_path, monkeypatch)
 
-    config_commands.config_value(FakeTyperContext([]))
-    config_commands.config_value(FakeTyperContext([], invoked_subcommand="show"))
+    config_commands.config_value(FakeTyperContext([]))  # type: ignore[call-arg]
+    config_commands.config_value(FakeTyperContext([], invoked_subcommand="show"))  # type: ignore[call-arg]
     with pytest.raises(typer.Exit):
-        config_commands.config_value(FakeTyperContext(["server.port"]))
+        config_commands.config_value(FakeTyperContext(["server.port"]))  # type: ignore[call-arg]
     with pytest.raises(typer.Exit):
-        config_commands.config_value(FakeTyperContext(["server.port", "2201"]))
+        config_commands.config_value(FakeTyperContext(["server.port", "2201"]))  # type: ignore[call-arg]
     with pytest.raises(typer.Exit) as usage_error:
-        config_commands.config_value(FakeTyperContext(["a", "b", "c"]))
+        config_commands.config_value(FakeTyperContext(["a", "b", "c"]))  # type: ignore[call-arg]
 
     registry = load_registry()
     config = load_config(Path(registry.contexts["dev"].config))
@@ -137,9 +137,9 @@ def test_config_callback_renames_context_and_reports_invalid_values(
     init_project(tmp_path, monkeypatch)
 
     with pytest.raises(typer.Exit):
-        config_commands.config_value(FakeTyperContext(["project.name", "renamed"]))
+        config_commands.config_value(FakeTyperContext(["project.name", "renamed"]))  # type: ignore[call-arg]
     with pytest.raises(typer.Exit) as invalid_error:
-        config_commands.config_value(FakeTyperContext(["server.port", "not-an-int"]))
+        config_commands.config_value(FakeTyperContext(["server.port", "not-an-int"]))  # type: ignore[call-arg]
 
     registry = load_registry()
     assert registry.default == "renamed"
@@ -166,7 +166,9 @@ def test_config_commands_cover_errors_and_global_output(
 
     with pytest.raises(typer.Exit) as callback_error:
         config_commands.config_value(
-            FakeTyperContext(["server.port"]), context="remoteish", config=None
+            FakeTyperContext(["server.port"]),
+            context="remoteish",
+            config=None,  # type: ignore[call-arg]
         )
     config_commands.rename_context_for_project_name("missing", "new")
     with pytest.raises(SFTPWardenError, match="already exists"):
@@ -207,16 +209,16 @@ def test_context_callback_reads_updates_and_validates_usage(
 ) -> None:
     init_project(tmp_path, monkeypatch)
 
-    context_commands.context_value(FakeTyperContext([]))
-    context_commands.context_value(FakeTyperContext([], invoked_subcommand="show"))
+    context_commands.context_value(FakeTyperContext([]))  # type: ignore[call-arg]
+    context_commands.context_value(FakeTyperContext([], invoked_subcommand="show"))  # type: ignore[call-arg]
     with pytest.raises(typer.Exit):
-        context_commands.context_value(FakeTyperContext(["root"]))
+        context_commands.context_value(FakeTyperContext(["root"]))  # type: ignore[call-arg]
     with pytest.raises(typer.Exit):
-        context_commands.context_value(FakeTyperContext(["critical", "true"]))
+        context_commands.context_value(FakeTyperContext(["critical", "true"]))  # type: ignore[call-arg]
     with pytest.raises(typer.Exit) as usage_error:
-        context_commands.context_value(FakeTyperContext(["a", "b", "c"]))
+        context_commands.context_value(FakeTyperContext(["a", "b", "c"]))  # type: ignore[call-arg]
 
-    assert load_registry().contexts["dev"].critical is True
+    assert load_registry().contexts["dev"].critical
     assert usage_error.value.exit_code == 1
 
 
@@ -226,14 +228,14 @@ def test_context_callback_reports_invalid_field_value(
     init_project(tmp_path, monkeypatch)
 
     with pytest.raises(typer.Exit) as invalid_error:
-        context_commands.context_value(FakeTyperContext(["port", "not-an-int"]))
+        context_commands.context_value(FakeTyperContext(["port", "not-an-int"]))  # type: ignore[call-arg]
     monkeypatch.setattr(
         context_commands,
         "update_context_field",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad context value")),
     )
     with pytest.raises(typer.Exit) as value_error:
-        context_commands.context_value(FakeTyperContext(["critical", "true"]))
+        context_commands.context_value(FakeTyperContext(["critical", "true"]))  # type: ignore[call-arg]
 
     assert invalid_error.value.exit_code == 1
     assert value_error.value.exit_code == 1
@@ -245,7 +247,7 @@ def test_context_callback_show_and_add_error_paths(
     runner, _root = init_project(tmp_path, monkeypatch)
 
     with pytest.raises(typer.Exit) as invalid_error:
-        context_commands.context_value(FakeTyperContext(["missing.path"]))
+        context_commands.context_value(FakeTyperContext(["missing.path"]))  # type: ignore[call-arg]
 
     with pytest.raises(typer.Exit) as show_missing:
         context_commands.context_show("missing")
@@ -296,8 +298,8 @@ def test_context_field_aliases_and_remote_root_update(
     )
 
     entry = load_registry().contexts[updated]
-    assert entry.remote.remote_root == "/srv/sftpwarden"
-    assert entry.remote.remote_config == "/srv/sftpwarden/sftpwarden.yaml"
+    assert entry.remote.remote_root == "/srv/sftpwarden"  # type: ignore[union-attr]
+    assert entry.remote.remote_config == "/srv/sftpwarden/sftpwarden.yaml"  # type: ignore[union-attr]
 
 
 def test_context_commands_show_list_and_manage_defaults(
@@ -377,7 +379,7 @@ def test_context_dynamic_field_commands_read_update_and_report_errors(
 
     assert "example.com" in read_result.output
     assert update_result.exit_code == 0, update_result.output
-    assert load_registry().contexts["prod"].remote.host == "sftp-prod.example.com"
+    assert load_registry().contexts["prod"].remote.host == "sftp-prod.example.com"  # type: ignore[union-attr]
     assert invalid_result.exit_code == 1
     assert missing_result.exit_code == 1
 
@@ -510,8 +512,8 @@ def test_context_update_helpers_cover_root_and_type_transitions(
         remote_only=False,
         yes=True,
     )
-    assert remote_entry.remote.host == "example.com"
-    assert remote_entry.remote.port == 2202
+    assert remote_entry.remote.host == "example.com"  # type: ignore[union-attr]
+    assert remote_entry.remote.port == 2202  # type: ignore[union-attr]
 
     with pytest.raises(typer.Exit):
         context_commands.convert_context_type(
@@ -655,9 +657,9 @@ def test_core_commands_json_write_and_error_paths(
     assert any("docker-compose.yml differs" in reason for reason in config_reasons)
     assert any("docker-compose.yml is missing" in reason for reason in missing_compose_reasons)
     assert json.loads(info_json.output)["name"] == "dev"
-    assert json.loads(validate_json.output)["valid"] is True
+    assert json.loads(validate_json.output)["valid"]
     assert "Wrote" in compose_write.output
-    assert json.loads(plan_json.output)["deploy_config_changed"] is True
+    assert json.loads(plan_json.output)["deploy_config_changed"]
     assert plan_no_local.exit_code == 1
     assert sync_text.exit_code == 0
     assert json.loads(doctor_json.output)["checks"]
@@ -818,18 +820,18 @@ def test_init_direct_helpers_cover_prompts_sql_and_remote_checks(
     existing = FakeSqlProvider(True)
     monkeypatch.setattr(init_commands, "provider_from_config", lambda *_args: existing)
     init_commands.ensure_sql_table_for_init(tmp_path, sql_config, create_table=None, yes=False)
-    assert existing.created is False
+    assert not existing.created
 
     missing = FakeSqlProvider(False)
     monkeypatch.setattr(init_commands, "provider_from_config", lambda *_args: missing)
     monkeypatch.setattr(init_commands.Confirm, "ask", lambda *_args, **_kwargs: True)
     init_commands.ensure_sql_table_for_init(tmp_path, sql_config, create_table=None, yes=False)
-    assert missing.created is True
+    assert missing.created
 
     missing_default = FakeSqlProvider(False)
     monkeypatch.setattr(init_commands, "provider_from_config", lambda *_args: missing_default)
     init_commands.ensure_sql_table_for_init(tmp_path, sql_config, create_table=None, yes=True)
-    assert missing_default.created is True
+    assert missing_default.created
 
     aborting = FakeSqlProvider(False)
     monkeypatch.setattr(init_commands, "provider_from_config", lambda *_args: aborting)
@@ -1060,7 +1062,7 @@ def test_watcher_install_replacement_confirmation_paths(
 
     assert cancelled.exit_code == 1
     assert accepted.exit_code == 0, accepted.output
-    assert install_calls[0]["yes"] is True
+    assert install_calls[0]["yes"]
 
 
 def test_watcher_install_and_uninstall_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:

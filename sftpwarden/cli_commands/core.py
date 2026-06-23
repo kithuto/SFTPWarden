@@ -11,8 +11,8 @@ from rich.prompt import Confirm
 from rich.table import Table
 
 from sftpwarden.cli_commands.app import app
+from sftpwarden.cli_commands.errors import handle_error
 from sftpwarden.cli_commands.output import (
-    handle_error,
     print_deploy_config_plan,
     print_json,
     print_runtime_plan,
@@ -37,6 +37,8 @@ from sftpwarden.runtime import (
     RuntimeState,
     build_runtime_plan,
 )
+from sftpwarden.services.backup import create_backup, restore_backup
+from sftpwarden.services.health import project_health
 from sftpwarden.utils.console import console, print_info, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
 from sftpwarden.utils.paths import expand_path
@@ -378,3 +380,179 @@ def doctor(json_output: Annotated[bool, typer.Option("--json")] = False) -> None
     for check in checks:
         status = "[green]available[/green]" if check["available"] else "[yellow]check PATH[/yellow]"
         console.print(f"  [cyan]-[/cyan] [bold]{check['name']}[/bold]: {status}")
+
+
+@app.command()
+def health(
+    context: Annotated[str | None, typer.Option("--context", "-c")] = None,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Check project and runtime health.
+
+    Parameters
+    ----------
+    context
+        Optional context name.
+    json_output
+        Whether to emit JSON.
+    """
+    try:
+        report = project_health(context)
+        if json_output:
+            print_json(report.as_dict())
+            raise typer.Exit(0 if report.healthy else 1)
+        table = Table(
+            title=f"Health for {report.context}",
+            box=box.SIMPLE_HEAVY,
+            header_style="bold cyan",
+        )
+        table.add_column("Check", style="bold")
+        table.add_column("Status")
+        table.add_column("Message")
+        table.add_column("Fix")
+        for check in report.checks:
+            style = {"pass": "green", "warn": "yellow", "fail": "red"}[check.status]
+            table.add_row(
+                check.name,
+                f"[{style}]{check.status}[/{style}]",
+                check.message,
+                check.suggestion or "",
+            )
+        console.print(table)
+        raise typer.Exit(0 if report.healthy else 1)
+    except SFTPWardenError as exc:
+        handle_error(exc)
+
+
+@app.command()
+def backup(
+    context: Annotated[str | None, typer.Option("--context", "-c")] = None,
+    output: Annotated[str | None, typer.Option("--output", "-o")] = None,
+    include_data: Annotated[bool, typer.Option("--include-data")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
+) -> None:
+    """Create a project backup.
+
+    Parameters
+    ----------
+    context
+        Optional context name.
+    output
+        Optional output archive path.
+    include_data
+        Whether to include SFTP user data.
+    dry_run
+        Whether to avoid writing.
+    json_output
+        Whether to emit JSON.
+    yes
+        Whether to skip include-data confirmation.
+    """
+    try:
+        if (
+            include_data
+            and not yes
+            and not dry_run
+            and not Confirm.ask(
+                "Include SFTP user data in the backup?",
+                default=False,
+            )
+        ):
+            raise typer.Exit(1)
+        result = create_backup(
+            context_name=context,
+            output=output,
+            include_data=include_data,
+            dry_run=dry_run,
+        )
+        data = {
+            "path": str(result.path),
+            "entries": result.entries,
+            "dry_run": dry_run,
+        }
+        if json_output:
+            print_json(data)
+            return
+        if dry_run:
+            print_info(f"Backup would be written to [bold]{result.path}[/bold].")
+        else:
+            print_success(f"Wrote backup [bold]{result.path}[/bold].")
+        for entry in result.entries:
+            console.print(f"  [cyan]-[/cyan] {entry}")
+    except SFTPWardenError as exc:
+        handle_error(exc)
+
+
+@app.command()
+def restore(
+    backup_path: Annotated[str, typer.Argument(help="Backup archive path.")],
+    context: Annotated[str | None, typer.Option("--context", "-c")] = None,
+    include_data: Annotated[bool, typer.Option("--include-data")] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
+) -> None:
+    """Restore a project backup.
+
+    Parameters
+    ----------
+    backup_path
+        Backup archive path.
+    context
+        Optional context name.
+    include_data
+        Whether to restore SFTP user data.
+    dry_run
+        Whether to avoid writing.
+    json_output
+        Whether to emit JSON.
+    yes
+        Whether to skip confirmation.
+    """
+    try:
+        if (
+            not yes
+            and not dry_run
+            and not Confirm.ask(
+                "Restore backup and overwrite project files?",
+                default=False,
+            )
+        ):
+            raise typer.Exit(1)
+        if (
+            include_data
+            and not yes
+            and not dry_run
+            and not Confirm.ask(
+                "Restore SFTP user data from the backup?",
+                default=False,
+            )
+        ):
+            raise typer.Exit(1)
+        result = restore_backup(
+            context_name=context,
+            backup_path=backup_path,
+            include_data=include_data,
+            dry_run=dry_run,
+        )
+        data = {
+            "path": str(result.path),
+            "entries": result.entries,
+            "safety_backup": str(result.safety_backup) if result.safety_backup else None,
+            "dry_run": dry_run,
+        }
+        if json_output:
+            print_json(data)
+            return
+        if dry_run:
+            print_info(f"Backup [bold]{result.path}[/bold] can be restored.")
+        else:
+            print_success(f"Restored backup [bold]{result.path}[/bold].")
+            if result.safety_backup:
+                print_info(f"Safety backup: [bold]{result.safety_backup}[/bold]")
+        for entry in result.entries:
+            console.print(f"  [cyan]-[/cyan] {entry}")
+    except SFTPWardenError as exc:
+        handle_error(exc)

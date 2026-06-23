@@ -6,10 +6,8 @@ import typer
 from rich.prompt import Confirm
 
 from sftpwarden.cli_commands.app import watcher_app
-from sftpwarden.cli_commands.output import (
-    handle_error,
-    print_json,
-)
+from sftpwarden.cli_commands.errors import handle_error
+from sftpwarden.cli_commands.output import print_json
 from sftpwarden.contexts import require_initialized_context
 from sftpwarden.utils.console import console, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError

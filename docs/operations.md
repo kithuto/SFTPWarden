@@ -19,6 +19,13 @@ sftpwarden plan
 sftpwarden refresh
 ```
 
+Check project and runtime health:
+
+```bash
+sftpwarden health
+sftpwarden health --json
+```
+
 `sftpwarden init` sets the created context as active. The recommended workflow is
 the Docker-style one: create a project directory, `cd` into it, initialize it, and
 run commands without repeating `--context`. Use `sftpwarden context use dev` to
@@ -62,8 +69,9 @@ sftpwarden context use prod
 
 ## Watcher
 
-`sftpwarden watch` is only for remote `local-sync` contexts. It syncs YAML/CSV
-user provider files to remote hosts. It does not sync `sftpwarden.yaml`.
+`sftpwarden watch` is only for remote `local-sync` contexts. It syncs
+YAML/CSV/SQLite user provider files to remote hosts. It does not sync
+`sftpwarden.yaml`.
 
 ```bash
 sftpwarden watcher status
@@ -82,6 +90,62 @@ the host's default identity, agent, SSH config, bastions, or `ProxyJump`.
 Docker watcher mode mounts the context registry, local project folders, and only
 explicit dedicated SSH keys read-only. It does not mount `~/.ssh` and does not
 require Docker socket access.
+
+## Provider Transfer
+
+Use provider transfer commands when you are moving users between storage backends,
+creating a portable snapshot, or copying users from one context to another.
+
+Export users:
+
+```bash
+sftpwarden provider export --format json > users.json
+sftpwarden provider export --output users.yaml
+```
+
+Import users into the active context:
+
+```bash
+sftpwarden provider import --input users.json --merge
+sftpwarden provider import --input users.yaml --replace --dry-run
+```
+
+Copy users between contexts:
+
+```bash
+sftpwarden provider copy \
+  --from-context dev \
+  --to-context prod \
+  --merge \
+  --dry-run
+```
+
+`--merge` upserts source users and keeps destination-only users. `--replace`
+makes the destination exactly match the source. Provider transfer refreshes only
+when runtime-relevant user fields change; comment-only changes do not trigger a
+refresh.
+
+## Backup and Restore
+
+Create a project backup:
+
+```bash
+sftpwarden backup --output sftpwarden-prod.tar.gz --yes
+```
+
+Restore a backup:
+
+```bash
+sftpwarden restore sftpwarden-prod.tar.gz --yes
+```
+
+Backups include project config, Compose file, provider snapshot, raw local
+provider files when available, host keys, and runtime state. SFTP user data under
+`data/` is excluded unless you pass `--include-data`.
+
+Backups may contain secrets if DSNs or environment references are stored in
+`sftpwarden.yaml`. Store backup archives with the same care as infrastructure
+secrets.
 
 ## Runtime State
 
@@ -133,3 +197,13 @@ sftpwarden plan
 sftpwarden refresh --dry-run
 sftpwarden refresh
 ```
+
+Healthcheck fails in Docker Compose:
+
+```bash
+sftpwarden health --json
+docker compose exec sftpwarden sftpwarden runtime health --json
+```
+
+The generated Docker Compose file uses `sftpwarden runtime health` as its
+container healthcheck.

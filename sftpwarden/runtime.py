@@ -873,6 +873,7 @@ def load_runtime_inputs(
         dsn=config.provider.dsn,
         query=config.provider.query,
         table=config.provider.table,
+        collection=config.provider.collection,
     )
     state = RuntimeState.load(state_path(config))
     return config, users, state

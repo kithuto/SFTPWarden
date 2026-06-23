@@ -5,8 +5,8 @@ from typing import Annotated
 import typer
 
 from sftpwarden.cli_commands.app import runtime_app
+from sftpwarden.cli_commands.errors import handle_error
 from sftpwarden.cli_commands.output import (
-    handle_error,
     print_json,
     print_runtime_plan,
     runtime_plan_explanation,
@@ -18,6 +18,7 @@ from sftpwarden.runtime import (
     load_runtime_inputs,
     run_sync_loop,
 )
+from sftpwarden.services.health import runtime_health as runtime_health_report
 from sftpwarden.utils.console import console, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
 
@@ -84,5 +85,31 @@ def runtime_sync(
     try:
         console.print("[bold]Starting runtime sync loop[/bold]")
         run_sync_loop(config)
+    except SFTPWardenError as exc:
+        handle_error(exc)
+
+
+@runtime_app.command("health")
+def runtime_health(
+    config: Annotated[str, typer.Option("--config")] = "/etc/sftpwarden/sftpwarden.yaml",
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Check runtime-internal health without applying changes.
+
+    Parameters
+    ----------
+    config
+        Runtime config path inside the container.
+    json_output
+        Whether to emit JSON.
+    """
+    try:
+        report = runtime_health_report(config)
+        if json_output:
+            print_json(report.as_dict())
+            raise typer.Exit(0 if report.healthy else 1)
+        for check in report.checks:
+            console.print(f"[bold]{check.name}[/bold]: {check.status} - {check.message}")
+        raise typer.Exit(0 if report.healthy else 1)
     except SFTPWardenError as exc:
         handle_error(exc)

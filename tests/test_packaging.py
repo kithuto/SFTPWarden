@@ -77,11 +77,20 @@ def test_package_metadata_is_public_release_ready() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     project = pyproject["project"]
 
-    assert project["version"] == "1.0.0"
+    assert project["version"] == "1.1.0"
     assert "Development Status :: 5 - Production/Stable" in project["classifiers"]
-    assert project["license"] == "Apache-2.0"
+    assert project["license"] == "MIT"
+    assert project["license-files"] == ["LICENSE"]
     assert project["readme"] == "README.md"
     assert project["urls"]["Documentation"] == "https://kithuto.github.io/sftpwarden/"
+
+
+def test_database_extras_cover_public_provider_aliases() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    extras = pyproject["project"]["optional-dependencies"]
+
+    assert extras["mysql"] == extras["mariadb"] == ["pymysql"]
+    assert extras["mongodb"] == ["pymongo"]
 
 
 def test_readme_uses_pypi_safe_logo_url() -> None:

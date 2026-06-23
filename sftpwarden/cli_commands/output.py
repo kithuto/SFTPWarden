@@ -3,27 +3,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import typer
 from rich import box
 from rich.table import Table
 
 from sftpwarden.runtime import RuntimePlan
 from sftpwarden.utils.console import console, print_info, print_success
-from sftpwarden.utils.errors import SFTPWardenError
-
-
-def handle_error(exc: SFTPWardenError) -> None:
-    """Print a domain error and exit the CLI.
-
-    Parameters
-    ----------
-    exc
-        Application error with user-facing message and optional suggestion.
-    """
-    console.print(f"[bold red]Error:[/bold red] {exc.message}")
-    if exc.suggestion:
-        console.print(f"[bold yellow]Fix:[/bold yellow] {exc.suggestion}")
-    raise typer.Exit(1)
 
 
 def runtime_plan_to_json(runtime_plan: RuntimePlan) -> str:

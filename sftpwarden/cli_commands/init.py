@@ -7,9 +7,12 @@ import typer
 from rich.prompt import Confirm, Prompt
 
 from sftpwarden.cli_commands.app import app
-from sftpwarden.cli_commands.output import handle_error
-from sftpwarden.cli_commands.prompts import prompt_sql_dsn
+from sftpwarden.cli_commands.errors import handle_error
+from sftpwarden.cli_commands.prompts import prompt_mongodb_dsn, prompt_sql_dsn
 from sftpwarden.config import (
+    EXTERNAL_DSN_PROVIDER_TYPES,
+    FILE_PROVIDER_TYPES,
+    SQL_QUERY_PROVIDER_TYPES,
     ProviderType,
     default_project_config,
     provider_local_path,
@@ -37,12 +40,11 @@ from sftpwarden.providers import (
 from sftpwarden.remote.checks import verify_remote_runtime_requirements
 from sftpwarden.render.compose import write_compose
 from sftpwarden.services.cli_workflows import install_context_watcher
+from sftpwarden.users import ProviderUsers
 from sftpwarden.utils.console import print_info, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
 from sftpwarden.utils.files import write_private_text
 from sftpwarden.utils.paths import expand_path
-
-SQL_PROVIDER_TYPES = {ProviderType.MYSQL, ProviderType.POSTGRESQL}
 
 
 @app.command()
@@ -68,6 +70,9 @@ def init(
     ] = None,
     query: Annotated[str | None, typer.Option("--query", help="SQL provider read query.")] = None,
     table: Annotated[str, typer.Option("--table", help="SQL users table name.")] = "sftp_users",
+    collection: Annotated[
+        str, typer.Option("--collection", help="MongoDB users collection name.")
+    ] = "sftp_users",
     create_table: Annotated[
         bool | None,
         typer.Option(
@@ -146,6 +151,7 @@ def init(
                 dsn=dsn,
                 query=query,
                 table=table,
+                collection=collection,
                 create_table=create_table,
                 host=host,
                 remote_user=remote_user,
@@ -191,6 +197,7 @@ def init(
             dsn=dsn,
             query=query,
             table=table,
+            collection=collection,
             yes=yes,
         )
         config_path = selected_root / "sftpwarden.yaml"
@@ -201,10 +208,17 @@ def init(
             and not Confirm.ask(f"Overwrite {config_path}?", default=False)
         ):
             raise typer.Exit(1)
-        ensure_sql_table_for_init(selected_root, config, create_table=create_table, yes=yes)
+        ensure_provider_storage_for_init(
+            selected_root,
+            config,
+            create_storage=create_table,
+            yes=yes,
+        )
         write_config(config_path, config)
-        if config.provider.type not in SQL_PROVIDER_TYPES and not provider_path.exists():
-            write_private_text(provider_path, empty_provider_text(selected_provider))
+        if config.provider.type == ProviderType.SQLITE and not provider_path.exists():
+            provider_from_config(selected_root, config).write(ProviderUsers(users=[]))
+        elif config.provider.type in FILE_PROVIDER_TYPES and not provider_path.exists():
+            write_private_text(provider_path, empty_provider_text(config.provider.type))
         write_compose(config, selected_root)
         entry = local_context(name, selected_root, selected_provider, critical)
         register_context(entry)
@@ -223,6 +237,7 @@ def init_remote_context(
     dsn: str | None,
     query: str | None,
     table: str,
+    collection: str = "sftp_users",
     create_table: bool | None,
     host: str | None,
     remote_user: str | None,
@@ -253,6 +268,8 @@ def init_remote_context(
         Optional SQL provider read query.
     table
         SQL users table name.
+    collection
+        MongoDB users collection name.
     create_table
         Whether to create a missing SQL users table without prompting.
     host
@@ -320,13 +337,21 @@ def init_remote_context(
             dsn=dsn,
             query=query,
             table=table,
+            collection=collection,
             yes=yes,
         )
-        ensure_sql_table_for_init(selected_root, config, create_table=create_table, yes=yes)
+        ensure_provider_storage_for_init(
+            selected_root,
+            config,
+            create_storage=create_table,
+            yes=yes,
+        )
         write_config(selected_root / "sftpwarden.yaml", config)
         provider_path = provider_local_path(selected_root, config)
-        if config.provider.type not in SQL_PROVIDER_TYPES and not provider_path.exists():
-            write_private_text(provider_path, empty_provider_text(selected_provider))
+        if config.provider.type == ProviderType.SQLITE and not provider_path.exists():
+            provider_from_config(selected_root, config).write(ProviderUsers(users=[]))
+        elif config.provider.type in FILE_PROVIDER_TYPES and not provider_path.exists():
+            write_private_text(provider_path, empty_provider_text(config.provider.type))
         write_compose(config, selected_root)
     entry = remote_context(
         name=context_name,
@@ -357,6 +382,7 @@ def init_project_config(
     dsn: str | None,
     query: str | None,
     table: str,
+    collection: str = "sftp_users",
     yes: bool,
 ):
     """Build a project config for init, prompting for SQL DSNs when needed.
@@ -373,6 +399,8 @@ def init_project_config(
         Optional SQL read query.
     table
         SQL users table name.
+    collection
+        MongoDB users collection name.
     yes
         Whether prompts should be skipped.
 
@@ -382,23 +410,80 @@ def init_project_config(
         Project config ready to write.
     """
     resolved_dsn = dsn
-    if provider in SQL_PROVIDER_TYPES and not resolved_dsn:
+    if provider in EXTERNAL_DSN_PROVIDER_TYPES and not resolved_dsn:
         if yes:
             raise SFTPWardenError(
                 f"{provider.value} provider requires --dsn.",
                 suggestion=(
-                    "Pass a database URL with --dsn, or store it in an environment variable "
-                    "and pass a reference such as '${SFTPWARDEN_MYSQL_DSN}'."
+                    "Pass a database URL with --dsn, or store it in an environment variable."
                 ),
             )
-        resolved_dsn = prompt_sql_dsn(provider)
+        resolved_dsn = (
+            prompt_mongodb_dsn() if provider == ProviderType.MONGODB else prompt_sql_dsn(provider)
+        )
     return default_project_config(
         name,
         provider,
         dsn=resolved_dsn,
         query=query,
         table=table,
+        collection=collection,
     )
+
+
+def ensure_provider_storage_for_init(
+    project_root: Path,
+    config,
+    *,
+    create_storage: bool | None,
+    yes: bool,
+) -> None:
+    """Ensure provider storage exists during init.
+
+    Parameters
+    ----------
+    project_root
+        Project root used to build the provider instance.
+    config
+        Project config.
+    create_storage
+        Explicit storage creation decision from CLI flags.
+    yes
+        Whether prompts should be skipped.
+    """
+    if config.provider.type not in EXTERNAL_DSN_PROVIDER_TYPES:
+        return
+    provider = provider_from_config(project_root, config)
+    storage_name = (
+        config.provider.collection
+        if config.provider.type == ProviderType.MONGODB
+        else config.provider.table
+    )
+    with terminal_status(f"Checking provider storage {storage_name}"):
+        table_exists = provider.table_exists()  # type: ignore[attr-defined]
+    if table_exists:
+        return
+    should_create = create_storage
+    if should_create is None and not yes:
+        should_create = Confirm.ask(
+            f"Provider storage {storage_name!r} does not exist. Create it now?",
+            default=True,
+        )
+    if should_create is None:
+        should_create = True
+    if not should_create:
+        missing_message = f"Provider storage does not exist: {storage_name}"
+        if config.provider.type in SQL_QUERY_PROVIDER_TYPES:
+            missing_message = f"SQL users table does not exist: {storage_name}"
+        elif config.provider.type == ProviderType.MONGODB:
+            missing_message = f"MongoDB collection does not exist: {storage_name}"
+        raise SFTPWardenError(
+            missing_message,
+            suggestion="Create it manually, then run init again.",
+        )
+    with terminal_status(f"Creating provider storage {storage_name}"):
+        provider.create_table()  # type: ignore[attr-defined]
+    print_success(f"Created provider storage [bold]{storage_name}[/bold].")
 
 
 def ensure_sql_table_for_init(
@@ -408,7 +493,7 @@ def ensure_sql_table_for_init(
     create_table: bool | None,
     yes: bool,
 ) -> None:
-    """Ensure an SQL provider users table exists during init.
+    """Compatibility wrapper for SQL storage checks.
 
     Parameters
     ----------
@@ -421,29 +506,9 @@ def ensure_sql_table_for_init(
     yes
         Whether prompts should be skipped.
     """
-    if config.provider.type not in SQL_PROVIDER_TYPES:
-        return
-    provider = provider_from_config(project_root, config)
-    with terminal_status(f"Checking SQL users table {config.provider.table}"):
-        table_exists = provider.table_exists()  # type: ignore[attr-defined]
-    if table_exists:
-        return
-    should_create = create_table
-    if should_create is None and not yes:
-        should_create = Confirm.ask(
-            f"SQL table {config.provider.table!r} does not exist. Create it now?",
-            default=True,
-        )
-    if should_create is None:
-        should_create = True
-    if not should_create:
-        raise SFTPWardenError(
-            f"SQL users table does not exist: {config.provider.table}",
-            suggestion=(
-                "Create the table manually using examples/mysql/schema.sql or "
-                "examples/postgres/schema.sql, then run init again."
-            ),
-        )
-    with terminal_status(f"Creating SQL users table {config.provider.table}"):
-        provider.create_table()  # type: ignore[attr-defined]
-    print_success(f"Created SQL users table [bold]{config.provider.table}[/bold].")
+    ensure_provider_storage_for_init(
+        project_root,
+        config,
+        create_storage=create_table,
+        yes=yes,
+    )

@@ -9,8 +9,8 @@ from rich.prompt import Confirm
 from rich.table import Table
 
 from sftpwarden.cli_commands.app import context_app
+from sftpwarden.cli_commands.errors import cli_error_from_exception, handle_error
 from sftpwarden.cli_commands.output import (
-    handle_error,
     print_json,
     print_watcher_without_local_sync_targets,
 )
@@ -118,7 +118,7 @@ def context_value(
     except SFTPWardenError as exc:
         handle_error(exc)
     except ValueError as exc:
-        handle_error(SFTPWardenError(str(exc)))
+        handle_error(cli_error_from_exception(exc))
 
 
 def normalize_context_field(field: str) -> str:
@@ -433,7 +433,7 @@ def register_context_field_command(command_name: str, field: str) -> None:
         except SFTPWardenError as exc:
             handle_error(exc)
         except ValueError as exc:
-            handle_error(SFTPWardenError(str(exc)))
+            handle_error(cli_error_from_exception(exc))
 
     command.__name__ = f"context_{command_name.replace('.', '_').replace('-', '_')}"
     command.__doc__ = f"Show or update context field `{field}`."

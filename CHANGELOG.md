@@ -11,13 +11,6 @@ The format follows Keep a Changelog, and this project uses Semantic Versioning.
 This roadmap is directional and may change as SFTPWarden receives operational
 feedback. It summarizes the main features planned for future releases.
 
-#### v1.1 - Providers, Backup, Import/Export, and Health
-
-- Add SQLite, MariaDB, and MongoDB providers.
-- Add provider import, export, and copy commands.
-- Add backup and restore commands.
-- Add project and runtime health checks.
-
 #### v1.2 - Kubernetes
 
 - Add an official Helm chart.
@@ -56,6 +49,25 @@ feedback. It summarizes the main features planned for future releases.
   security, and diagnostics views.
 - Add basic RBAC.
 - Add local login and OIDC support.
+
+## [1.1.0] - 2026-06-23
+
+### Added
+
+- SQLite, MariaDB, and MongoDB providers.
+- Provider import, export, and copy commands for moving users between providers.
+- Project backup and restore commands for config, provider snapshots, host keys,
+  and runtime state.
+- Project and runtime health checks, plus Docker Compose healthcheck generation.
+- Examples and documentation for SQLite, MariaDB, MongoDB, transfer, backup,
+  restore, and health workflows.
+
+### Changed
+
+- Runtime Docker image installs official database provider extras for MySQL,
+  MariaDB, PostgreSQL, and MongoDB.
+- Watcher and deploy logic treat SQLite as a local provider file that can be
+  synchronized for remote local-sync contexts.
 
 ## [1.0.0] - 2026-06-20
 

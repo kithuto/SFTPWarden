@@ -79,7 +79,7 @@ def test_password_authentication_is_enabled_by_default() -> None:
         }
     )
 
-    assert config.auth.allow_password is True
+    assert config.auth.allow_password
     assert config.auth.recommended == "password"
     assert "PasswordAuthentication yes" in render_sshd_config_text(config)
     assert "UsePAM" not in render_sshd_config_text(config)
@@ -169,8 +169,11 @@ def test_rejects_mutating_sql_provider_query() -> None:
     [
         Path("examples/yaml/sftpwarden.yaml"),
         Path("examples/csv/sftpwarden.yaml"),
+        Path("examples/sqlite/sftpwarden.yaml"),
         Path("examples/mysql/sftpwarden.yaml"),
+        Path("examples/mariadb/sftpwarden.yaml"),
         Path("examples/postgres/sftpwarden.yaml"),
+        Path("examples/mongodb/sftpwarden.yaml"),
     ],
 )
 def test_examples_validate(path: Path) -> None:

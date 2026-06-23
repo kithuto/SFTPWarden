@@ -146,7 +146,7 @@ def test_plan_json_reports_detected_config_changes(tmp_path: Path, monkeypatch) 
     data = json.loads(result.output)
 
     assert result.exit_code == 0, result.output
-    assert data["deploy_config_changed"] is True
+    assert data["deploy_config_changed"]
     assert data["deploy_config_reasons"] == [
         "docker-compose.yml differs from current configuration"
     ]
@@ -395,7 +395,7 @@ def test_validate_json_reports_config_and_provider(tmp_path: Path, monkeypatch) 
     data = json.loads(result.output)
 
     assert result.exit_code == 0, result.output
-    assert data["valid"] is True
+    assert data["valid"]
     assert data["project"] == "dev"
     assert data["provider"] == "yaml"
     assert data["provider_path"] == str(root / "users.yaml")

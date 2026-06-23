@@ -9,7 +9,12 @@ from pathlib import Path
 
 import yaml
 
-from sftpwarden.config import ProviderType, SFTPWardenConfig, load_config, provider_local_path
+from sftpwarden.config import (
+    WATCHER_SYNC_PROVIDER_TYPES,
+    SFTPWardenConfig,
+    load_config,
+    provider_local_path,
+)
 from sftpwarden.config.global_config import load_global_config, save_global_config
 from sftpwarden.contexts import ContextEntry, ContextType, load_registry
 from sftpwarden.remote.ssh import (
@@ -21,8 +26,6 @@ from sftpwarden.system.commands import command_text, run_checked
 from sftpwarden.utils.collections import unique_items
 from sftpwarden.utils.errors import ContextError
 from sftpwarden.utils.paths import app_home, contexts_path
-
-FILE_PROVIDER_TYPES = {ProviderType.YAML, ProviderType.CSV}
 
 
 class WatcherInstallMode(StrEnum):
@@ -101,7 +104,7 @@ def editable_sync_target(context: ContextEntry, config: SFTPWardenConfig) -> Wat
         Existing user-provider file to sync, or ``None`` when the context has no local
         editable user file.
     """
-    if not context.remote or config.provider.type not in FILE_PROVIDER_TYPES:
+    if not context.remote or config.provider.type not in WATCHER_SYNC_PROVIDER_TYPES:
         return None
     provider_path = provider_local_path(context.root, config)
     if not provider_path.exists():

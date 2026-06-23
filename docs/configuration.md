@@ -97,12 +97,34 @@ provider:
   path: /etc/sftpwarden/users.csv
 ```
 
+SQLite:
+
+```yaml
+provider:
+  type: sqlite
+  path: /etc/sftpwarden/users.sqlite
+```
+
+SQLite uses Python's built-in `sqlite3` module and does not need an optional
+dependency. It is useful for single-host deployments where you want a local
+database file instead of YAML or CSV. Avoid SQLite on NFS, high-concurrency, or
+multi-writer deployments.
+
 MySQL:
 
 ```yaml
 provider:
   type: mysql
   dsn: "${SFTPWARDEN_MYSQL_DSN}"
+  table: sftp_users
+```
+
+MariaDB:
+
+```yaml
+provider:
+  type: mariadb
+  dsn: "${SFTPWARDEN_MARIADB_DSN}"
   table: sftp_users
 ```
 
@@ -115,11 +137,22 @@ provider:
   table: sftp_users
 ```
 
+MongoDB:
+
+```yaml
+provider:
+  type: mongodb
+  dsn: "${SFTPWARDEN_MONGODB_DSN}"
+  collection: sftp_users
+```
+
 The DSN follows the standard database URL convention:
 
 ```text
 mysql://user:password@host:3306/database
+mariadb://user:password@host:3306/database
 postgresql://user:password@host:5432/database
+mongodb://user:password@host:27017/database
 ```
 
 Using an environment variable is recommended for real deployments:
@@ -128,15 +161,17 @@ Using an environment variable is recommended for real deployments:
 export SFTPWARDEN_POSTGRES_DSN='postgresql://sftpwarden:change-me@db.example.com:5432/sftpwarden'
 ```
 
-SQL providers read and mutate the configured users table. The default columns are:
+Relational SQL providers read and mutate the configured users table. The default
+columns are:
 
 ```text
 username, public_keys, password_hash, uid, gid, upload_dir, comment, disabled
 ```
 
-When you initialize a project with MySQL or PostgreSQL, SFTPWarden checks whether
-the table exists. If it is missing, interactive `init` asks whether to create it or
-abort so you can apply the schema manually.
+When you initialize a project with MySQL, MariaDB, or PostgreSQL, SFTPWarden
+checks whether the table exists. If it is missing, interactive `init` asks whether
+to create it or abort so you can apply the schema manually. MongoDB performs the
+same check for the configured collection and username index.
 
 ```bash
 sftpwarden init prod \
@@ -145,9 +180,15 @@ sftpwarden init prod \
   --create-table
 ```
 
-Use `--no-create-table` to force init to abort when the table is missing. If you
-omit `--dsn` in interactive SQL init, SFTPWarden asks for host, port, database,
-username, and password, then builds the DSN.
+MariaDB reuses the MySQL-compatible PyMySQL implementation. Installing either
+`pip install "sftpwarden[mysql]"` or `pip install "sftpwarden[mariadb]"` enables
+both MySQL and MariaDB providers.
+
+Use `--no-create-table` to force init to abort when the table or MongoDB
+collection is missing. If you omit `--dsn` in interactive MySQL, MariaDB, or
+PostgreSQL init, SFTPWarden asks for host, port, database, username, and
+password, then builds the DSN. For MongoDB, interactive init asks for a MongoDB
+DSN.
 
 ## Contexts
 
