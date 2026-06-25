@@ -173,5 +173,5 @@ Do not open a public issue for vulnerabilities. Follow [SECURITY.md](SECURITY.md
 
 ## License
 
-By contributing, you agree that your contribution is licensed under the Apache
-License 2.0.
+By contributing, you agree that your contribution is licensed under the MIT
+License.
