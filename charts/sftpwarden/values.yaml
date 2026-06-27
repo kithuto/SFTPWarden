@@ -1,0 +1,58 @@
+image:
+  repository: ghcr.io/kithuto/sftpwarden
+  tag: "1.2.0"
+  pullPolicy: IfNotPresent
+
+runtime:
+  replicas: 1
+
+sftpwardenConfig: |
+  version: 1
+  project:
+    name: sftpwarden
+    description: SFTPWarden environment
+  provider:
+    type: yaml
+    path: /etc/sftpwarden/provider-data/users.yaml
+
+service:
+  type: ClusterIP
+  port: 2222
+
+kubernetes:
+  namespace: sftpwarden
+  release: sftpwarden
+  kubeContext: null
+  storageClass: null
+
+provider:
+  type: yaml
+  path: /etc/sftpwarden/provider-data/users.yaml
+  bootstrapContent: |
+    users: []
+  table: sftp_users
+  collection: sftp_users
+  dsnSecretName: null
+  dsnSecretKey: SFTPWARDEN_PROVIDER_DSN
+  createDsnSecret: false
+  dsnSecretValue: ""
+
+persistence:
+  data:
+    enabled: true
+    size: 10Gi
+  state:
+    enabled: true
+    size: 1Gi
+  provider:
+    enabled: true
+    size: 1Gi
+
+hostKeys:
+  secretName: sftpwarden-host-keys
+  mountPath: /etc/sftpwarden/host_key_secret
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

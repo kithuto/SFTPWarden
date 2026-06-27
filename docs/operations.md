@@ -56,8 +56,9 @@ sftpwarden refresh --dry-run
 ```
 
 Remote setup checks verify SSH connectivity and `docker compose version`.
-Local deploys also check Docker Compose before running `up -d --build`. If the
-check fails, install Docker Compose v2 and retry `sftpwarden deploy`.
+Local deploys also check Docker Compose before applying the generated Compose
+file. Source checkouts build `sftpwarden:local`; Python package installations
+pull `ghcr.io/kithuto/sftpwarden:<installed-version>`.
 
 Use `sftpwarden context add` when the project already exists on the remote host and
 you only need to register it locally:
@@ -66,6 +67,68 @@ you only need to register it locally:
 sftpwarden context add prod deploy@example.com:/opt/sftpwarden --critical
 sftpwarden context use prod
 ```
+
+## Kubernetes Deploy
+
+Compose remains the default deployment target. Pick Kubernetes during init when a
+project should be managed by `kubectl` or Helm:
+
+```bash
+sftpwarden init prod --deploy kube --yes
+sftpwarden deploy --dry-run
+sftpwarden kube apply
+```
+
+Helm mode stores the same target in `sftpwarden.yaml`, but delegates deploys to
+the official chart:
+
+```bash
+sftpwarden init prod --deploy helm --yes
+sftpwarden helm values --write
+sftpwarden helm lint
+sftpwarden deploy --dry-run
+```
+
+When the CLI runs from a source checkout, Helm commands use the local
+`charts/sftpwarden` directory so chart changes can be tested before publishing.
+When SFTPWarden is installed from the Python package, Helm commands use the
+published OCI chart at `oci://ghcr.io/kithuto/charts/sftpwarden` with the same
+version as the installed CLI.
+
+You can change the target later:
+
+```bash
+sftpwarden config deploy.target kubernetes
+sftpwarden config kubernetes.mode helm
+sftpwarden config kubernetes.namespace sftpwarden
+sftpwarden config kubernetes.kube_context kind-sftpwarden
+```
+
+Kubernetes rendering is separate from applying. `sftpwarden kube render` and
+`sftpwarden helm values` do not require a live cluster. `kube apply`, `kube
+status`, `kube logs`, `kube doctor`, `helm template`, `helm lint`, `helm upgrade`,
+and `helm uninstall` require the matching external tool.
+
+The default Kubernetes namespace is `sftpwarden`. Use
+`sftpwarden config kubernetes.namespace <name>` when a cluster policy requires a
+different namespace.
+
+File-backed providers use a provider PVC. The Kubernetes init container creates
+an empty YAML/CSV provider file when the PVC is new, and never overwrites an
+existing provider file.
+
+Database providers should receive DSNs through a Kubernetes Secret. In Helm,
+set `provider.dsnSecretName` and reference the same environment variable from
+`sftpwardenConfig`; prefer creating the Secret outside the values file for
+production deployments.
+
+SFTPWarden v1.2 supports one runtime pod per context. `kubernetes.replicas` and
+Helm `runtime.replicas` are reserved for future multi-node support and currently
+accept only `1`.
+
+For serious Kubernetes environments, use PostgreSQL, MariaDB/MySQL, or MongoDB.
+YAML/CSV fit GitOps-style deployments. SQLite is acceptable only for single-pod
+lab deployments and should not be used for multi-writer production workloads.
 
 ## Watcher
 
@@ -81,7 +144,7 @@ sftpwarden watcher uninstall --yes
 ```
 
 Watched files are derived from the context registry and provider configuration.
-Configuration and Docker Compose changes require an explicit deploy.
+Configuration, Compose, Kubernetes, and Helm changes require an explicit deploy.
 
 Systemd watcher installation uses `sudo` for service setup and enables the service
 with `systemctl enable --now`. Use this mode for production when SSH should use
@@ -89,7 +152,9 @@ the host's default identity, agent, SSH config, bastions, or `ProxyJump`.
 
 Docker watcher mode mounts the context registry, local project folders, and only
 explicit dedicated SSH keys read-only. It does not mount `~/.ssh` and does not
-require Docker socket access.
+require Docker socket access. Source checkouts build `sftpwarden-watcher:local`;
+Python package installations use
+`ghcr.io/kithuto/sftpwarden-watcher:<installed-version>` unless `--image` is set.
 
 ## Provider Transfer
 

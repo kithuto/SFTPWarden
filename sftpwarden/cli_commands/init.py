@@ -1,3 +1,5 @@
+"""CLI command for initializing local, remote, Compose, Kubernetes, and Helm projects."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,6 +15,8 @@ from sftpwarden.config import (
     EXTERNAL_DSN_PROVIDER_TYPES,
     FILE_PROVIDER_TYPES,
     SQL_QUERY_PROVIDER_TYPES,
+    DeployTarget,
+    KubernetesMode,
     ProviderType,
     default_project_config,
     provider_local_path,
@@ -73,6 +77,14 @@ def init(
     collection: Annotated[
         str, typer.Option("--collection", help="MongoDB users collection name.")
     ] = "sftp_users",
+    deploy_method: Annotated[
+        str,
+        typer.Option(
+            "--deploy",
+            "-d",
+            help="Deployment method to store in sftpwarden.yaml: compose, kube, or helm.",
+        ),
+    ] = "compose",
     create_table: Annotated[
         bool | None,
         typer.Option(
@@ -115,6 +127,10 @@ def init(
         Optional SQL provider read query.
     table
         SQL users table name.
+    collection
+        MongoDB users collection name.
+    deploy_method
+        Deployment target to store in the generated project config.
     create_table
         Whether to create a missing SQL users table without prompting.
     host
@@ -152,6 +168,7 @@ def init(
                 query=query,
                 table=table,
                 collection=collection,
+                deploy_method=deploy_method,
                 create_table=create_table,
                 host=host,
                 remote_user=remote_user,
@@ -198,6 +215,7 @@ def init(
             query=query,
             table=table,
             collection=collection,
+            deploy_method=deploy_method,
             yes=yes,
         )
         config_path = selected_root / "sftpwarden.yaml"
@@ -219,7 +237,8 @@ def init(
             provider_from_config(selected_root, config).write(ProviderUsers(users=[]))
         elif config.provider.type in FILE_PROVIDER_TYPES and not provider_path.exists():
             write_private_text(provider_path, empty_provider_text(config.provider.type))
-        write_compose(config, selected_root)
+        if config.deploy.target == DeployTarget.COMPOSE:
+            write_compose(config, selected_root)
         entry = local_context(name, selected_root, selected_provider, critical)
         register_context(entry)
         set_default_context(name)
@@ -238,6 +257,7 @@ def init_remote_context(
     query: str | None,
     table: str,
     collection: str = "sftp_users",
+    deploy_method: str = "compose",
     create_table: bool | None,
     host: str | None,
     remote_user: str | None,
@@ -270,6 +290,8 @@ def init_remote_context(
         SQL users table name.
     collection
         MongoDB users collection name.
+    deploy_method
+        Deployment target to store in the generated project config.
     create_table
         Whether to create a missing SQL users table without prompting.
     host
@@ -338,6 +360,7 @@ def init_remote_context(
             query=query,
             table=table,
             collection=collection,
+            deploy_method=deploy_method,
             yes=yes,
         )
         ensure_provider_storage_for_init(
@@ -352,7 +375,8 @@ def init_remote_context(
             provider_from_config(selected_root, config).write(ProviderUsers(users=[]))
         elif config.provider.type in FILE_PROVIDER_TYPES and not provider_path.exists():
             write_private_text(provider_path, empty_provider_text(config.provider.type))
-        write_compose(config, selected_root)
+        if config.deploy.target == DeployTarget.COMPOSE:
+            write_compose(config, selected_root)
     entry = remote_context(
         name=context_name,
         provider=selected_provider,
@@ -383,6 +407,7 @@ def init_project_config(
     query: str | None,
     table: str,
     collection: str = "sftp_users",
+    deploy_method: str = "compose",
     yes: bool,
 ):
     """Build a project config for init, prompting for SQL DSNs when needed.
@@ -401,6 +426,8 @@ def init_project_config(
         SQL users table name.
     collection
         MongoDB users collection name.
+    deploy_method
+        Deployment target to store in the generated project config.
     yes
         Whether prompts should be skipped.
 
@@ -421,6 +448,7 @@ def init_project_config(
         resolved_dsn = (
             prompt_mongodb_dsn() if provider == ProviderType.MONGODB else prompt_sql_dsn(provider)
         )
+    deploy_target, kubernetes_mode = resolve_init_deploy_method(deploy_method)
     return default_project_config(
         name,
         provider,
@@ -428,6 +456,34 @@ def init_project_config(
         query=query,
         table=table,
         collection=collection,
+        deploy_target=deploy_target,
+        kubernetes_mode=kubernetes_mode,
+    )
+
+
+def resolve_init_deploy_method(value: str) -> tuple[DeployTarget, KubernetesMode]:
+    """Map ``sftpwarden init --deploy`` values to stored config.
+
+    Parameters
+    ----------
+    value
+        CLI deployment method.
+
+    Returns
+    -------
+    tuple[DeployTarget, KubernetesMode]
+        Persisted deploy target and Kubernetes mode.
+    """
+    normalized = value.strip().lower()
+    if normalized == "compose":
+        return DeployTarget.COMPOSE, KubernetesMode.MANIFESTS
+    if normalized == "kube":
+        return DeployTarget.KUBERNETES, KubernetesMode.MANIFESTS
+    if normalized == "helm":
+        return DeployTarget.KUBERNETES, KubernetesMode.HELM
+    raise SFTPWardenError(
+        f"Unsupported deploy method: {value}",
+        suggestion="Use --deploy compose, --deploy kube, or --deploy helm.",
     )
 
 

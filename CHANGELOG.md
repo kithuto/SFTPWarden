@@ -11,13 +11,6 @@ The format follows Keep a Changelog, and this project uses Semantic Versioning.
 This roadmap is directional and may change as SFTPWarden receives operational
 feedback. It summarizes the main features planned for future releases.
 
-#### v1.2 - Kubernetes
-
-- Add an official Helm chart.
-- Add Kubernetes manifests and examples.
-- Add Kubernetes probes and service configuration.
-- Document provider usage for Kubernetes deployments.
-
 #### v1.3 - Audit and Observability
 
 - Add audit logging.
@@ -49,6 +42,16 @@ feedback. It summarizes the main features planned for future releases.
   security, and diagnostics views.
 - Add basic RBAC.
 - Add local login and OIDC support.
+
+## [1.2.0] - 2026-06-27
+
+### Added
+
+- Official Kubernetes manifests and Helm chart for single-runtime deployments.
+- `sftpwarden kube` and `sftpwarden helm` command groups.
+- Kubernetes and Helm deployment targets for `sftpwarden init` and `sftpwarden deploy`.
+- Kubernetes ConfigMap, Secret, PVC, Service, StatefulSet, and runtime health probe rendering.
+- Documentation and examples for Kubernetes deployment and provider recommendations.
 
 ## [1.1.0] - 2026-06-23
 

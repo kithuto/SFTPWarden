@@ -1,3 +1,5 @@
+"""CLI error conversion and global Typer exception handling."""
+
 from __future__ import annotations
 
 import json
@@ -49,6 +51,9 @@ def cli_error_from_exception(exc: Exception) -> SFTPWardenError:
     if isinstance(exc, SFTPWardenError):
         return exc
     if isinstance(exc, ValidationError):
+        replicas_error = _kubernetes_replicas_error(exc)
+        if replicas_error:
+            return replicas_error
         return SFTPWardenError(
             f"Invalid data or configuration: {_validation_error_summary(exc)}",
             suggestion="Check the command values and SFTPWarden configuration files.",
@@ -190,6 +195,17 @@ def _validation_error_summary(exc: ValidationError) -> str:
     location = ".".join(str(part) for part in first.get("loc", ())) or "value"
     message = first.get("msg", str(exc))
     return f"{location}: {message}"
+
+
+def _kubernetes_replicas_error(exc: ValidationError) -> SFTPWardenError | None:
+    for error in exc.errors():
+        message = str(error.get("msg", ""))
+        if "Kubernetes replicas > 1 are not supported yet." in message:
+            return SFTPWardenError(
+                message.removeprefix("Value error, "),
+                suggestion="Set kubernetes.replicas to 1 for now.",
+            )
+    return None
 
 
 def _command_text(command: Any) -> str:

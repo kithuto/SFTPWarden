@@ -26,8 +26,9 @@ Describe the expected behavior.
 - Python version:
 - OS:
 - Docker version:
-- Provider: YAML / CSV / MySQL / PostgreSQL
+- Provider: YAML / CSV / SQLite / MySQL / MariaDB / PostgreSQL / MongoDB
 - Context type: local / remote local-sync / remote-only
+- Deploy target: compose / Kubernetes manifests / Helm
 
 ## Logs
 

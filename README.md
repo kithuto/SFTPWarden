@@ -8,8 +8,8 @@
 
 <p align="center">
   Container-native SFTP for teams that want a small, auditable OpenSSH runtime with
-  declarative users, predictable Docker deployment, and a CLI that works the same
-  locally and on remote hosts.
+  declarative users, predictable Compose/Kubernetes deployment, and a CLI that
+  works the same locally, on remote hosts, and in clusters.
 </p>
 
 <p align="center">
@@ -55,17 +55,17 @@ PostgreSQL, or MongoDB.
 
 ## Key Features
 
-- **Fast adoption for real SFTP needs:** create a local or remote SFTP environment
-  with `sftpwarden init`, add users, and deploy with Docker Compose without
+- **Fast adoption for real SFTP needs:** create a local, remote, or Kubernetes
+  SFTP environment with `sftpwarden init`, add users, and deploy without
   hand-writing OpenSSH container plumbing.
 - **Declarative user sources:** manage accounts from YAML, CSV, SQLite, MySQL,
   MariaDB, PostgreSQL, or MongoDB, so small teams can start with files and larger
   systems can use databases.
 - **Safe user isolation:** every SFTP user is forced into OpenSSH `internal-sftp`
   and isolated under `/data/<username>` with chroot-oriented defaults.
-- **Docker-native operations:** generated Compose files, `sftpwarden deploy`,
-  `plan`, `refresh`, `watch`, `--dry-run`, and `--json` make it practical for
-  local development, CI, and production runbooks.
+- **Container-native operations:** generated Compose files, Kubernetes manifests,
+  Helm values, `sftpwarden deploy`, `plan`, `refresh`, `watch`, `--dry-run`, and
+  `--json` make it practical for local development, CI, and production runbooks.
 - **Context-based workflow:** use Docker-style active contexts for `dev`, `prod`,
   remote local-sync, and remote-only deployments instead of repeating long flags
   on every command.
@@ -90,7 +90,7 @@ pip install sftpwarden
 sftpwarden --version
 ```
 
-For local development:
+For source checkout usage:
 
 ```bash
 git clone https://github.com/kithuto/sftpwarden.git
@@ -116,10 +116,11 @@ Optional extras:
 `sftpwarden[mysql]` or `sftpwarden[mariadb]` enables both MySQL and MariaDB
 providers because they share PyMySQL.
 
-Build the runtime image locally:
+For runtime and watcher image development, build the images locally:
 
 ```bash
 docker build -t sftpwarden:local -f docker/runtime/Dockerfile .
+docker build -t sftpwarden-watcher:local -f docker/watcher/Dockerfile .
 ```
 
 ## Shell Autocomplete
@@ -200,6 +201,7 @@ Pick the model that matches how your team works.
 | Local | Development, demos, single-host testing | Local project folder | No |
 | Remote local-sync | Production managed from a workstation or CI runner | Local project folder synced to remote host | Yes |
 | Remote-only | Existing remote deployments managed in-place | Remote project folder | No |
+| Kubernetes | Platform/SRE teams using `kubectl` or Helm | Kubernetes manifests or Helm values | No |
 
 Local:
 
@@ -232,6 +234,26 @@ sftpwarden init archive --remote deploy@sftp-archive.example.com:/opt/sftpwarden
 sftpwarden refresh --dry-run
 ```
 
+Kubernetes manifests:
+
+```bash
+sftpwarden init prod --deploy kube --yes
+sftpwarden kube render
+sftpwarden deploy --dry-run
+```
+
+Helm:
+
+```bash
+sftpwarden init prod --deploy helm --yes
+sftpwarden helm values --write
+sftpwarden helm template
+sftpwarden deploy --dry-run
+```
+
+Source checkouts use the local chart. Python package installations use the
+published GHCR OCI chart with the same version as the installed CLI.
+
 Use `sftpwarden context add` when a SFTPWarden project already exists and you only
 want to register it on this machine:
 
@@ -245,7 +267,7 @@ require confirmation unless marked with `--critical` or accepted with `--yes`.
 
 ## Project Files
 
-`sftpwarden init` creates a small project directory:
+By default, `sftpwarden init` creates a Compose-backed project directory:
 
 ```text
 sftpwarden.yaml
@@ -255,6 +277,10 @@ data/
 state/
 host_keys/
 ```
+
+Kubernetes-targeted projects use the same `sftpwarden.yaml`, plus generated
+`kubernetes.yml` or `values.yaml` when you render/apply manifests or Helm values;
+they do not require `docker-compose.yml`.
 
 The container always listens on port `22` internally. Configure the host-facing
 port with `server.port` in `sftpwarden.yaml`.
@@ -398,6 +424,9 @@ sftpwarden doctor
 sftpwarden validate --config sftpwarden.yaml
 sftpwarden compose --write
 sftpwarden deploy --dry-run
+sftpwarden deploy --json --dry-run
+sftpwarden kube status --json
+sftpwarden helm lint
 sftpwarden plan --json
 sftpwarden refresh --dry-run
 sftpwarden watcher status --json
@@ -411,7 +440,8 @@ sftpwarden provider export --format json > users.json
 - `sftpwarden watch` syncs YAML/CSV/SQLite user provider files for remote
   `local-sync` contexts.
 - `sftpwarden refresh` tells a running runtime to reload users immediately.
-- Configuration and Docker Compose changes require `sftpwarden deploy`.
+- Configuration, Docker Compose, Kubernetes, and Helm changes require
+  `sftpwarden deploy`.
 - `sftpwarden health` validates config, provider readability, Compose drift, and
   runtime health where available.
 - `sftpwarden backup` stores config, provider snapshot, host keys, and runtime
@@ -419,13 +449,15 @@ sftpwarden provider export --format json > users.json
 - `sftpwarden provider copy` moves users between contexts/providers with explicit
   `--merge` or `--replace` semantics.
 
-`sftpwarden deploy` checks for Docker Compose before starting local deployments.
-For remote deployments, the remote host must have Docker Compose v2 available as
-`docker compose`.
+`sftpwarden deploy` uses the configured deployment target. Compose remains the
+default. Kubernetes manifest mode uses `kubectl`, and Helm mode uses `helm`.
+Missing tools are reported with actionable messages.
 
 For production watcher installs, prefer `systemd` so SSH uses the host's normal
 identity, agent, `~/.ssh/config`, known hosts, bastions, and `ProxyJump` settings.
 Docker watcher mode is stricter and requires explicit dedicated deployment keys.
+Source checkouts use `sftpwarden-watcher:local`; Python package installations use
+`ghcr.io/kithuto/sftpwarden-watcher:<installed-version>` unless `--image` is set.
 
 ## Security
 
@@ -475,16 +507,21 @@ sphinx-build -b html docs docs/_build/html
 
 ## Roadmap
 
-### v1.1 - Providers, Backup, Import/Export, and Health
+See the [changelog](https://github.com/kithuto/sftpwarden/blob/main/CHANGELOG.md)
+for released versions and the longer future roadmap.
 
-Released in `1.1.0`: SQLite, MariaDB, MongoDB, provider transfer,
-backup/restore, and healthchecks.
+### v1.3 - Audit and Observability
 
-### v1.2 - Kubernetes
+- Add audit logging for CLI and runtime operations.
+- Add commands for listing, tailing, and exporting audit events.
+- Add richer runtime status and operational visibility.
 
-- Add Helm chart and Kubernetes manifests.
-- Add ConfigMap/Secret/PVC examples.
-- Add liveness/readiness probes.
+### v1.4 - Advanced Security and Supply Chain
+
+- Add SSH host key pinning.
+- Add assisted key rotation workflows.
+- Add support for secret files.
+- Add production-oriented security checks.
 
 ## Contributing
 

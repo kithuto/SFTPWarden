@@ -61,7 +61,7 @@ def test_config_validation_edges(tmp_path: Path) -> None:
         WatcherConfig(enabled=True, mode=WatcherMode.SYSTEMD, image="watcher:local")
 
     docker_watcher = WatcherConfig(enabled=True, mode=WatcherMode.DOCKER)
-    assert docker_watcher.image == "sftpwarden-watcher:local"
+    assert docker_watcher.image is None
 
     source = tmp_path / "bad.yaml"
     source.write_text("project: {}\n", encoding="utf-8")

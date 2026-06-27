@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sftpwarden"
-version = "1.1.0"
+version = "1.2.0"
 description = "Container-native SFTP gateway with OpenSSH, chroot isolation, and declarative user provisioning."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -79,7 +79,7 @@ source = ["sftpwarden"]
 
 [tool.coverage.report]
 show_missing = true
-fail_under = 80
+fail_under = 90
 
 [tool.ruff]
 line-length = 100

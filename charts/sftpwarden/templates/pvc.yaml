@@ -1,0 +1,53 @@
+{{- if .Values.persistence.data.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "sftpwarden.name" . }}-data
+  namespace: {{ include "sftpwarden.namespace" . }}
+  labels:
+    {{- include "sftpwarden.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.kubernetes.storageClass }}
+  storageClassName: {{ .Values.kubernetes.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.data.size }}
+{{- end }}
+---
+{{- if .Values.persistence.state.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "sftpwarden.name" . }}-state
+  namespace: {{ include "sftpwarden.namespace" . }}
+  labels:
+    {{- include "sftpwarden.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.kubernetes.storageClass }}
+  storageClassName: {{ .Values.kubernetes.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.state.size }}
+{{- end }}
+---
+{{- if .Values.persistence.provider.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "sftpwarden.name" . }}-provider
+  namespace: {{ include "sftpwarden.namespace" . }}
+  labels:
+    {{- include "sftpwarden.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.kubernetes.storageClass }}
+  storageClassName: {{ .Values.kubernetes.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.provider.size }}
+{{- end }}

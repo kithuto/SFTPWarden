@@ -7,6 +7,7 @@ on:
       - "sftpwarden/**"
       - "tests/**"
       - "examples/**"
+      - "charts/**"
       - "docker/**"
       - "pyproject.toml"
       - "tox.ini"
@@ -17,6 +18,7 @@ on:
       - "sftpwarden/**"
       - "tests/**"
       - "examples/**"
+      - "charts/**"
       - "docker/**"
       - "pyproject.toml"
       - "tox.ini"
@@ -80,6 +82,9 @@ jobs:
           python -m pip install tox
           python -m pip install -e ".[mysql,postgres,mongodb]"
 
+      - name: Set up Helm
+        uses: azure/setup-helm@v5.0.1
+
       - name: Run lint and package checks
         run: tox -e lint,package
 
@@ -97,3 +102,13 @@ jobs:
         run: |
           sftpwarden compose --config examples/yaml/sftpwarden.yaml > /tmp/sftpwarden-compose.yml
           test -s /tmp/sftpwarden-compose.yml
+
+      - name: Validate Kubernetes chart and manifests
+        run: |
+          helm lint charts/sftpwarden
+          helm template sftpwarden charts/sftpwarden > /tmp/sftpwarden-chart.yml
+          test -s /tmp/sftpwarden-chart.yml
+          mkdir -p /tmp/sftpwarden-kube
+          sftpwarden init kube --root /tmp/sftpwarden-kube --deploy kube --yes
+          sftpwarden kube render --config /tmp/sftpwarden-kube/sftpwarden.yaml > /tmp/sftpwarden-kube.yml
+          test -s /tmp/sftpwarden-kube.yml

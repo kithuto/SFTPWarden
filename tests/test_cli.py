@@ -406,7 +406,14 @@ def test_doctor_json_reports_checks() -> None:
     data = json.loads(result.output)
 
     assert result.exit_code == 0, result.output
-    assert {check["name"] for check in data["checks"]} == {"docker", "ssh", "rsync"}
+    assert {check["name"] for check in data["checks"]} == {
+        "docker",
+        "ssh",
+        "rsync",
+        "kubectl",
+        "helm",
+    }
+    assert all("required_for" in check for check in data["checks"])
 
 
 def test_global_config_commands_show_and_update_defaults(tmp_path: Path, monkeypatch) -> None:

@@ -2,7 +2,7 @@ FROM python:3.14-alpine AS runtime
 
 LABEL org.opencontainers.image.title="SFTPWarden" \
       org.opencontainers.image.description="Lightweight OpenSSH SFTP runtime with declarative user provisioning" \
-      org.opencontainers.image.licenses="Apache-2.0"
+      org.opencontainers.image.licenses="MIT"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

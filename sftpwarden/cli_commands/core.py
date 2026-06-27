@@ -1,3 +1,5 @@
+"""Core SFTPWarden CLI commands for contexts, deploys, health, and backups."""
+
 from __future__ import annotations
 
 import json
@@ -20,6 +22,8 @@ from sftpwarden.cli_commands.output import (
     runtime_plan_to_json,
 )
 from sftpwarden.config import (
+    DeployTarget,
+    KubernetesMode,
     load_config,
     provider_local_path,
 )
@@ -31,13 +35,18 @@ from sftpwarden.providers import (
     load_users_from_project,
 )
 from sftpwarden.refresh import refresh_context, resolve_refresh_targets
-from sftpwarden.remote.deploy import deploy_context
 from sftpwarden.render.compose import compose_text, write_compose
 from sftpwarden.runtime import (
     RuntimeState,
     build_runtime_plan,
 )
 from sftpwarden.services.backup import create_backup, restore_backup
+from sftpwarden.services.deploy import (
+    apply_deployment_plan,
+    deployment_plan,
+    helm_values_diff_reason,
+    kubernetes_rendered_manifest_diff_reason,
+)
 from sftpwarden.services.health import project_health
 from sftpwarden.utils.console import console, print_info, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
@@ -46,6 +55,14 @@ from sftpwarden.watcher import (
     derive_watch_targets,
     poll_watch,
 )
+
+
+def deploy_context(entry, *, dry_run: bool = False) -> str:
+    """Compatibility wrapper for deploy command execution."""
+    plan_data = deployment_plan(entry)
+    if dry_run:
+        return plan_data.text()
+    return apply_deployment_plan(entry)
 
 
 @app.command()
@@ -162,7 +179,21 @@ def deploy_config_change_reasons(entry, loaded) -> list[str]:
     if entry.provider != loaded.provider.type:
         reasons.append("provider type differs from the registered context")
 
-    compose_path = Path(entry.root) / loaded.docker.compose_file
+    root = Path(entry.root)
+    if loaded.deploy.target == DeployTarget.KUBERNETES:
+        reasons.append(f"deploy target is {loaded.deploy.target.value}")
+        reasons.append(f"kubernetes mode is {loaded.kubernetes.mode.value}")
+        if loaded.kubernetes.mode == KubernetesMode.HELM:
+            helm_reason = helm_values_diff_reason(loaded, root)
+            if helm_reason:
+                reasons.append(helm_reason)
+        else:
+            manifest_reason = kubernetes_rendered_manifest_diff_reason(loaded, root)
+            if manifest_reason:
+                reasons.append(manifest_reason)
+        return reasons
+
+    compose_path = root / loaded.docker.compose_file
     expected_compose = compose_text(loaded, entry.root)
     if not compose_path.exists():
         reasons.append(f"{loaded.docker.compose_file} is missing")
@@ -328,6 +359,7 @@ def watch(
 def deploy(
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
     yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip critical confirmation.")] = False,
 ) -> None:
     """Deploy the selected context.
@@ -338,23 +370,31 @@ def deploy(
         Optional context name.
     dry_run
         Whether to print planned commands without executing them.
+    json_output
+        Whether to emit machine-readable JSON.
     yes
         Whether to skip critical-context confirmation.
     """
     try:
         entry = resolve_context(context_name=context, reconcile_config=True)
+        plan_data = deployment_plan(entry)
+        if dry_run:
+            if json_output:
+                print_json({"dry_run": True, "plan": plan_data.as_dict()})
+                return
+            console.print(deploy_context(entry, dry_run=True))
+            return
         if (
             entry.critical
-            and not dry_run
             and not yes
             and not Confirm.ask(f"Deploy critical context {entry.name}?", default=False)
         ):
             raise typer.Exit(1)
-        if dry_run:
-            console.print(deploy_context(entry, dry_run=True))
-            return
         with terminal_status(f"Deploying context {entry.name}"):
             output = deploy_context(entry)
+        if json_output:
+            print_json({"dry_run": False, "result": output, "plan": plan_data.as_dict()})
+            return
         print_success(output)
     except SFTPWardenError as exc:
         handle_error(exc)
@@ -370,8 +410,18 @@ def doctor(json_output: Annotated[bool, typer.Option("--json")] = False) -> None
         Whether to emit machine-readable JSON.
     """
     checks = [
-        {"name": binary, "available": shutil.which(binary) is not None}
-        for binary in ("docker", "ssh", "rsync")
+        {
+            "name": binary,
+            "available": shutil.which(binary) is not None,
+            "required_for": required_for,
+        }
+        for binary, required_for in (
+            ("docker", "Docker Compose deployments"),
+            ("ssh", "remote contexts"),
+            ("rsync", "remote local-sync contexts"),
+            ("kubectl", "Kubernetes manifest deployments"),
+            ("helm", "Helm deployments"),
+        )
     ]
     if json_output:
         print_json({"checks": checks})
@@ -379,7 +429,9 @@ def doctor(json_output: Annotated[bool, typer.Option("--json")] = False) -> None
     console.print("[bold]SFTPWarden doctor[/bold]")
     for check in checks:
         status = "[green]available[/green]" if check["available"] else "[yellow]check PATH[/yellow]"
-        console.print(f"  [cyan]-[/cyan] [bold]{check['name']}[/bold]: {status}")
+        console.print(
+            f"  [cyan]-[/cyan] [bold]{check['name']}[/bold]: {status} ({check['required_for']})"
+        )
 
 
 @app.command()

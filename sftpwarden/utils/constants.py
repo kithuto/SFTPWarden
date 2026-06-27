@@ -1,3 +1,5 @@
+"""Shared constants for SFTPWarden paths, defaults, and config keys."""
+
 from __future__ import annotations
 
 APP_NAME = "sftpwarden"
@@ -53,6 +55,14 @@ PROJECT_CONFIG_PATHS = [
     "docker.container_name",
     "docker.restart",
     "docker.compose_file",
+    "deploy.target",
+    "kubernetes.mode",
+    "kubernetes.namespace",
+    "kubernetes.release",
+    "kubernetes.kube_context",
+    "kubernetes.service_type",
+    "kubernetes.storage_class",
+    "kubernetes.replicas",
     "remote.enabled",
     "remote.storage",
     "remote.host",

@@ -23,6 +23,9 @@ project. You do not need to know SFTPWarden internals to use these commands.
   - [sftpwarden health](#sftpwarden-health)
   - [sftpwarden backup](#sftpwarden-backup)
   - [sftpwarden restore](#sftpwarden-restore)
+- [Kubernetes Commands](#kubernetes-commands)
+  - [sftpwarden kube](#sftpwarden-kube)
+  - [sftpwarden helm](#sftpwarden-helm)
 - [Provider Transfer Commands](#provider-transfer-commands)
   - [sftpwarden provider export](#sftpwarden-provider-export)
   - [sftpwarden provider import](#sftpwarden-provider-import)
@@ -169,6 +172,18 @@ sftpwarden init archive \
   --critical
 ```
 
+Create a Kubernetes manifests project:
+
+```bash
+sftpwarden init prod --deploy kube --yes
+```
+
+Create a Helm project:
+
+```bash
+sftpwarden init prod --deploy helm --yes
+```
+
 Use `context add` instead of `init` only when the SFTPWarden project already exists
 and you just want to register it on this machine.
 
@@ -220,6 +235,7 @@ Important flags:
 | `--query` | Sets a custom read-only user query. |
 | `--table` | Sets the users table name. Default: `sftp_users`. |
 | `--collection` | Sets the MongoDB collection name. Default: `sftp_users`. |
+| `--deploy`, `-d` | Stores the deployment method: `compose`, `kube`, or `helm`. Default: `compose`. |
 | `--create-table` | Creates the SQL table or MongoDB collection/index if missing. |
 | `--no-create-table` | Aborts if the SQL table or MongoDB collection is missing. |
 
@@ -228,17 +244,26 @@ asks whether to create the storage or abort.
 
 ### `sftpwarden deploy`
 
-Starts or updates the SFTP runtime with Docker Compose.
+Starts or updates the SFTP runtime with the configured deployment target.
 
 ```bash
 sftpwarden deploy
 ```
 
-For local contexts, this runs Docker Compose in the context project folder:
+For Compose contexts, this runs Docker Compose in the context project folder.
+Source checkouts build the local runtime image:
+
+```bash
+docker compose -f docker-compose.yml up -d --build
+docker compose -f docker-compose.yml ps sftpwarden
+```
+
+Python package installations and custom `docker.image` values pull an image
+instead:
 
 ```bash
 docker compose -f docker-compose.yml pull
-docker compose -f docker-compose.yml up -d --build
+docker compose -f docker-compose.yml up -d
 docker compose -f docker-compose.yml ps sftpwarden
 ```
 
@@ -250,7 +275,12 @@ Preview without applying:
 
 ```bash
 sftpwarden deploy --dry-run
+sftpwarden deploy --dry-run --json
 ```
+
+For Kubernetes manifests, deploy renders `kubernetes.yml` and applies it with
+`kubectl`. For Helm mode, deploy writes `values.yaml` and runs
+`helm upgrade --install`.
 
 Deploy a critical context without a prompt:
 
@@ -300,8 +330,53 @@ Use this before `refresh` when you want to preview user creation, updates, or
 disabled users. The human-readable output explains whether user/provider changes
 were detected and that those actions will be applied by `sftpwarden refresh`.
 It also checks deploy-level configuration differences, such as a generated
-`docker-compose.yml` that no longer matches `sftpwarden.yaml`. Those changes are
-applied by `sftpwarden deploy`; `refresh` only looks at users.
+`docker-compose.yml`, `kubernetes.yml`, or `values.yaml` that no longer matches
+`sftpwarden.yaml`. Those changes are applied by `sftpwarden deploy`; `refresh`
+only looks at users.
+
+## Kubernetes Commands
+
+### `sftpwarden kube`
+
+Kubernetes manifest mode commands:
+
+```bash
+sftpwarden kube render
+sftpwarden kube apply
+sftpwarden kube status
+sftpwarden kube logs
+sftpwarden kube doctor
+sftpwarden kube delete --yes
+```
+
+`render` does not require a cluster. `apply`, `status`, `logs`, `doctor`, and
+`delete` use `kubectl`. Delete requires `--yes` unless you confirm interactively.
+
+### `sftpwarden helm`
+
+Helm mode commands:
+
+```bash
+sftpwarden helm values --write
+sftpwarden helm template
+sftpwarden helm lint
+sftpwarden helm upgrade --install
+sftpwarden helm uninstall --yes
+```
+
+`values` does not require Helm. Template, lint, upgrade, and uninstall require
+`helm`. Uninstall requires `--yes` unless you confirm interactively.
+
+Source checkouts use the local `charts/sftpwarden` chart. Python package
+installations use the published OCI chart
+`oci://ghcr.io/kithuto/charts/sftpwarden` pinned to the installed CLI version.
+
+The official chart also includes a Helm test hook that runs
+`sftpwarden runtime health` against the installed release:
+
+```bash
+helm test <release> --namespace <namespace>
+```
 
 ### `sftpwarden refresh`
 
@@ -373,7 +448,7 @@ sftpwarden doctor
 sftpwarden doctor --json
 ```
 
-It checks tools such as `docker`, `ssh`, and `rsync`.
+It checks tools such as `docker`, `ssh`, `rsync`, `kubectl`, and `helm`.
 
 ### `sftpwarden health`
 
@@ -754,6 +829,7 @@ Docker watcher:
 
 ```bash
 sftpwarden watcher install --watcher docker
+sftpwarden watcher install --watcher docker --image registry.example.com/watcher:tag
 ```
 
 Dry-run:
@@ -764,6 +840,9 @@ sftpwarden watcher install --watcher systemd --dry-run
 
 Systemd mode uses `sudo` and enables the service so it starts after reboot.
 Docker mode requires explicit dedicated SSH keys for remote contexts.
+Source checkouts build `sftpwarden-watcher:local`; Python package installations
+use `ghcr.io/kithuto/sftpwarden-watcher:<installed-version>` unless `--image`
+overrides it.
 
 ### `sftpwarden watcher uninstall`
 

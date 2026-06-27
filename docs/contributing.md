@@ -101,7 +101,8 @@ The default `tox` run covers:
 - tests on Python 3.11, 3.12, 3.13, and 3.14;
 - coverage once, instead of repeating it for every Python version;
 - Sphinx documentation build;
-- package build and wheel content check.
+- package build and wheel content check;
+- dependency audit.
 
 Run one part:
 
@@ -114,6 +115,8 @@ tox -e py314
 tox -e coverage
 tox -e docs
 tox -e package
+tox -e audit
+tox -e clean
 ```
 
 Run pytest directly while iterating:
@@ -155,6 +158,10 @@ behavior when the CLI output matters.
 For remote/deploy/watcher changes, include dry-run coverage so generated SSH,
 rsync, Docker, or systemd commands stay reviewable.
 
+Tox cleans Python caches, coverage output, docs output, and package artifacts
+after the environments that generate them. Run `tox -e clean` to clean the same
+local artifacts plus Docker smoke-test images.
+
 ## Pull Request Checklist
 
 Before opening a PR:
@@ -188,7 +195,9 @@ SFTPWARDEN_POSTGRES_DSN=postgresql://user:pass@localhost/sftp \
   sftpwarden validate --config examples/postgres/sftpwarden.yaml
 SFTPWARDEN_MONGODB_DSN=mongodb://localhost:27017/sftp \
   sftpwarden validate --config examples/mongodb/sftpwarden.yaml
+helm lint charts/sftpwarden
+helm template sftpwarden charts/sftpwarden --namespace sftpwarden
 ```
 
-Also check the repository-level security workflow before making the repository
-public: dependency audit, container scan, SBOM generation, and OpenSSF Scorecard.
+Also check the repository-level security workflow before publishing: dependency
+audit, container scan, SBOM generation, and OpenSSF Scorecard.

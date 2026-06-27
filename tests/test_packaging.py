@@ -1,3 +1,5 @@
+"""Packaging, metadata, and public release readiness tests."""
+
 from __future__ import annotations
 
 import subprocess
@@ -31,12 +33,14 @@ class _ImageSourceParser(HTMLParser):
 
 
 def test_package_version_is_read_from_pyproject() -> None:
+    """Keep the runtime package version aligned with project metadata."""
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
     assert pyproject["project"]["version"] == sftpwarden.__version__
 
 
 def test_version_pyproject_must_match_distribution_name(tmp_path: Path) -> None:
+    """Read versions only from the SFTPWarden distribution metadata."""
     other_project = tmp_path / "pyproject.toml"
     other_project.write_text(
         '[project]\nname = "other-project"\nversion = "9.9.9"\n',
@@ -57,6 +61,7 @@ def test_version_pyproject_must_match_distribution_name(tmp_path: Path) -> None:
 def test_version_helpers_ignore_invalid_pyprojects_and_fall_back_to_metadata(
     tmp_path: Path, monkeypatch
 ) -> None:
+    """Fall back to installed metadata when local pyproject data is invalid."""
     missing_project = tmp_path / "missing-project.toml"
     missing_project.write_text('name = "sftpwarden"\n', encoding="utf-8")
     invalid_toml = tmp_path / "invalid.toml"
@@ -74,10 +79,11 @@ def test_version_helpers_ignore_invalid_pyprojects_and_fall_back_to_metadata(
 
 
 def test_package_metadata_is_public_release_ready() -> None:
+    """Validate public package metadata required for a stable release."""
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     project = pyproject["project"]
 
-    assert project["version"] == "1.1.0"
+    assert project["version"] == "1.2.0"
     assert "Development Status :: 5 - Production/Stable" in project["classifiers"]
     assert project["license"] == "MIT"
     assert project["license-files"] == ["LICENSE"]
@@ -86,6 +92,7 @@ def test_package_metadata_is_public_release_ready() -> None:
 
 
 def test_database_extras_cover_public_provider_aliases() -> None:
+    """Expose database provider extras through the documented aliases."""
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     extras = pyproject["project"]["optional-dependencies"]
 
@@ -94,6 +101,7 @@ def test_database_extras_cover_public_provider_aliases() -> None:
 
 
 def test_readme_uses_pypi_safe_logo_url() -> None:
+    """Use an absolute README logo URL that renders correctly on PyPI."""
     readme = Path("README.md").read_text(encoding="utf-8")
     parser = _ImageSourceParser()
     parser.feed(readme)
@@ -111,6 +119,7 @@ def test_readme_uses_pypi_safe_logo_url() -> None:
 
 
 def test_installed_console_script_reports_version() -> None:
+    """Verify the packaged console entrypoint can report the version."""
     result = subprocess.run(
         [sys.executable, "-m", "sftpwarden", "--version"],
         check=False,

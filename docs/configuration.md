@@ -79,6 +79,67 @@ configuration change. Deploy reconciles important metadata before it runs; for
 example, changing `project.name` in YAML updates the registered context name.
 `watch` and `refresh` only handle user changes.
 
+## Deploy Target
+
+Compose is the default deployment target:
+
+```yaml
+deploy:
+  target: compose
+```
+
+Kubernetes manifests:
+
+```yaml
+deploy:
+  target: kubernetes
+kubernetes:
+  mode: manifests
+  namespace: sftpwarden
+  release: sftpwarden
+  kube_context: null
+  service_type: ClusterIP
+  storage_class: null
+  replicas: 1
+```
+
+Helm:
+
+```yaml
+deploy:
+  target: kubernetes
+kubernetes:
+  mode: helm
+```
+
+Generated Helm values include `runtime.replicas: 1`, the rendered
+`sftpwarden.yaml`, PVC defaults for data/state/provider storage, and
+`provider.bootstrapContent` for empty file-backed provider PVCs. The default
+Kubernetes namespace is `sftpwarden`.
+
+Use `kubernetes.kube_context` when the CLI should pass an explicit kube context
+to `kubectl` or Helm. The generated Helm values use the Helm-style key
+`kubernetes.kubeContext`.
+
+`kubernetes.service_type` accepts `ClusterIP`, `NodePort`, or `LoadBalancer`.
+`kubernetes.storage_class` can stay `null` to use the cluster default storage
+class, or be set to a named StorageClass.
+
+`kubernetes.replicas` is reserved for future multi-node support. SFTPWarden v1.2
+accepts only `1`; higher values fail with an explanation because multi-pod
+runtime support requires shared storage, shared host keys, provider-safe refresh,
+and UID/GID consistency.
+
+The same values can be changed through the CLI:
+
+```bash
+sftpwarden config deploy.target kubernetes
+sftpwarden config kubernetes.mode helm
+sftpwarden config kubernetes.namespace sftpwarden
+sftpwarden config kubernetes.kube_context kind-sftpwarden
+sftpwarden config kubernetes.replicas 1
+```
+
 ## Providers
 
 YAML:

@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "sftpwarden.name" . }}
+  namespace: {{ include "sftpwarden.namespace" . }}
+  labels:
+    {{- include "sftpwarden.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector:
+    {{- include "sftpwarden.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: sftp
+      port: 22
+      targetPort: sftp

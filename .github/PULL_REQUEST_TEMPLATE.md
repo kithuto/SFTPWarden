@@ -10,6 +10,7 @@ Describe the user-facing change.
 
 - [ ] Docs-only change: `tox -e docs`
 - [ ] Code change: `tox`
+- [ ] Kubernetes/Helm change: `helm lint`, `helm template`, and manifest dry-run where feasible
 - [ ] Docker/runtime change: local Docker build/smoke test
 - [ ] Docs updated when behavior changed
 - [ ] Examples updated when configuration changed
