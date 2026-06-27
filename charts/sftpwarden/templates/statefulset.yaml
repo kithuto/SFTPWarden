@@ -1,0 +1,122 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "sftpwarden.name" . }}
+  namespace: {{ include "sftpwarden.namespace" . }}
+  labels:
+    {{- include "sftpwarden.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "sftpwarden.name" . }}
+  replicas: {{ .Values.runtime.replicas }}
+  selector:
+    matchLabels:
+      {{- include "sftpwarden.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "sftpwarden.selectorLabels" . | nindent 8 }}
+    spec:
+      initContainers:
+        - name: host-key-bootstrap
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          command:
+            - sh
+            - -c
+            - |
+              cp /host-key-secret/* /host-keys/ 2>/dev/null || true
+              chmod 700 /host-keys
+              {{- if and .Values.persistence.provider.enabled .Values.provider.bootstrapContent }}
+              mkdir -p /etc/sftpwarden/provider-data
+              test -f {{ .Values.provider.path | quote }} || printf %b {{ .Values.provider.bootstrapContent | quote }} > {{ .Values.provider.path | quote }}
+              chmod 600 {{ .Values.provider.path | quote }}
+              {{- end }}
+          volumeMounts:
+            - name: host-keys
+              mountPath: /host-keys
+            - name: host-key-secret
+              mountPath: /host-key-secret
+              readOnly: true
+            {{- if and .Values.persistence.provider.enabled .Values.provider.bootstrapContent }}
+            - name: provider
+              mountPath: /etc/sftpwarden/provider-data
+            {{- end }}
+      containers:
+        - name: sftpwarden
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: sftp
+              containerPort: 22
+          env:
+            - name: SFTPWARDEN_CONFIG
+              value: /etc/sftpwarden/sftpwarden.yaml
+            {{- if .Values.provider.dsnSecretName }}
+            - name: {{ .Values.provider.dsnSecretKey }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.provider.dsnSecretName }}
+                  key: {{ .Values.provider.dsnSecretKey }}
+            {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/sftpwarden/sftpwarden.yaml
+              subPath: sftpwarden.yaml
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: state
+              mountPath: /var/lib/sftpwarden
+            - name: host-keys
+              mountPath: /etc/sftpwarden/host_keys
+            - name: host-key-secret
+              mountPath: {{ .Values.hostKeys.mountPath }}
+              readOnly: true
+            {{- if .Values.persistence.provider.enabled }}
+            - name: provider
+              mountPath: /etc/sftpwarden/provider-data
+            {{- end }}
+          startupProbe:
+            exec:
+              command: ["sftpwarden", "runtime", "health", "--config", "/etc/sftpwarden/sftpwarden.yaml"]
+            failureThreshold: 30
+            periodSeconds: 5
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["sftpwarden", "runtime", "health", "--config", "/etc/sftpwarden/sftpwarden.yaml"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["sftpwarden", "runtime", "health", "--config", "/etc/sftpwarden/sftpwarden.yaml"]
+            periodSeconds: 30
+            timeoutSeconds: 5
+          securityContext:
+            privileged: false
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETGID", "SETUID", "SYS_CHROOT"]
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "sftpwarden.name" . }}-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "sftpwarden.name" . }}-data
+        - name: state
+          persistentVolumeClaim:
+            claimName: {{ include "sftpwarden.name" . }}-state
+        - name: host-keys
+          emptyDir: {}
+        - name: host-key-secret
+          secret:
+            secretName: {{ .Values.hostKeys.secretName }}
+            optional: true
+        {{- if .Values.persistence.provider.enabled }}
+        - name: provider
+          persistentVolumeClaim:
+            claimName: {{ include "sftpwarden.name" . }}-provider
+        {{- end }}

@@ -65,8 +65,6 @@ Core product principles:
 Install for development:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev,docs,mysql,postgres,mongodb]"
 ```
@@ -89,6 +87,7 @@ tox -e coverage
 tox -e docs
 tox -e package
 tox -e audit
+tox -e clean
 ```
 
 Useful direct checks while iterating:

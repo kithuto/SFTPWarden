@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 import sftpwarden.cli_commands.core as core_commands
 import sftpwarden.cli_commands.runtime as runtime_commands
+import sftpwarden.render.compose as compose_module
 import sftpwarden.services.health as health_services
 from sftpwarden.cli import app
 from sftpwarden.config import ProviderType, default_project_config, write_config
@@ -72,6 +73,34 @@ def test_project_health_report_and_compose_healthcheck(
         "--config",
         "/etc/sftpwarden/sftpwarden.yaml",
     ]
+
+
+def test_compose_runtime_image_resolves_local_pip_and_custom_modes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Compose builds local source images and pulls packaged or custom images."""
+    root = tmp_path / "project"
+    root.mkdir()
+    config = default_project_config("dev")
+
+    local = yaml.safe_load(compose_text(config, root))["services"]["sftpwarden"]
+
+    assert local["image"] == "sftpwarden:local"
+    assert local["build"]["dockerfile"] == "docker/runtime/Dockerfile"
+
+    monkeypatch.setattr(compose_module, "LOCAL_RUNTIME_DOCKERFILE", tmp_path / "missing")
+    monkeypatch.setattr(compose_module, "get_version", lambda: "9.9.9")
+
+    packaged = yaml.safe_load(compose_text(config, root))["services"]["sftpwarden"]
+
+    assert packaged["image"] == "ghcr.io/kithuto/sftpwarden:9.9.9"
+    assert "build" not in packaged
+
+    config.docker.image = "registry.example.com/sftpwarden:test"
+    custom = yaml.safe_load(compose_text(config, root))["services"]["sftpwarden"]
+
+    assert custom["image"] == "registry.example.com/sftpwarden:test"
+    assert "build" not in custom
 
 
 def test_project_health_edges_and_runtime_context_commands(

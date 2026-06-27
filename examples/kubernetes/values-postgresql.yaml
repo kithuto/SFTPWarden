@@ -1,0 +1,40 @@
+image:
+  repository: ghcr.io/kithuto/sftpwarden
+  tag: "1.2.0"
+
+runtime:
+  replicas: 1
+
+sftpwardenConfig: |
+  version: 1
+  project:
+    name: sftpwarden
+    description: SFTPWarden PostgreSQL Kubernetes example
+  provider:
+    type: postgresql
+    dsn: "${SFTPWARDEN_PROVIDER_DSN}"
+    table: sftp_users
+
+service:
+  type: ClusterIP
+
+kubernetes:
+  namespace: sftpwarden
+  release: sftpwarden
+  storageClass: standard
+
+provider:
+  type: postgresql
+  dsnSecretName: sftpwarden-provider
+  dsnSecretKey: SFTPWARDEN_PROVIDER_DSN
+  createDsnSecret: false
+
+persistence:
+  data:
+    enabled: true
+    size: 10Gi
+  state:
+    enabled: true
+    size: 1Gi
+  provider:
+    enabled: false

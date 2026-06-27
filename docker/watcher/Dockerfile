@@ -2,7 +2,7 @@ FROM python:3.14-alpine AS watcher
 
 LABEL org.opencontainers.image.title="SFTPWarden watcher" \
       org.opencontainers.image.description="Local-to-remote SFTPWarden config watcher" \
-      org.opencontainers.image.licenses="Apache-2.0"
+      org.opencontainers.image.licenses="MIT"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1

@@ -1,3 +1,5 @@
+"""Project configuration models, validation, and persistence helpers."""
+
 from __future__ import annotations
 
 import json
@@ -72,6 +74,38 @@ class WatcherMode(StrEnum):
 
     SYSTEMD = "systemd"
     DOCKER = "docker"
+
+
+class DeployTarget(StrEnum):
+    """Supported deployment targets."""
+
+    COMPOSE = "compose"
+    KUBERNETES = "kubernetes"
+
+
+class KubernetesMode(StrEnum):
+    """Supported Kubernetes deployment modes."""
+
+    MANIFESTS = "manifests"
+    HELM = "helm"
+
+
+class KubernetesServiceType(StrEnum):
+    """Supported Kubernetes Service types."""
+
+    CLUSTER_IP = "ClusterIP"
+    NODE_PORT = "NodePort"
+    LOAD_BALANCER = "LoadBalancer"
+
+
+KUBERNETES_REPLICAS_ERROR = (
+    "Kubernetes replicas > 1 are not supported yet.\n\n"
+    "Reason:\n"
+    "SFTPWarden currently runs one OpenSSH runtime per context. Multi-pod runtime "
+    "requires shared storage, shared host keys, provider-safe refresh and UID/GID "
+    "consistency.\n\n"
+    "Use replicas: 1 for now."
+)
 
 
 class ProjectConfig(BaseModel):
@@ -336,6 +370,45 @@ class DockerConfig(BaseModel):
     compose_file: str = "docker-compose.yml"
 
 
+class DeployConfig(BaseModel):
+    """Deployment target selection."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    target: DeployTarget = DeployTarget.COMPOSE
+
+
+class KubernetesConfig(BaseModel):
+    """Kubernetes deployment configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: KubernetesMode = KubernetesMode.MANIFESTS
+    namespace: str = Field(default="sftpwarden", min_length=1)
+    release: str = Field(default="sftpwarden", min_length=1)
+    kube_context: str | None = None
+    service_type: KubernetesServiceType = KubernetesServiceType.CLUSTER_IP
+    storage_class: str | None = None
+    replicas: int = Field(default=1, ge=1)
+
+    def ensure_supported_replicas(self) -> None:
+        """Reject multi-pod runtime deployments until the runtime supports them."""
+        if self.replicas > 1:
+            raise ValueError(KUBERNETES_REPLICAS_ERROR)
+
+    @model_validator(mode="after")
+    def validate_replicas(self) -> KubernetesConfig:
+        """Reject multi-pod runtime deployments until the runtime supports them.
+
+        Returns
+        -------
+        KubernetesConfig
+            Validated Kubernetes config.
+        """
+        self.ensure_supported_replicas()
+        return self
+
+
 class RemoteConfig(BaseModel):
     """Remote deployment defaults."""
 
@@ -373,8 +446,6 @@ class WatcherConfig(BaseModel):
         """
         if self.mode == WatcherMode.SYSTEMD and self.image:
             raise ValueError("watcher.image is only valid when watcher.mode is docker.")
-        if self.mode == WatcherMode.DOCKER and self.enabled and not self.image:
-            self.image = "sftpwarden-watcher:local"
         return self
 
 
@@ -393,6 +464,8 @@ class SFTPWardenConfig(BaseModel):
     provider: ProviderConfig = Field(default_factory=ProviderConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     docker: DockerConfig = Field(default_factory=DockerConfig)
+    deploy: DeployConfig = Field(default_factory=DeployConfig)
+    kubernetes: KubernetesConfig = Field(default_factory=KubernetesConfig)
     remote: RemoteConfig = Field(default_factory=RemoteConfig)
     watcher: WatcherConfig = Field(default_factory=WatcherConfig)
 
@@ -415,10 +488,19 @@ def validation_error_to_config_error(
         Formatted SFTPWarden config error.
     """
     details = []
+    replicas_messages = []
     for item in error.errors():
         loc = ".".join(str(part) for part in item["loc"])
-        details.append(f"{loc}: {item['msg']}")
+        message = str(item["msg"])
+        if "Kubernetes replicas > 1 are not supported yet." in message:
+            replicas_messages.append(message.removeprefix("Value error, "))
+        details.append(f"{loc}: {message}")
     prefix = f"Invalid config in {source}: " if source else "Invalid config: "
+    if replicas_messages:
+        return ConfigError(
+            prefix + replicas_messages[0],
+            suggestion="Set kubernetes.replicas to 1.",
+        )
     return ConfigError(
         prefix + "; ".join(details),
         suggestion="Run `sftpwarden init` or fix the YAML keys shown above.",
@@ -497,6 +579,8 @@ def default_project_config(
     query: str | None = None,
     table: str = "sftp_users",
     collection: str = "sftp_users",
+    deploy_target: DeployTarget = DeployTarget.COMPOSE,
+    kubernetes_mode: KubernetesMode = KubernetesMode.MANIFESTS,
 ) -> SFTPWardenConfig:
     """Create a default project configuration.
 
@@ -512,6 +596,12 @@ def default_project_config(
         Optional SQL read query.
     table
         SQL users table name.
+    collection
+        MongoDB users collection name.
+    deploy_target
+        Initial deployment target for generated projects.
+    kubernetes_mode
+        Kubernetes deployment mode when the target is Kubernetes.
 
     Returns
     -------
@@ -523,9 +613,13 @@ def default_project_config(
         provider_path = f"{CONTAINER_PROVIDER_DIR}/users.csv"
     if provider == ProviderType.SQLITE:
         provider_path = f"{CONTAINER_PROVIDER_DIR}/users.sqlite"
+    deploy_config = DeployConfig(target=deploy_target)
+    kubernetes_config = KubernetesConfig(mode=kubernetes_mode, release=name)
     if provider in SQL_QUERY_PROVIDER_TYPES:
         return SFTPWardenConfig(
             project=ProjectConfig(name=name),
+            deploy=deploy_config,
+            kubernetes=kubernetes_config,
             provider=ProviderConfig(
                 type=provider,
                 path=provider_path,
@@ -537,6 +631,8 @@ def default_project_config(
     if provider == ProviderType.MONGODB:
         return SFTPWardenConfig(
             project=ProjectConfig(name=name),
+            deploy=deploy_config,
+            kubernetes=kubernetes_config,
             provider=ProviderConfig(
                 type=provider,
                 path=provider_path,
@@ -546,6 +642,8 @@ def default_project_config(
         )
     return SFTPWardenConfig(
         project=ProjectConfig(name=name),
+        deploy=deploy_config,
+        kubernetes=kubernetes_config,
         provider=ProviderConfig(type=provider, path=provider_path),
     )
 

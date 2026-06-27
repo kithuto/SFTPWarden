@@ -5,17 +5,16 @@ secret exposure, and unsafe deployment patterns seriously.
 
 ## Supported Versions
 
-Before the first stable release, only the current `main` development line is
-supported.
-
-After v1.0, supported versions will be documented here.
+The current stable release line is supported for security fixes. Older minor
+versions may receive fixes only at the maintainer's discretion when the impact is
+high and a backport is practical.
 
 ## Reporting a Vulnerability
 
 Do not open a public issue for vulnerabilities.
 
-When the repository is public, use the GitHub private vulnerability reporting or
-security advisory flow. Until then, contact the project owner privately.
+Use GitHub private vulnerability reporting or the security advisory flow when
+available. Otherwise, contact the project owner privately.
 
 Please include:
 

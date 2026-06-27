@@ -67,7 +67,7 @@ def test_systemd_watcher_does_not_allow_image() -> None:
 def test_docker_watcher_can_default_image() -> None:
     watcher = WatcherConfig(enabled=True, mode=WatcherMode.DOCKER)
 
-    assert watcher.image == "sftpwarden-watcher:local"
+    assert watcher.image is None
 
 
 def test_password_authentication_is_enabled_by_default() -> None:

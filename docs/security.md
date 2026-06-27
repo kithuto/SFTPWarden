@@ -72,6 +72,22 @@ default identity, agent, `ProxyJump`, or bastion rules matter. Docker watcher mo
 is intentionally stricter: every watched remote context must define `--ssh-key`
 with an existing dedicated deployment key.
 
+## Kubernetes Security
+
+Kubernetes deployments keep the same boundaries:
+
+- DSNs, passwords, private keys, and host keys belong in Kubernetes Secrets.
+- ConfigMaps are for non-sensitive `sftpwarden.yaml` content only.
+- SFTP data and runtime state use PVCs so restarts do not lose user files or
+  UID/GID state.
+- Host keys are loaded from a Secret from the start; do not commit real host keys
+  to Git.
+- SFTPWarden v1.2 runs one OpenSSH runtime pod per context. `replicas > 1` is
+  reserved and rejected until shared storage, shared host keys, provider-safe
+  refresh, and UID/GID consistency are implemented.
+- Use PostgreSQL, MariaDB/MySQL, or MongoDB providers for production Kubernetes
+  deployments. SQLite is single-pod/lab only.
+
 ## Backups
 
 `sftpwarden backup` excludes SFTP user data under `data/` by default, but it still

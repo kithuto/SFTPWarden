@@ -61,11 +61,15 @@ git checkout dev
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-python -m pip install -e ".[dev,docs,watch,mysql,postgres]"
+python -m pip install -e ".[dev,docs,mysql,postgres,mongodb]"
 sftpwarden --version
 ```
 
-Use Python 3.11, 3.12, or 3.13. The full test matrix uses all three through `tox`.
+The `mysql` extra also enables MariaDB because both providers use PyMySQL. The
+`mariadb` extra is an alias for the same dependency.
+
+Use Python 3.11, 3.12, 3.13, or 3.14. The full test matrix uses all four through
+`tox`.
 
 ## Daily Development Commands
 
@@ -81,9 +85,13 @@ Run one environment:
 tox -e py311
 tox -e py312
 tox -e py313
+tox -e py314
 tox -e lint
+tox -e coverage
 tox -e docs
 tox -e package
+tox -e audit
+tox -e clean
 ```
 
 Run pytest directly while iterating:
@@ -105,28 +113,42 @@ Build package artifacts:
 python -m build
 ```
 
+Clean local artifacts:
+
+```bash
+tox -e clean
+```
+
+This removes Python caches, coverage output, docs output, package artifacts, and
+Docker smoke-test images created during local validation.
+
 ## Project Structure
 
 ```text
 sftpwarden/
   cli_commands/        # Typer command modules
   config/              # Project and global config models
-  providers/           # YAML, CSV, MySQL, PostgreSQL providers
-  remote/              # SSH, rsync, deploy planning
-  render/              # Docker Compose rendering
+  contexts/            # Context registry and resolution
+  providers/           # YAML, CSV, SQLite, SQL, and MongoDB providers
+  refresh/             # Runtime refresh orchestration
+  remote/              # SSH, rsync, and remote deploy support
+  render/              # Compose and Kubernetes rendering
   security/            # Password/hash helpers
-  services/            # CLI-facing business workflows
+  services/            # Deploy, backup, health, and CLI-facing workflows
   system/              # Subprocess wrapper
   users/               # User models and provider mutation helpers
   utils/               # Small shared utilities
+  watcher/             # Remote local-sync watcher planning and execution
 
 docker/
   runtime/             # OpenSSH runtime image
   watcher/             # Optional remote local-sync watcher image
 
+charts/                # Official Helm chart
 docs/                  # Sphinx documentation
 examples/              # Small runnable configuration examples
 tests/                 # Unit and CLI tests
+tools/                 # Local maintenance helpers
 ```
 
 ## Coding Guidelines

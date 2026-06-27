@@ -8,6 +8,7 @@ from typer.testing import CliRunner
 
 import sftpwarden.refresh.core as refresh_module
 import sftpwarden.remote.deploy as deploy_module
+import sftpwarden.render.compose as compose_module
 import sftpwarden.watcher.core as watcher_module
 from sftpwarden.cli import app
 from sftpwarden.config import (
@@ -609,6 +610,45 @@ def test_docker_watcher_plan_uses_custom_image() -> None:
 
     assert "example/watcher:test" in text
     assert "docker compose" in plan.text()
+    assert "--build" not in plan.text()
+
+
+def test_docker_watcher_image_resolves_local_pip_and_custom_modes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Docker watcher builds source images and pulls packaged GHCR images."""
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(watcher_module, "docker_watcher_ssh_volumes", lambda: [])
+
+    local = render_docker_watcher_compose()
+    local_plan = watcher_install_plan(WatcherInstallMode.DOCKER)
+
+    assert "image: sftpwarden-watcher:local" in local
+    assert "dockerfile: docker/watcher/Dockerfile" in local
+    assert "pull" not in local_plan.text()
+    assert "--build" in local_plan.text()
+
+    monkeypatch.setattr(watcher_module, "LOCAL_WATCHER_DOCKERFILE", tmp_path / "missing")
+    monkeypatch.setattr(watcher_module, "get_version", lambda: "9.9.9")
+
+    packaged = render_docker_watcher_compose()
+    packaged_plan = watcher_install_plan(WatcherInstallMode.DOCKER)
+
+    assert "image: ghcr.io/kithuto/sftpwarden-watcher:9.9.9" in packaged
+    assert "dockerfile:" not in packaged
+    assert "docker compose" in packaged_plan.text()
+    assert "pull" in packaged_plan.text()
+    assert "--build" not in packaged_plan.text()
+
+    custom = render_docker_watcher_compose(image="registry.example.com/watcher:test")
+    custom_plan = watcher_install_plan(
+        WatcherInstallMode.DOCKER, image="registry.example.com/watcher:test"
+    )
+
+    assert "image: registry.example.com/watcher:test" in custom
+    assert "dockerfile:" not in custom
+    assert "pull" not in custom_plan.text()
+    assert "--build" not in custom_plan.text()
 
 
 def test_poll_watch_syncs_changed_targets_once(
@@ -849,7 +889,8 @@ def test_deploy_remote_local_sync_dry_run_includes_sync_and_compose(
     assert "mkdir -p /opt/sftpwarden" in output
     assert "rsync" in output
     assert "docker compose -f docker-compose.yml pull" in output
-    assert "docker compose -f docker-compose.yml up -d --build" in output
+    assert "docker compose -f docker-compose.yml up -d" in output
+    assert "--build" not in output
 
 
 def test_deploy_remote_only_dry_run_validates_remote_files(
@@ -875,7 +916,9 @@ def test_deploy_remote_only_dry_run_validates_remote_files(
     assert result.exit_code == 0, result.output
     assert "test -f /opt/sftpwarden/sftpwarden.yaml" in output
     assert "rsync" not in output
-    assert "docker compose -f docker-compose.yml up -d --build" in output
+    assert "docker compose -f docker-compose.yml pull" in output
+    assert "docker compose -f docker-compose.yml up -d" in output
+    assert "--build" not in output
 
 
 def test_deploy_context_accepts_injected_runner(tmp_path: Path) -> None:
@@ -894,8 +937,7 @@ def test_deploy_context_accepts_injected_runner(tmp_path: Path) -> None:
 
     assert result == "Deployed dev."
     assert calls[0][0] == ["docker", "compose", "version"]
-    assert calls[1][0] == ["docker", "compose", "-f", "docker-compose.yml", "pull"]
-    assert calls[2][0] == [
+    assert calls[1][0] == [
         "docker",
         "compose",
         "-f",
@@ -904,7 +946,35 @@ def test_deploy_context_accepts_injected_runner(tmp_path: Path) -> None:
         "-d",
         "--build",
     ]
+    assert calls[2][0] == ["docker", "compose", "-f", "docker-compose.yml", "ps", "sftpwarden"]
     assert {cwd for _, cwd in calls} == {str(root)}
+
+
+def test_deploy_context_pulls_packaged_runtime_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Packaged installs pull the GHCR runtime image instead of building locally."""
+    monkeypatch.setattr(compose_module, "LOCAL_RUNTIME_DOCKERFILE", tmp_path / "missing")
+    monkeypatch.setattr(compose_module, "get_version", lambda: "9.9.9")
+    root = tmp_path / "dev-project"
+    root.mkdir()
+    config = default_project_config("dev")
+    write_config(root / "sftpwarden.yaml", config)
+    (root / "users.yaml").write_text(empty_provider_text(config.provider.type), encoding="utf-8")
+    entry = local_context("dev", root, config.provider.type)
+    calls: list[tuple[list[str], str | None]] = []
+
+    def fake_runner(command: list[str], *, cwd: str | None = None) -> None:
+        calls.append((command, cwd))
+
+    result = deploy_context(entry, runner=fake_runner)
+    compose_text = (root / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert result == "Deployed dev."
+    assert "ghcr.io/kithuto/sftpwarden:9.9.9" in compose_text
+    assert "--build" not in " ".join(" ".join(command) for command, _cwd in calls)
+    assert calls[1][0] == ["docker", "compose", "-f", "docker-compose.yml", "pull"]
+    assert calls[2][0] == ["docker", "compose", "-f", "docker-compose.yml", "up", "-d"]
 
 
 def test_deploy_context_reports_missing_local_docker_compose(tmp_path: Path) -> None:

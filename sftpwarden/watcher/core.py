@@ -23,9 +23,15 @@ from sftpwarden.remote.ssh import (
     uses_default_ssh_identity,
 )
 from sftpwarden.system.commands import command_text, run_checked
+from sftpwarden.utils._version import get_version
 from sftpwarden.utils.collections import unique_items
 from sftpwarden.utils.errors import ContextError
 from sftpwarden.utils.paths import app_home, contexts_path
+
+DEFAULT_LOCAL_WATCHER_IMAGE = "sftpwarden-watcher:local"
+GHCR_WATCHER_IMAGE_REPOSITORY = "ghcr.io/kithuto/sftpwarden-watcher"
+SOURCE_ROOT = Path(__file__).resolve().parents[2]
+LOCAL_WATCHER_DOCKERFILE = SOURCE_ROOT / "docker" / "watcher" / "Dockerfile"
 
 
 class WatcherInstallMode(StrEnum):
@@ -63,6 +69,40 @@ class WatcherInstallPlan:
         rendered = [f"{self.mode.value} watcher: {self.path}"]
         rendered.extend(" ".join(command) for command in self.commands)
         return "\n".join(rendered)
+
+
+@dataclass(frozen=True)
+class WatcherImageReference:
+    """Resolved Docker watcher image and optional local build metadata."""
+
+    image: str
+    build: dict[str, str] | None = None
+    pull_before_up: bool = False
+
+    @property
+    def local_build(self) -> bool:
+        """Return whether Docker Compose should build the watcher image locally."""
+        return self.build is not None
+
+
+def watcher_image_reference(
+    image: str | None = None, *, allow_local_build: bool = True
+) -> WatcherImageReference:
+    """Resolve the Docker watcher image for source checkouts and packaged installs."""
+    if image:
+        return WatcherImageReference(image=image)
+    if allow_local_build and LOCAL_WATCHER_DOCKERFILE.exists():
+        return WatcherImageReference(
+            image=DEFAULT_LOCAL_WATCHER_IMAGE,
+            build={
+                "context": str(SOURCE_ROOT),
+                "dockerfile": "docker/watcher/Dockerfile",
+            },
+        )
+    return WatcherImageReference(
+        image=f"{GHCR_WATCHER_IMAGE_REPOSITORY}:{get_version()}",
+        pull_before_up=True,
+    )
 
 
 def remote_root_path(context: ContextEntry, local_path: Path) -> str:
@@ -379,12 +419,19 @@ def watcher_install_plan(
                 ["sudo", "systemctl", "enable", "--now", "sftpwarden-watch.service"],
             ],
         )
+    image_reference = watcher_image_reference(image)
+    compose_command = ["docker", "compose", "-f", str(docker_watcher_compose_path())]
+    commands = []
+    if image_reference.pull_before_up:
+        commands.append([*compose_command, "pull"])
+    if image_reference.local_build:
+        commands.append([*compose_command, "up", "-d", "--build"])
+    else:
+        commands.append([*compose_command, "up", "-d"])
     return WatcherInstallPlan(
         mode=mode,
         path=docker_watcher_compose_path(),
-        commands=[
-            ["docker", "compose", "-f", str(docker_watcher_compose_path()), "up", "-d"],
-        ],
+        commands=commands,
     )
 
 
@@ -471,16 +518,20 @@ def render_docker_watcher_compose(*, image: str | None = None) -> str:
         f"{contexts_path()}:{contexts_path()}:ro",
         *docker_watcher_ssh_volumes(),
     ]
+    image_reference = watcher_image_reference(image)
+    service = {
+        "image": image_reference.image,
+        "command": ["sftpwarden", "watch"],
+        "volumes": unique_items(volumes),
+        "restart": "unless-stopped",
+        "read_only": True,
+        "security_opt": ["no-new-privileges:true"],
+    }
+    if image_reference.build:
+        service["build"] = image_reference.build
     model = {
         "services": {
-            "sftpwarden-watcher": {
-                "image": image or "sftpwarden-watcher:local",
-                "command": ["sftpwarden", "watch"],
-                "volumes": unique_items(volumes),
-                "restart": "unless-stopped",
-                "read_only": True,
-                "security_opt": ["no-new-privileges:true"],
-            }
+            "sftpwarden-watcher": service,
         }
     }
     return yaml.safe_dump(model, sort_keys=False)

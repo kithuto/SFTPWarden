@@ -9,7 +9,7 @@ from sftpwarden.config import FILE_PROVIDER_TYPES, RemoteStorage, load_config, p
 from sftpwarden.contexts import ContextEntry, ContextType, RemoteEndpoint
 from sftpwarden.remote.checks import verify_remote_runtime_requirements
 from sftpwarden.remote.ssh import rsync_ssh_transport, ssh_base_command
-from sftpwarden.render.compose import write_compose
+from sftpwarden.render.compose import runtime_image_reference, write_compose
 from sftpwarden.system.commands import command_text, run_checked
 from sftpwarden.utils.errors import ContextError, RuntimeError
 
@@ -150,13 +150,20 @@ def _local_deploy_plan(context: ContextEntry) -> DeployPlan:
         raise ContextError(f"Local context {context.name} is missing local settings.")
     config = load_config(context.config)
     write_compose(config, context.root)
-    return DeployPlan(
-        commands=[
-            ["docker", "compose", "-f", config.docker.compose_file, "pull"],
-            ["docker", "compose", "-f", config.docker.compose_file, "up", "-d", "--build"],
+    image = runtime_image_reference(config, allow_local_build=True)
+    commands = []
+    if not image.local_build:
+        commands.append(["docker", "compose", "-f", config.docker.compose_file, "pull"])
+    up_command = ["docker", "compose", "-f", config.docker.compose_file, "up", "-d"]
+    if image.local_build:
+        up_command.append("--build")
+    commands.extend(
+        [
+            up_command,
             ["docker", "compose", "-f", config.docker.compose_file, "ps", "sftpwarden"],
         ]
     )
+    return DeployPlan(commands=commands)
 
 
 def _remote_local_sync_deploy_plan(context: ContextEntry) -> DeployPlan:
@@ -165,7 +172,7 @@ def _remote_local_sync_deploy_plan(context: ContextEntry) -> DeployPlan:
     if not context.root or not context.config:
         raise ContextError(f"Remote local-sync context {context.name} is missing local settings.")
     config = load_config(context.config)
-    compose_path = write_compose(config, context.root)
+    compose_path = write_compose(config, context.root, allow_local_build=False)
     files = required_sync_files(
         Path(context.root),
         config_path=Path(context.config),
@@ -177,9 +184,7 @@ def _remote_local_sync_deploy_plan(context: ContextEntry) -> DeployPlan:
             remote_shell_command(context.remote, mkdir_command),
             remote_rsync_command(files, context.remote),
             remote_shell_command(context.remote, remote_compose_command(context.remote, "pull")),
-            remote_shell_command(
-                context.remote, remote_compose_command(context.remote, "up -d --build")
-            ),
+            remote_shell_command(context.remote, remote_compose_command(context.remote, "up -d")),
             remote_shell_command(
                 context.remote,
                 remote_compose_command(context.remote, "ps sftpwarden"),
@@ -200,7 +205,7 @@ def _remote_only_deploy_plan(context: ContextEntry) -> DeployPlan:
         commands=[
             remote_shell_command(remote, validate),
             remote_shell_command(remote, remote_compose_command(remote, "pull")),
-            remote_shell_command(remote, remote_compose_command(remote, "up -d --build")),
+            remote_shell_command(remote, remote_compose_command(remote, "up -d")),
             remote_shell_command(remote, remote_compose_command(remote, "ps sftpwarden")),
         ]
     )
