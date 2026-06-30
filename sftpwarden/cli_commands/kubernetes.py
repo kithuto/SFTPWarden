@@ -30,8 +30,8 @@ def kube_render(
 ) -> None:
     """Render Kubernetes manifests without applying them."""
     try:
-        loaded = _load_config(context, config)
-        console.print(kubernetes_manifest_text(loaded))
+        entry, loaded = _load_context_config(context, config)
+        console.print(kubernetes_manifest_text(loaded, entry.root))
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -64,15 +64,24 @@ def kube_apply(
                 suggestion="Use a local or remote local-sync context.",
             )
         write_kubernetes_manifests(loaded, entry.root)
-        command = plan.actions[-1].command
-        if not command:
+        commands = [action.command for action in plan.actions if action.command]
+        if not commands:
             raise SFTPWardenError("Kubernetes apply command was not generated.")
+        results = []
         with terminal_status("Applying Kubernetes manifests"):
-            result = run(command, cwd=entry.root)
-        if result.returncode != 0:
-            raise translate_command_failure(result)
+            for command in commands:
+                result = run(command, cwd=entry.root)
+                if result.returncode != 0:
+                    raise translate_command_failure(result)
+                results.append(result.stdout.strip())
         if json_output:
-            print_json({"dry_run": False, "plan": plan.as_dict(), "result": result.stdout.strip()})
+            print_json(
+                {
+                    "dry_run": False,
+                    "plan": plan.as_dict(),
+                    "result": "\n".join(output for output in results if output),
+                }
+            )
             return
         print_success("Applied Kubernetes manifests.")
     except SFTPWardenError as exc:
@@ -214,13 +223,17 @@ def kube_delete(
 
 
 def _load_config(context: str | None, config: str | None):
+    return _load_context_config(context, config)[1]
+
+
+def _load_context_config(context: str | None, config: str | None):
     entry = resolve_context(config_path=config, context_name=context, reconcile_config=True)
     if not entry.config:
         raise SFTPWardenError(
             f"Context {entry.name} has no local sftpwarden.yaml.",
             suggestion="Use a local or remote local-sync context, or pass --config.",
         )
-    return load_config(entry.config)
+    return entry, load_config(entry.config)
 
 
 def _status_commands(config):

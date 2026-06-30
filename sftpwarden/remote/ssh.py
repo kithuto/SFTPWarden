@@ -87,3 +87,36 @@ def rsync_ssh_transport(remote: RemoteEndpoint) -> str:
         Shell-escaped SSH transport command.
     """
     return shlex.join(ssh_base_command(remote, destination=False))
+
+
+def scp_upload_command(remote: RemoteEndpoint, local_path: Path, remote_path: str) -> list[str]:
+    """Build a safe scp upload command for one file.
+
+    Parameters
+    ----------
+    remote
+        Remote endpoint used for the upload.
+    local_path
+        Local file to upload.
+    remote_path
+        Remote destination path.
+
+    Returns
+    -------
+    list[str]
+        SCP command arguments.
+    """
+    command = [
+        "scp",
+        "-P",
+        str(remote.port),
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+    ]
+    key_path = explicit_ssh_key_path(remote.ssh_key)
+    if key_path is not None:
+        command.extend(["-i", str(key_path)])
+    command.extend([str(local_path), f"{remote.user}@{remote.host}:{remote_path}"])
+    return command

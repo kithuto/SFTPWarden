@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from enum import StrEnum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 import yaml
@@ -26,7 +26,10 @@ from sftpwarden.utils.validation import (
     validate_relative_safe_path,
 )
 
-SQL_TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
+SQL_TABLE_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?$", flags=re.ASCII)
+KUBERNETES_STORAGE_QUANTITY_RE = re.compile(
+    r"^(?=.*[1-9])(?:0|[1-9]\d*)(?:\.\d+)?(?:Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$"
+)
 
 
 class ProviderType(StrEnum):
@@ -62,6 +65,12 @@ SQL_QUERY_PROVIDER_TYPES = {
 WATCHER_SYNC_PROVIDER_TYPES = FILE_PROVIDER_TYPES
 
 
+def _is_container_provider_path(path: PurePosixPath) -> bool:
+    """Return whether a POSIX provider path points inside the runtime config dir."""
+    container_root = PurePosixPath(CONTAINER_PROVIDER_DIR)
+    return path == container_root or container_root in path.parents
+
+
 class RemoteStorage(StrEnum):
     """Supported storage modes for remote contexts."""
 
@@ -72,7 +81,13 @@ class RemoteStorage(StrEnum):
 class WatcherMode(StrEnum):
     """Supported watcher installation modes."""
 
+    AUTO = "auto"
     SYSTEMD = "systemd"
+    OPENRC = "openrc"
+    RUNIT = "runit"
+    SUPERVISORD = "supervisord"
+    LAUNCHD = "launchd"
+    WINDOWS_TASK = "windows-task"
     DOCKER = "docker"
 
 
@@ -359,6 +374,17 @@ class LoggingConfig(BaseModel):
     format: Literal["json", "text"] = "json"
 
 
+class HealthcheckConfig(BaseModel):
+    """Docker Compose runtime healthcheck timing configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    interval_seconds: int = Field(default=30, ge=1)
+    timeout_seconds: int = Field(default=10, ge=1)
+    retries: int = Field(default=3, ge=1)
+    start_period_seconds: int = Field(default=20, ge=0)
+
+
 class DockerConfig(BaseModel):
     """Docker Compose rendering configuration."""
 
@@ -378,6 +404,40 @@ class DeployConfig(BaseModel):
     target: DeployTarget = DeployTarget.COMPOSE
 
 
+class KubernetesProbeConfig(BaseModel):
+    """Kubernetes runtime probe timing configuration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    period_seconds: int = Field(default=10, ge=1)
+    timeout_seconds: int = Field(default=5, ge=1)
+    failure_threshold: int = Field(default=3, ge=1)
+
+
+class KubernetesStartupProbeConfig(KubernetesProbeConfig):
+    """Kubernetes startup probe timing configuration."""
+
+    period_seconds: int = Field(default=5, ge=1)
+    timeout_seconds: int = Field(default=5, ge=1)
+    failure_threshold: int = Field(default=30, ge=1)
+
+
+class KubernetesReadinessProbeConfig(KubernetesProbeConfig):
+    """Kubernetes readiness probe timing configuration."""
+
+    period_seconds: int = Field(default=10, ge=1)
+    timeout_seconds: int = Field(default=5, ge=1)
+    failure_threshold: int = Field(default=3, ge=1)
+
+
+class KubernetesLivenessProbeConfig(KubernetesProbeConfig):
+    """Kubernetes liveness probe timing configuration."""
+
+    period_seconds: int = Field(default=30, ge=1)
+    timeout_seconds: int = Field(default=5, ge=1)
+    failure_threshold: int = Field(default=3, ge=1)
+
+
 class KubernetesConfig(BaseModel):
     """Kubernetes deployment configuration."""
 
@@ -389,12 +449,45 @@ class KubernetesConfig(BaseModel):
     kube_context: str | None = None
     service_type: KubernetesServiceType = KubernetesServiceType.CLUSTER_IP
     storage_class: str | None = None
+    data_storage_size: str = "10Gi"
+    startup_probe: KubernetesStartupProbeConfig = Field(
+        default_factory=KubernetesStartupProbeConfig
+    )
+    readiness_probe: KubernetesReadinessProbeConfig = Field(
+        default_factory=KubernetesReadinessProbeConfig
+    )
+    liveness_probe: KubernetesLivenessProbeConfig = Field(
+        default_factory=KubernetesLivenessProbeConfig
+    )
     replicas: int = Field(default=1, ge=1)
 
     def ensure_supported_replicas(self) -> None:
         """Reject multi-pod runtime deployments until the runtime supports them."""
         if self.replicas > 1:
             raise ValueError(KUBERNETES_REPLICAS_ERROR)
+
+    @field_validator("data_storage_size")
+    @classmethod
+    def validate_data_storage_size(cls, value: str) -> str:
+        """Validate the user data PVC storage request.
+
+        Parameters
+        ----------
+        value
+            Kubernetes storage quantity for the SFTP data PVC.
+
+        Returns
+        -------
+        str
+            Validated Kubernetes storage quantity.
+        """
+        normalized = value.strip()
+        if not KUBERNETES_STORAGE_QUANTITY_RE.fullmatch(normalized):
+            raise ValueError(
+                "kubernetes.data_storage_size must be a positive Kubernetes storage "
+                "quantity such as 10Gi, 50Gi, or 500Mi."
+            )
+        return normalized
 
     @model_validator(mode="after")
     def validate_replicas(self) -> KubernetesConfig:
@@ -432,7 +525,7 @@ class WatcherConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
-    mode: WatcherMode = WatcherMode.SYSTEMD
+    mode: WatcherMode = WatcherMode.AUTO
     image: str | None = None
 
     @model_validator(mode="after")
@@ -444,7 +537,7 @@ class WatcherConfig(BaseModel):
         WatcherConfig
             Validated watcher config.
         """
-        if self.mode == WatcherMode.SYSTEMD and self.image:
+        if self.mode != WatcherMode.DOCKER and self.image:
             raise ValueError("watcher.image is only valid when watcher.mode is docker.")
         return self
 
@@ -463,6 +556,7 @@ class SFTPWardenConfig(BaseModel):
     uid_gid: UidGidConfig = Field(default_factory=UidGidConfig)
     provider: ProviderConfig = Field(default_factory=ProviderConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    healthcheck: HealthcheckConfig = Field(default_factory=HealthcheckConfig)
     docker: DockerConfig = Field(default_factory=DockerConfig)
     deploy: DeployConfig = Field(default_factory=DeployConfig)
     kubernetes: KubernetesConfig = Field(default_factory=KubernetesConfig)
@@ -664,10 +758,15 @@ def provider_local_path(project_root: str | Path, config: SFTPWardenConfig) -> P
         Local provider file path.
     """
     root = expand_path(project_root)
-    provider_path = Path(config.provider.path)
-    if provider_path.is_absolute():
+    raw_path = str(config.provider.path)
+    container_path = PurePosixPath(raw_path)
+    if container_path.is_absolute() and _is_container_provider_path(container_path):
+        validate_provider_path(container_path.name)
+        return root / container_path.name
+    provider_path = Path(raw_path)
+    if provider_path.is_absolute() or container_path.is_absolute():
         validate_provider_path(provider_path.name)
-        return root / provider_path.name
+        return provider_path
     validate_relative_safe_path(str(provider_path), field_name="provider.path")
     return root / provider_path
 

@@ -19,7 +19,13 @@ def expand_path(value: str | Path) -> Path:
     Path
         Expanded path.
     """
-    return Path(os.path.expandvars(str(value))).expanduser()
+    raw = os.path.expandvars(str(value))
+    if raw == "~" or raw.startswith(("~/", "~\\")):
+        home = os.environ.get("HOME")
+        if home:
+            suffix = raw[2:] if len(raw) > 1 else ""
+            return Path(home) / suffix
+    return Path(raw).expanduser()
 
 
 def app_home() -> Path:
@@ -31,6 +37,11 @@ def app_home() -> Path:
         Directory used for global config, contexts, and watcher metadata.
     """
     return expand_path(os.environ.get("SFTPWARDEN_HOME", DEFAULT_HOME))
+
+
+def source_root() -> Path:
+    """Return the project source root for local source checkouts."""
+    return Path(__file__).resolve().parents[2]
 
 
 def global_config_path() -> Path:

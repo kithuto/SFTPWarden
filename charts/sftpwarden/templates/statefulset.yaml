@@ -1,3 +1,11 @@
+{{- $probes := .Values.probes | default dict -}}
+{{- $startupProbe := get $probes "startup" | default dict -}}
+{{- $readinessProbe := get $probes "readiness" | default dict -}}
+{{- $livenessProbe := get $probes "liveness" | default dict -}}
+{{- $providerTextType := or (eq .Values.provider.type "yaml") (eq .Values.provider.type "csv") -}}
+{{- $providerHasContent := ne (default "" .Values.provider.bootstrapContent) "" -}}
+{{- $providerSyncsFromConfig := and .Values.persistence.provider.enabled $providerHasContent $providerTextType -}}
+{{- $providerBootstrapsFromValue := and .Values.persistence.provider.enabled $providerHasContent (not $providerTextType) -}}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -18,16 +26,20 @@ spec:
     spec:
       initContainers:
         - name: host-key-bootstrap
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ include "sftpwarden.image" . }}"
           command:
             - sh
             - -c
             - |
               cp /host-key-secret/* /host-keys/ 2>/dev/null || true
               chmod 700 /host-keys
-              {{- if and .Values.persistence.provider.enabled .Values.provider.bootstrapContent }}
+              {{- if or $providerSyncsFromConfig $providerBootstrapsFromValue }}
               mkdir -p /etc/sftpwarden/provider-data
+              {{- if $providerSyncsFromConfig }}
+              cp "/config/{{ base .Values.provider.path }}" {{ .Values.provider.path | quote }}
+              {{- else }}
               test -f {{ .Values.provider.path | quote }} || printf %b {{ .Values.provider.bootstrapContent | quote }} > {{ .Values.provider.path | quote }}
+              {{- end }}
               chmod 600 {{ .Values.provider.path | quote }}
               {{- end }}
           volumeMounts:
@@ -36,13 +48,18 @@ spec:
             - name: host-key-secret
               mountPath: /host-key-secret
               readOnly: true
-            {{- if and .Values.persistence.provider.enabled .Values.provider.bootstrapContent }}
+            {{- if or $providerSyncsFromConfig $providerBootstrapsFromValue }}
             - name: provider
               mountPath: /etc/sftpwarden/provider-data
             {{- end }}
+            {{- if $providerSyncsFromConfig }}
+            - name: config
+              mountPath: /config
+              readOnly: true
+            {{- end }}
       containers:
         - name: sftpwarden
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ include "sftpwarden.image" . }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: sftp
@@ -78,19 +95,21 @@ spec:
           startupProbe:
             exec:
               command: ["sftpwarden", "runtime", "health", "--config", "/etc/sftpwarden/sftpwarden.yaml"]
-            failureThreshold: 30
-            periodSeconds: 5
-            timeoutSeconds: 5
+            failureThreshold: {{ default 30 (get $startupProbe "failureThreshold") }}
+            periodSeconds: {{ default 5 (get $startupProbe "periodSeconds") }}
+            timeoutSeconds: {{ default 5 (get $startupProbe "timeoutSeconds") }}
           readinessProbe:
             exec:
               command: ["sftpwarden", "runtime", "health", "--config", "/etc/sftpwarden/sftpwarden.yaml"]
-            periodSeconds: 10
-            timeoutSeconds: 5
+            failureThreshold: {{ default 3 (get $readinessProbe "failureThreshold") }}
+            periodSeconds: {{ default 10 (get $readinessProbe "periodSeconds") }}
+            timeoutSeconds: {{ default 5 (get $readinessProbe "timeoutSeconds") }}
           livenessProbe:
             exec:
               command: ["sftpwarden", "runtime", "health", "--config", "/etc/sftpwarden/sftpwarden.yaml"]
-            periodSeconds: 30
-            timeoutSeconds: 5
+            failureThreshold: {{ default 3 (get $livenessProbe "failureThreshold") }}
+            periodSeconds: {{ default 30 (get $livenessProbe "periodSeconds") }}
+            timeoutSeconds: {{ default 5 (get $livenessProbe "timeoutSeconds") }}
           securityContext:
             privileged: false
             allowPrivilegeEscalation: false

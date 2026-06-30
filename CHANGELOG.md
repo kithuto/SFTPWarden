@@ -43,6 +43,39 @@ feedback. It summarizes the main features planned for future releases.
 - Add basic RBAC.
 - Add local login and OIDC support.
 
+## [1.2.1] - 2026-06-29
+
+### Added
+
+- Configurable Kubernetes user data PVC sizing for manifests and generated Helm
+  values.
+- Configurable Docker Compose healthcheck timings and Kubernetes/Helm runtime
+  probe timings.
+- Pluggable watcher backends with auto-detection for Windows Task Scheduler,
+  macOS launchd, Linux systemd/OpenRC/runit/supervisord, and Docker fallback.
+- Backend-specific watcher uninstall plans for explicit uninstall, backend
+  replacement, and removal of the last remote local-sync context.
+- Kubernetes and Helm init now create the default namespace automatically with
+  `--yes`, while still supporting explicit namespace selection and strict
+  no-create behavior.
+
+### Changed
+
+- Watcher installs now default to `auto` instead of assuming systemd.
+- Windows native watcher sync uses OpenSSH `scp` for provider file uploads.
+- Kubernetes YAML/CSV providers are treated as declarative deploy inputs:
+  deploy, `kube apply`, and Helm upgrades copy the rendered local provider file
+  into the provider PVC during rollout; database-backed Kubernetes providers
+  remain refreshable through `kubectl exec`.
+
+### Fixed
+
+- Improved Windows and cross-platform CLI/test compatibility outside the Linux
+  runtime container.
+- Runtime containers now clamp inherited `nofile` limits before starting OpenSSH
+  so Kubernetes chrooted `internal-sftp` sessions do not stall on platforms that
+  expose extremely high open-file limits.
+
 ## [1.2.0] - 2026-06-27
 
 ### Added

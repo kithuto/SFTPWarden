@@ -9,7 +9,7 @@ from typing import Literal, cast
 
 import yaml
 
-from sftpwarden.config import RemoteStorage, load_config
+from sftpwarden.config import DeployTarget, ProviderType, RemoteStorage, load_config
 from sftpwarden.contexts import ContextEntry, ContextType, resolve_context
 from sftpwarden.providers import provider_from_config
 from sftpwarden.providers.csv_provider import CSV_FIELDNAMES
@@ -34,6 +34,8 @@ class ProviderMutationResult:
     runtime_changed: bool
     refresh_output: str | None = None
     sync_output: str | None = None
+    deploy_required: bool = False
+    manual_action: str | None = None
 
 
 def resolve_provider_context(*, context_name: str | None = None, config_path: str | None = None):
@@ -345,10 +347,26 @@ def write_provider_users(
     runtime_changed = users_fingerprint(current) != users_fingerprint(next_users)
     sync_output = None
     refresh_output = None
+    deploy_required = False
+    manual_action = None
     if not dry_run and changed:
         provider.write(next_users)
         sync_output = sync_provider_file_if_needed(entry, config)
-        if runtime_changed and not no_refresh:
+        if config.deploy.target == DeployTarget.KUBERNETES and config.provider.type in {
+            ProviderType.YAML,
+            ProviderType.CSV,
+        }:
+            deploy_required = True
+        elif (
+            config.deploy.target == DeployTarget.KUBERNETES
+            and config.provider.type == ProviderType.SQLITE
+        ):
+            manual_action = (
+                "SQLite provider changes were saved locally only. SQLite provider files are "
+                "not copied into Kubernetes PVCs automatically; use YAML/CSV deploy sync for "
+                "declarative file providers or a database provider for production Kubernetes."
+            )
+        elif runtime_changed and not no_refresh:
             refresh_output = refresh_context(entry)
     return ProviderMutationResult(
         source_count=len(source_users.users),
@@ -357,6 +375,8 @@ def write_provider_users(
         runtime_changed=runtime_changed,
         refresh_output=refresh_output,
         sync_output=sync_output,
+        deploy_required=deploy_required,
+        manual_action=manual_action,
     )
 
 

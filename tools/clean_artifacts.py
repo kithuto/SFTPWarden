@@ -3,16 +3,23 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import os
 import shutil
+import stat
 import subprocess
 import tempfile
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import TracebackType
 
 ROOT = Path(__file__).resolve().parents[1]
 TMP_ROOT = Path(tempfile.gettempdir())
 DOCKER_SMOKE_IMAGES = ("sftpwarden:release-smoke", "sftpwarden-watcher:release-smoke")
+REMOVE_RETRY_ATTEMPTS = 3
+REMOVE_RETRY_DELAY_SECONDS = 0.1
 WALK_EXCLUDED_DIRS = {
     ".git",
     ".tox",
@@ -103,6 +110,9 @@ def unique_paths(paths: list[Path]) -> list[Path]:
     return unique
 
 
+RemoveFunction = Callable[[str | bytes], object]
+
+
 def remove_path(path: Path, result: CleanupResult, *, dry_run: bool) -> None:
     """Remove one safe artifact path."""
     if not path.exists() and not path.is_symlink():
@@ -114,11 +124,78 @@ def remove_path(path: Path, result: CleanupResult, *, dry_run: bool) -> None:
     if dry_run:
         result.add_removed(str(path))
         return
-    if path.is_dir() and not path.is_symlink():
-        shutil.rmtree(path)
-    else:
-        path.unlink()
+    try:
+        if path.is_dir() and not path.is_symlink():
+            remove_tree(path)
+        else:
+            remove_file(path)
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        result.add_skipped(f"could not remove {path}: {exc}")
+        return
     result.add_removed(str(path))
+
+
+def remove_tree(path: Path) -> None:
+    """Remove a directory tree, tolerating Windows read-only artifact bits."""
+    for attempt in range(REMOVE_RETRY_ATTEMPTS):
+        try:
+            if rmtree_supports_onexc():
+                shutil.rmtree(path, onexc=retry_remove_after_chmod)
+            else:
+                shutil.rmtree(path, onerror=retry_remove_after_chmod_legacy)
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if attempt == REMOVE_RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(REMOVE_RETRY_DELAY_SECONDS)
+
+
+def remove_file(path: Path) -> None:
+    """Remove a file or symlink after clearing read-only artifact bits."""
+    try:
+        path.unlink()
+    except PermissionError:
+        make_writable(os.fspath(path))
+        path.unlink()
+
+
+def rmtree_supports_onexc() -> bool:
+    """Return whether this Python supports shutil.rmtree's onexc callback."""
+    return "onexc" in inspect.signature(shutil.rmtree).parameters
+
+
+def retry_remove_after_chmod(
+    function: RemoveFunction,
+    path: str | bytes,
+    exc: BaseException,
+) -> None:
+    """Make a blocked artifact writable and retry the failed remove callback."""
+    if not isinstance(exc, PermissionError):
+        raise exc
+    make_writable(path)
+    function(path)
+
+
+def retry_remove_after_chmod_legacy(
+    function: RemoveFunction,
+    path: str | bytes,
+    exc_info: tuple[type[BaseException], BaseException, TracebackType | None],
+) -> None:
+    """Adapt shutil.rmtree's legacy onerror callback to the onexc handler."""
+    retry_remove_after_chmod(function, path, exc_info[1])
+
+
+def make_writable(path: str | bytes) -> None:
+    """Ensure the current user can delete a file-system artifact."""
+    file_stat = os.stat(path)
+    mode = file_stat.st_mode | stat.S_IWUSR
+    if stat.S_ISDIR(file_stat.st_mode):
+        mode |= stat.S_IXUSR
+    os.chmod(path, mode)
 
 
 def is_safe_path(path: Path) -> bool:

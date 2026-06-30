@@ -8,3 +8,8 @@ metadata:
 data:
   sftpwarden.yaml: |
     {{- .Values.sftpwardenConfig | nindent 4 }}
+{{- $providerTextType := or (eq .Values.provider.type "yaml") (eq .Values.provider.type "csv") -}}
+{{- if and .Values.persistence.provider.enabled .Values.provider.bootstrapContent $providerTextType }}
+  {{ base .Values.provider.path }}: |
+    {{- .Values.provider.bootstrapContent | nindent 4 }}
+{{- end }}

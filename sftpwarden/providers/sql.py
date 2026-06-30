@@ -7,7 +7,7 @@ from sftpwarden.users.models import ProviderUsers, SFTPUser
 from sftpwarden.utils.errors import ProviderError
 
 DEFAULT_SQL_USERS_TABLE = "sftp_users"
-SQL_TABLE_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?$")
+SQL_TABLE_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?$", flags=re.ASCII)
 SQL_MUTATION_RE = re.compile(
     r"\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|merge|replace)\b",
     re.IGNORECASE,

@@ -12,7 +12,7 @@ spec:
   restartPolicy: Never
   containers:
     - name: runtime-health
-      image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+      image: "{{ include "sftpwarden.image" . }}"
       command: ["sftpwarden", "runtime", "health", "--config", "/etc/sftpwarden/sftpwarden.yaml"]
       volumeMounts:
         - name: config

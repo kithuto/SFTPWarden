@@ -29,7 +29,7 @@ class DefaultsConfig(BaseModel):
     remote_root: str = DEFAULT_REMOTE_ROOT
     ssh_port: int = DEFAULT_SSH_PORT
     remote_storage: str = "local-sync"
-    watcher_mode: str = "systemd"
+    watcher_mode: str = "auto"
     sync_interval_seconds: int = Field(default=60, ge=5)
 
 
@@ -42,6 +42,7 @@ class WatcherState(BaseModel):
     mode: str | None = None
     managed_by: str = "sftpwarden"
     path: str | None = None
+    activated: bool | None = None
 
 
 class GlobalConfig(BaseModel):

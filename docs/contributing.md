@@ -80,6 +80,10 @@ docker build -t sftpwarden:local -f docker/runtime/Dockerfile .
 docker run --rm --entrypoint sh sftpwarden:local -c 'command -v sshd && command -v sftpwarden'
 ```
 
+For Kubernetes, Helm, or runtime changes that affect the container in a cluster,
+run a real Kubernetes or Helm smoke test when feasible. At minimum, render the
+manifests or values, run `helm lint`, and confirm the runtime image builds.
+
 Build the watcher image when changing watcher behavior:
 
 ```bash
@@ -156,7 +160,7 @@ For user/provider changes, add tests that cover both service behavior and CLI
 behavior when the CLI output matters.
 
 For remote/deploy/watcher changes, include dry-run coverage so generated SSH,
-rsync, Docker, or systemd commands stay reviewable.
+rsync/scp, Docker, and scheduler commands stay reviewable.
 
 Tox cleans Python caches, coverage output, docs output, and package artifacts
 after the environments that generate them. Run `tox -e clean` to clean the same

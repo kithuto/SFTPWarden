@@ -150,10 +150,12 @@ def guard_cli_callback(callback: F | None) -> F | None:
     if callback is None or getattr(callback, "__sftpwarden_guarded__", False):
         return callback
 
-    @wraps(callback)
+    guarded_callback: F = callback
+
+    @wraps(guarded_callback)
     def wrapped(*args: Any, **kwargs: Any) -> Any:
         try:
-            return callback(*args, **kwargs)
+            return guarded_callback(*args, **kwargs)
         except (typer.Exit, typer.Abort):
             raise
         except SFTPWardenError as exc:

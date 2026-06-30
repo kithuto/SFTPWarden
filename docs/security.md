@@ -14,8 +14,8 @@ your hosts and networks. Treat it as infrastructure.
   flag.
 - `.env`, `data/`, `state/`, `host_keys/`, Git metadata, and Python caches are not
   watched or synced by the watcher.
-- Production watcher installs should prefer systemd so SSH uses the host's
-  normal `ssh-agent`, `~/.ssh/config`, known hosts, and default identity.
+- Production watcher installs should prefer a native host scheduler so SSH uses
+  the host's normal `ssh-agent`, `~/.ssh/config`, known hosts, and default identity.
 - Docker watcher mode requires an explicit dedicated SSH key; it never mounts
   the whole `~/.ssh` directory.
 - Backup archives can contain sensitive config, DSNs, host keys, runtime state,
@@ -34,6 +34,12 @@ The runtime disables:
 - user environments.
 
 SFTP users are matched by group and forced into `internal-sftp`.
+
+The container entrypoint also clamps the inherited `nofile` limit before OpenSSH
+starts. Some container platforms expose very large open-file limits; keeping the
+runtime limit bounded avoids `internal-sftp` chroot sessions spending excessive
+time closing inherited descriptor ranges. The default limit is `65536`; override
+`SFTPWARDEN_NOFILE_LIMIT` only when the runtime platform needs a different value.
 
 ## Chroot Layout
 
@@ -67,17 +73,24 @@ auth:
 
 ## Remote Watcher SSH
 
-Use systemd watcher mode for production when the host's SSH configuration,
-default identity, agent, `ProxyJump`, or bastion rules matter. Docker watcher mode
-is intentionally stricter: every watched remote context must define `--ssh-key`
-with an existing dedicated deployment key.
+Use a native watcher mode for production when the host's SSH configuration,
+default identity, agent, `ProxyJump`, or bastion rules matter. `auto` chooses
+Windows Task Scheduler, macOS launchd, or the first available Linux scheduler
+from systemd, OpenRC, runit, and supervisord. Docker watcher mode is intentionally
+stricter: every watched remote context must define `--ssh-key` with an existing
+dedicated deployment key. The Docker watcher mounts those keys read-only and
+copies them to an internal temporary path with private permissions before opening
+SSH connections.
 
 ## Kubernetes Security
 
 Kubernetes deployments keep the same boundaries:
 
 - DSNs, passwords, private keys, and host keys belong in Kubernetes Secrets.
-- ConfigMaps are for non-sensitive `sftpwarden.yaml` content only.
+- ConfigMaps are for non-secret deployment content. For YAML/CSV Kubernetes
+  providers, generated manifests or Helm values can include the provider entries
+  that will be copied into the provider PVC. Treat those files as operational
+  material and avoid using YAML/CSV for sensitive production user state.
 - SFTP data and runtime state use PVCs so restarts do not lose user files or
   UID/GID state.
 - Host keys are loaded from a Secret from the start; do not commit real host keys
@@ -86,7 +99,9 @@ Kubernetes deployments keep the same boundaries:
   reserved and rejected until shared storage, shared host keys, provider-safe
   refresh, and UID/GID consistency are implemented.
 - Use PostgreSQL, MariaDB/MySQL, or MongoDB providers for production Kubernetes
-  deployments. SQLite is single-pod/lab only.
+  deployments. The runtime reads those databases directly, so user changes can
+  be reconciled by the sync loop or `sftpwarden refresh` without embedding
+  provider rows in manifests. SQLite is single-pod/lab only.
 
 ## Backups
 

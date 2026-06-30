@@ -25,6 +25,19 @@
     "provider": {
       "type": "object",
       "properties": {
+        "type": {
+          "type": "string",
+          "description": "Provider type rendered into sftpwarden.yaml. YAML/CSV bootstrap content is copied into the provider PVC during rollout."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Runtime path for the provider file."
+        },
+        "bootstrapContent": {
+          "type": "string",
+          "description": "Initial YAML/CSV provider content copied into the provider PVC during rollout. Prefer database providers for production user state that must not be embedded in rendered values."
+        },
         "dsnSecretName": {
           "type": ["string", "null"]
         },
@@ -38,6 +51,58 @@
         },
         "dsnSecretValue": {
           "type": "string"
+        }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "object",
+          "properties": {
+            "size": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$",
+              "description": "Requested storage size for the SFTP user data PersistentVolumeClaim."
+            }
+          }
+        }
+      }
+    },
+    "probes": {
+      "type": "object",
+      "properties": {
+        "startup": {
+          "$ref": "#/definitions/probe"
+        },
+        "readiness": {
+          "$ref": "#/definitions/probe"
+        },
+        "liveness": {
+          "$ref": "#/definitions/probe"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "probe": {
+      "type": "object",
+      "properties": {
+        "failureThreshold": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of consecutive failed runtime health checks before the probe fails."
+        },
+        "periodSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Seconds between runtime health checks."
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Seconds before one runtime health check attempt times out."
         }
       }
     }

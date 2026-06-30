@@ -12,8 +12,10 @@ from sftpwarden.contexts import require_initialized_context
 from sftpwarden.utils.console import console, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
 from sftpwarden.watcher import (
+    WatcherDockerFallbackRequired,
     install_watcher,
     installed_watcher_mode,
+    resolve_watcher_mode,
     uninstall_watcher,
     watcher_status_data,
     watcher_status_text,
@@ -73,9 +75,15 @@ def watcher_install(
     try:
         require_initialized_context()
         existing = installed_watcher_mode()
-        if existing and watcher_mode and existing.value != watcher_mode and not yes:
+        resolved_mode = None
+        if watcher_mode:
+            try:
+                resolved_mode = resolve_watcher_mode(watcher_mode, allow_docker_fallback=yes)
+            except WatcherDockerFallbackRequired:
+                resolved_mode = None
+        if existing and resolved_mode and existing != resolved_mode and not yes:
             if not Confirm.ask(
-                f"Replace existing {existing.value} watcher with {watcher_mode}?",
+                f"Replace existing {existing.value} watcher with {resolved_mode.value}?",
                 default=False,
             ):
                 raise typer.Exit(1)
@@ -88,17 +96,35 @@ def watcher_install(
                     dry_run=True,
                     image=image,
                     activate=activate,
+                    allow_docker_fallback=yes,
                 )
             )
             return
         with terminal_status("Installing watcher"):
-            result = install_watcher(
-                mode=watcher_mode,
-                yes=yes,
-                dry_run=False,
-                image=image,
-                activate=activate,
-            )
+            try:
+                result = install_watcher(
+                    mode=watcher_mode,
+                    yes=yes,
+                    dry_run=False,
+                    image=image,
+                    activate=activate,
+                    allow_docker_fallback=yes,
+                )
+            except WatcherDockerFallbackRequired:
+                if not Confirm.ask(
+                    "No supported native watcher scheduler was detected. "
+                    "Install the Docker watcher instead?",
+                    default=False,
+                ):
+                    raise typer.Exit(1) from None
+                result = install_watcher(
+                    mode=watcher_mode,
+                    yes=True,
+                    dry_run=False,
+                    image=image,
+                    activate=activate,
+                    allow_docker_fallback=True,
+                )
         print_success(result)
     except SFTPWardenError as exc:
         handle_error(exc)

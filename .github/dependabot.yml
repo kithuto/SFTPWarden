@@ -63,7 +63,6 @@ updates:
       - "/examples/mongodb"
       - "/examples/postgres"
       - "/examples/sqlite"
-      - "/examples/watcher-docker"
       - "/examples/yaml"
     target-branch: "dev"
     schedule:

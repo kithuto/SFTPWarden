@@ -17,9 +17,14 @@ root = "~/sftpwarden"
 remote_root = "~/sftpwarden"
 ssh_port = 22
 remote_storage = "local-sync"
-watcher_mode = "systemd"
+watcher_mode = "auto"
 sync_interval_seconds = 60
 ```
+
+`watcher_mode` controls the default backend used when a remote `local-sync`
+context needs a watcher and no `--watcher` option is passed. The default `auto`
+detects the host scheduler. Explicit values are `systemd`, `openrc`, `runit`,
+`supervisord`, `launchd`, `windows-task`, and `docker`.
 
 Provider selection order:
 
@@ -60,10 +65,20 @@ auth:
   allow_public_key: true
   allow_password: true
   recommended: password
+
+healthcheck:
+  interval_seconds: 30
+  timeout_seconds: 10
+  retries: 3
+  start_period_seconds: 20
 ```
 
 `server.container_port` is not supported. The container SSH port is always `22`;
 `server.port` controls the host port exposed by Docker Compose.
+
+`healthcheck` controls the generated Docker Compose container healthcheck timing.
+The healthcheck command itself stays `sftpwarden runtime health` inside the
+runtime container.
 
 You can read or update any project setting with `sftpwarden config`:
 
@@ -100,6 +115,19 @@ kubernetes:
   kube_context: null
   service_type: ClusterIP
   storage_class: null
+  data_storage_size: 10Gi
+  startup_probe:
+    failure_threshold: 30
+    period_seconds: 5
+    timeout_seconds: 5
+  readiness_probe:
+    failure_threshold: 3
+    period_seconds: 10
+    timeout_seconds: 5
+  liveness_probe:
+    failure_threshold: 3
+    period_seconds: 30
+    timeout_seconds: 5
   replicas: 1
 ```
 
@@ -114,8 +142,19 @@ kubernetes:
 
 Generated Helm values include `runtime.replicas: 1`, the rendered
 `sftpwarden.yaml`, PVC defaults for data/state/provider storage, and
-`provider.bootstrapContent` for empty file-backed provider PVCs. The default
-Kubernetes namespace is `sftpwarden`.
+`provider.bootstrapContent`. For YAML/CSV providers generated from a local
+SFTPWarden project, `provider.bootstrapContent` comes from the local provider
+file and is copied into the provider PVC on each Helm rollout. Because rendered
+values include those provider entries, review and store them with the same care
+as other deployment material. The default Kubernetes namespace is `sftpwarden`.
+
+`kubernetes.namespace` is used by both manifest and Helm projects. During
+`sftpwarden init --deploy kube` and `sftpwarden init --deploy helm`, the CLI
+checks whether that namespace exists. The default namespace is `sftpwarden`, and
+`--yes` creates it automatically when it is missing. Pass `--namespace <name>` to
+select a different existing or new namespace. Interactive init asks before
+creating a missing namespace; `--no-create-namespace` requires the selected
+namespace to already exist.
 
 Use `kubernetes.kube_context` when the CLI should pass an explicit kube context
 to `kubectl` or Helm. The generated Helm values use the Helm-style key
@@ -124,6 +163,15 @@ to `kubectl` or Helm. The generated Helm values use the Helm-style key
 `kubernetes.service_type` accepts `ClusterIP`, `NodePort`, or `LoadBalancer`.
 `kubernetes.storage_class` can stay `null` to use the cluster default storage
 class, or be set to a named StorageClass.
+
+`kubernetes.data_storage_size` controls the SFTP user data PVC, where uploaded
+files live. It defaults to `10Gi` and is rendered as `persistence.data.size` in
+generated Helm values.
+
+`kubernetes.startup_probe`, `kubernetes.readiness_probe`, and
+`kubernetes.liveness_probe` control the generated Kubernetes runtime health
+probes. They are rendered directly into `kubernetes.yml` and as `probes.startup`,
+`probes.readiness`, and `probes.liveness` in generated Helm values.
 
 `kubernetes.replicas` is reserved for future multi-node support. SFTPWarden v1.2
 accepts only `1`; higher values fail with an explanation because multi-pod
@@ -137,6 +185,10 @@ sftpwarden config deploy.target kubernetes
 sftpwarden config kubernetes.mode helm
 sftpwarden config kubernetes.namespace sftpwarden
 sftpwarden config kubernetes.kube_context kind-sftpwarden
+sftpwarden config kubernetes.data_storage_size 50Gi
+sftpwarden config healthcheck.interval_seconds 45
+sftpwarden config kubernetes.startup_probe.failure_threshold 60
+sftpwarden config kubernetes.liveness_probe.period_seconds 45
 sftpwarden config kubernetes.replicas 1
 ```
 
@@ -158,6 +210,14 @@ provider:
   path: /etc/sftpwarden/users.csv
 ```
 
+In Kubernetes manifest and Helm projects, YAML and CSV providers are treated as
+declarative local files. `sftpwarden deploy`, `sftpwarden kube apply`, and
+`sftpwarden helm upgrade --install` copy the rendered local provider contents
+into the provider PVC during rollout. `sftpwarden refresh` reloads whatever is
+already inside the runtime; it does not copy local YAML/CSV files into the
+cluster. This is best suited to GitOps-style workflows where reviewed deploys are
+the source of truth.
+
 SQLite:
 
 ```yaml
@@ -168,8 +228,9 @@ provider:
 
 SQLite uses Python's built-in `sqlite3` module and does not need an optional
 dependency. It is useful for single-host deployments where you want a local
-database file instead of YAML or CSV. Avoid SQLite on NFS, high-concurrency, or
-multi-writer deployments.
+database file instead of YAML or CSV. Avoid SQLite on NFS, high-concurrency,
+multi-writer deployments, and production Kubernetes. SQLite provider files are
+not declaratively copied into Kubernetes PVCs.
 
 MySQL:
 
@@ -221,6 +282,13 @@ Using an environment variable is recommended for real deployments:
 ```bash
 export SFTPWARDEN_POSTGRES_DSN='postgresql://sftpwarden:change-me@db.example.com:5432/sftpwarden'
 ```
+
+For production Kubernetes, prefer PostgreSQL, MariaDB/MySQL, or MongoDB over
+file-backed providers when users must change outside a deploy cycle. The runtime
+reads those providers directly; `sftpwarden refresh` can force a Kubernetes
+runtime pod to reload the current database-backed users, and the runtime sync
+loop also reconciles periodically. Database providers also avoid carrying
+YAML/CSV user entries in generated manifests or Helm values.
 
 Relational SQL providers read and mutate the configured users table. The default
 columns are:

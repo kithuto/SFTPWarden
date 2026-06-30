@@ -44,6 +44,7 @@ from sftpwarden.utils.constants import CONFIG_FILENAME
 from sftpwarden.utils.dotted import format_value, get_dotted, parse_cli_value, set_dotted
 from sftpwarden.utils.errors import SFTPWardenError
 from sftpwarden.utils.paths import expand_path
+from sftpwarden.watcher import uninstall_watcher
 
 
 @context_app.callback(invoke_without_command=True)
@@ -219,7 +220,7 @@ def update_context_field(
         entry = type(entry).model_validate(data)
     registry.contexts[entry.name] = entry
     save_registry(registry)
-    warn_if_watcher_has_no_local_sync_targets(registry)
+    handle_watcher_without_local_sync_targets(registry, yes=yes)
     return entry.name
 
 
@@ -335,13 +336,15 @@ def update_remote_root(entry, value: str, *, yes: bool):
     return entry
 
 
-def warn_if_watcher_has_no_local_sync_targets(registry: ContextRegistry) -> None:
-    """Warn when an installed watcher no longer has local-sync contexts.
+def handle_watcher_without_local_sync_targets(registry: ContextRegistry, *, yes: bool) -> None:
+    """Uninstall or warn when a watcher no longer has local-sync contexts.
 
     Parameters
     ----------
     registry
         Context registry after a mutation.
+    yes
+        Whether confirmation prompts should be skipped.
     """
     watcher = load_global_config().watcher
     if not watcher.installed:
@@ -351,6 +354,12 @@ def warn_if_watcher_has_no_local_sync_targets(registry: ContextRegistry) -> None
         for entry in registry.contexts.values()
     )
     if not has_local_sync:
+        if yes or Confirm.ask(
+            "No remote local-sync contexts remain. Uninstall the watcher?",
+            default=True,
+        ):
+            print_success(uninstall_watcher())
+            return
         print_watcher_without_local_sync_targets()
 
 
@@ -560,7 +569,8 @@ def context_remove(name: str, yes: Annotated[bool, typer.Option("--yes", "-y")] 
     try:
         if not yes and not Confirm.ask(f"Remove context {name} from registry?", default=False):
             raise typer.Exit(1)
-        remove_context(name)
+        registry = remove_context(name)
+        handle_watcher_without_local_sync_targets(registry, yes=yes)
         print_success(f"Removed context [bold]{name}[/bold].")
     except SFTPWardenError as exc:
         handle_error(exc)

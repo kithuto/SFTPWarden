@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import json
 import os
-import pwd
 import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+
+try:
+    import pwd
+except ModuleNotFoundError:
+    pwd = None
 
 from sftpwarden.config import SFTPWardenConfig, load_config
 from sftpwarden.providers import ProviderUsers, SFTPUser, load_users, users_fingerprint
@@ -199,6 +203,27 @@ def run_command(args: list[str]) -> None:
         message=f"Command failed: {' '.join(args)}",
         fallback_suggestion="Inspect container logs.",
     )
+
+
+def chown_path(path: str | Path, uid: int, gid: int) -> None:
+    """Change ownership, failing clearly on platforms without POSIX ownership.
+
+    Parameters
+    ----------
+    path
+        Path whose owner should be changed.
+    uid
+        Target UID.
+    gid
+        Target GID.
+    """
+    chown = getattr(os, "chown", None)
+    if chown is None:
+        raise RuntimeError(
+            "Linux file ownership changes are not available on this platform.",
+            suggestion="Run runtime user refresh inside the Linux OpenSSH container.",
+        )
+    chown(path, uid, gid)
 
 
 def yes_no(value: bool) -> str:
@@ -722,8 +747,13 @@ def user_exists(username: str) -> bool:
     bool
         ``True`` when the user exists.
     """
+    if pwd is None:
+        raise RuntimeError(
+            "POSIX user lookup is not available on this platform.",
+            suggestion="Run runtime user refresh inside the Linux OpenSSH container.",
+        )
     try:
-        pwd.getpwnam(username)
+        pwd.getpwnam(username)  # type: ignore
         return True
     except KeyError:
         return False
@@ -797,13 +827,17 @@ def ensure_directories(config: SFTPWardenConfig, resolved: ResolvedUser) -> None
     resolved
         Resolved provider user.
     """
-    root = Path(config.server.data_dir) / resolved.spec.username
+    data_root = Path(config.server.data_dir)
+    root = data_root / resolved.spec.username
     upload = root / resolved.spec.upload_dir
+    data_root.mkdir(parents=True, exist_ok=True)
     root.mkdir(parents=True, exist_ok=True)
     upload.mkdir(parents=True, exist_ok=True)
-    os.chown(root, 0, 0)
+    chown_path(data_root, 0, 0)
+    os.chmod(data_root, int(config.isolation.root_permissions, 8))
+    chown_path(root, 0, 0)
     os.chmod(root, int(config.isolation.root_permissions, 8))
-    os.chown(upload, resolved.uid, resolved.gid)
+    chown_path(upload, resolved.uid, resolved.gid)
     os.chmod(upload, int(config.isolation.upload_permissions, 8))
 
 
@@ -823,7 +857,7 @@ def write_authorized_keys(config: SFTPWardenConfig, resolved: ResolvedUser) -> N
     key_options = "restrict"
     lines = [f"{key_options} {key}" for key in resolved.spec.public_keys]
     path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-    os.chown(path, 0, 0)
+    chown_path(path, 0, 0)
     os.chmod(path, 0o644)
 
 
@@ -842,7 +876,7 @@ def disable_missing(config: SFTPWardenConfig, desired: ProviderUsers, state: Run
     if not config.sync.disable_missing_users:
         return
     desired_names = {user.username for user in desired.users}
-    for username, user_state in list(state.users.items()):
+    for username, user_state in state.users.items():
         if username not in desired_names and user_exists(username):
             run_command(["usermod", "-p", DISABLED_PASSWORD_HASH, username])
             state.users[username] = RuntimeUserState(

@@ -20,3 +20,7 @@ app.kubernetes.io/name: sftpwarden
 app.kubernetes.io/instance: {{ include "sftpwarden.name" . }}
 app.kubernetes.io/component: runtime
 {{- end -}}
+
+{{- define "sftpwarden.image" -}}
+{{- printf "%s:%s" .Values.image.repository (default .Chart.AppVersion .Values.image.tag) -}}
+{{- end -}}

@@ -8,11 +8,11 @@ import yaml
 from sftpwarden.config import FILE_PROVIDER_TYPES, SFTPWardenConfig, provider_local_path
 from sftpwarden.utils._version import get_version
 from sftpwarden.utils.constants import CONTAINER_CONFIG_PATH
-from sftpwarden.utils.paths import expand_path
+from sftpwarden.utils.paths import expand_path, source_root
 
 DEFAULT_LOCAL_RUNTIME_IMAGE = "sftpwarden:local"
 GHCR_RUNTIME_IMAGE_REPOSITORY = "ghcr.io/kithuto/sftpwarden"
-SOURCE_ROOT = Path(__file__).resolve().parents[2]
+SOURCE_ROOT = source_root()
 LOCAL_RUNTIME_DOCKERFILE = SOURCE_ROOT / "docker" / "runtime" / "Dockerfile"
 
 
@@ -79,6 +79,7 @@ def compose_model(
     if config.provider.type in FILE_PROVIDER_TYPES:
         provider_path = provider_local_path(root, config)
         volumes.insert(1, f"./{provider_path.name}:{config.provider.path}:ro")
+    healthcheck = config.healthcheck
     service = {
         "container_name": config.docker.container_name,
         "image": image.image,
@@ -99,10 +100,10 @@ def compose_model(
                 "--config",
                 CONTAINER_CONFIG_PATH,
             ],
-            "interval": "30s",
-            "timeout": "10s",
-            "retries": 3,
-            "start_period": "20s",
+            "interval": f"{healthcheck.interval_seconds}s",
+            "timeout": f"{healthcheck.timeout_seconds}s",
+            "retries": healthcheck.retries,
+            "start_period": f"{healthcheck.start_period_seconds}s",
         },
     }
     if image.build:

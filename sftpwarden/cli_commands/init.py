@@ -18,6 +18,7 @@ from sftpwarden.config import (
     DeployTarget,
     KubernetesMode,
     ProviderType,
+    SFTPWardenConfig,
     default_project_config,
     provider_local_path,
     write_config,
@@ -44,6 +45,8 @@ from sftpwarden.providers import (
 from sftpwarden.remote.checks import verify_remote_runtime_requirements
 from sftpwarden.render.compose import write_compose
 from sftpwarden.services.cli_workflows import install_context_watcher
+from sftpwarden.services.deploy import kubectl_command, translate_command_failure
+from sftpwarden.system.commands import CommandResult, run
 from sftpwarden.users import ProviderUsers
 from sftpwarden.utils.console import print_info, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
@@ -85,6 +88,17 @@ def init(
             help="Deployment method to store in sftpwarden.yaml: compose, kube, or helm.",
         ),
     ] = "compose",
+    namespace: Annotated[
+        str | None,
+        typer.Option("--namespace", help="Existing or new Kubernetes namespace."),
+    ] = None,
+    create_namespace: Annotated[
+        bool | None,
+        typer.Option(
+            "--create-namespace/--no-create-namespace",
+            help="Create the Kubernetes namespace during init when it does not exist.",
+        ),
+    ] = None,
     create_table: Annotated[
         bool | None,
         typer.Option(
@@ -99,7 +113,10 @@ def init(
     ssh_key: Annotated[str | None, typer.Option("--ssh-key", help="Remote SSH key.")] = None,
     watcher_mode: Annotated[str | None, typer.Option("--watcher", help="Watcher mode.")] = None,
     remote_only: Annotated[bool, typer.Option("--remote-only")] = False,
-    skip_checks: Annotated[bool, typer.Option("--skip-checks")] = False,
+    skip_checks: Annotated[
+        bool,
+        typer.Option("--skip-checks", help="Skip remote and Kubernetes prerequisite checks."),
+    ] = False,
     critical: Annotated[
         bool, typer.Option("--critical", help="Mark this context as critical.")
     ] = False,
@@ -131,6 +148,10 @@ def init(
         MongoDB users collection name.
     deploy_method
         Deployment target to store in the generated project config.
+    namespace
+        Kubernetes namespace for kube or Helm deploy targets.
+    create_namespace
+        Whether to create a missing Kubernetes namespace.
     create_table
         Whether to create a missing SQL users table without prompting.
     host
@@ -169,6 +190,8 @@ def init(
                 table=table,
                 collection=collection,
                 deploy_method=deploy_method,
+                namespace=namespace,
+                create_namespace=create_namespace,
                 create_table=create_table,
                 host=host,
                 remote_user=remote_user,
@@ -216,7 +239,14 @@ def init(
             table=table,
             collection=collection,
             deploy_method=deploy_method,
+            namespace=namespace,
             yes=yes,
+        )
+        ensure_kubernetes_namespace_for_init(
+            config,
+            create_namespace=create_namespace,
+            yes=yes,
+            skip_checks=skip_checks,
         )
         config_path = selected_root / "sftpwarden.yaml"
         provider_path = provider_local_path(selected_root, config)
@@ -258,6 +288,8 @@ def init_remote_context(
     table: str,
     collection: str = "sftp_users",
     deploy_method: str = "compose",
+    namespace: str | None = None,
+    create_namespace: bool | None,
     create_table: bool | None,
     host: str | None,
     remote_user: str | None,
@@ -292,6 +324,10 @@ def init_remote_context(
         MongoDB users collection name.
     deploy_method
         Deployment target to store in the generated project config.
+    namespace
+        Kubernetes namespace for kube or Helm deploy targets.
+    create_namespace
+        Whether to create a missing Kubernetes namespace.
     create_table
         Whether to create a missing SQL users table without prompting.
     host
@@ -361,7 +397,14 @@ def init_remote_context(
             table=table,
             collection=collection,
             deploy_method=deploy_method,
+            namespace=namespace,
             yes=yes,
+        )
+        ensure_kubernetes_namespace_for_init(
+            config,
+            create_namespace=create_namespace,
+            yes=yes,
+            skip_checks=skip_checks,
         )
         ensure_provider_storage_for_init(
             selected_root,
@@ -408,8 +451,9 @@ def init_project_config(
     table: str,
     collection: str = "sftp_users",
     deploy_method: str = "compose",
+    namespace: str | None = None,
     yes: bool,
-):
+) -> SFTPWardenConfig:
     """Build a project config for init, prompting for SQL DSNs when needed.
 
     Parameters
@@ -428,6 +472,8 @@ def init_project_config(
         MongoDB users collection name.
     deploy_method
         Deployment target to store in the generated project config.
+    namespace
+        Kubernetes namespace for kube or Helm deploy targets.
     yes
         Whether prompts should be skipped.
 
@@ -449,7 +495,12 @@ def init_project_config(
             prompt_mongodb_dsn() if provider == ProviderType.MONGODB else prompt_sql_dsn(provider)
         )
     deploy_target, kubernetes_mode = resolve_init_deploy_method(deploy_method)
-    return default_project_config(
+    if namespace and deploy_target != DeployTarget.KUBERNETES:
+        raise SFTPWardenError(
+            "--namespace is only valid with Kubernetes deploy targets.",
+            suggestion="Use --deploy kube or --deploy helm, or omit --namespace.",
+        )
+    config = default_project_config(
         name,
         provider,
         dsn=resolved_dsn,
@@ -459,6 +510,9 @@ def init_project_config(
         deploy_target=deploy_target,
         kubernetes_mode=kubernetes_mode,
     )
+    if namespace:
+        config.kubernetes.namespace = namespace
+    return config
 
 
 def resolve_init_deploy_method(value: str) -> tuple[DeployTarget, KubernetesMode]:
@@ -489,7 +543,7 @@ def resolve_init_deploy_method(value: str) -> tuple[DeployTarget, KubernetesMode
 
 def ensure_provider_storage_for_init(
     project_root: Path,
-    config,
+    config: SFTPWardenConfig,
     *,
     create_storage: bool | None,
     yes: bool,
@@ -540,6 +594,50 @@ def ensure_provider_storage_for_init(
     with terminal_status(f"Creating provider storage {storage_name}"):
         provider.create_table()  # type: ignore[attr-defined]
     print_success(f"Created provider storage [bold]{storage_name}[/bold].")
+
+
+def ensure_kubernetes_namespace_for_init(
+    config: SFTPWardenConfig,
+    *,
+    create_namespace: bool | None,
+    yes: bool,
+    skip_checks: bool,
+) -> None:
+    """Ensure the configured Kubernetes namespace exists during init."""
+    if config.deploy.target != DeployTarget.KUBERNETES or skip_checks:
+        return
+    namespace = config.kubernetes.namespace
+    with terminal_status(f"Checking Kubernetes namespace {namespace}"):
+        result = run(kubectl_command(config, ["get", "namespace", namespace]))
+    if result.returncode == 0:
+        return
+    if not _kubectl_namespace_missing(result):
+        raise translate_command_failure(result)
+    should_create = create_namespace
+    if should_create is None and not yes:
+        should_create = Confirm.ask(
+            f"Kubernetes namespace {namespace!r} does not exist. Create it now?",
+            default=True,
+        )
+    if should_create is None:
+        should_create = True
+    if not should_create:
+        raise SFTPWardenError(
+            f"Kubernetes namespace does not exist: {namespace}",
+            suggestion=(
+                "Create it before running init, or pass an existing namespace with --namespace."
+            ),
+        )
+    with terminal_status(f"Creating Kubernetes namespace {namespace}"):
+        create_result = run(kubectl_command(config, ["create", "namespace", namespace]))
+    if create_result.returncode != 0:
+        raise translate_command_failure(create_result)
+    print_success(f"Created Kubernetes namespace [bold]{namespace}[/bold].")
+
+
+def _kubectl_namespace_missing(result: CommandResult) -> bool:
+    output = result.output.lower()
+    return "namespace" in output and "not found" in output
 
 
 def ensure_sql_table_for_init(
