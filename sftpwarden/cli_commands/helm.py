@@ -45,7 +45,7 @@ def helm_values(
             target = write_helm_values(loaded, entry.root)
             print_success(f"Wrote {target}")
             return
-        console.print(helm_values_text(loaded))
+        console.print(helm_values_text(loaded, entry.root))
     except SFTPWardenError as exc:
         handle_error(exc)
 

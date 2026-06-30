@@ -32,7 +32,7 @@ Examples:
 - plaintext secrets written to disk or logs;
 - private keys or DSNs included in examples, tests, images, or docs;
 - remote command injection;
-- unsafe SSH or rsync command construction;
+- unsafe SSH, rsync, or scp command construction;
 - Docker watcher mounting broad host credentials;
 - broken chroot permissions;
 - provider mutations that bypass validation;

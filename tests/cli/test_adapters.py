@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import runpy
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +36,7 @@ from sftpwarden.contexts import (
 )
 from sftpwarden.utils.dsn import build_sql_dsn
 from sftpwarden.utils.errors import SFTPWardenError
-from sftpwarden.watcher import WatcherInstallMode, WatchTarget
+from sftpwarden.watcher import WatcherDockerFallbackRequired, WatcherInstallMode, WatchTarget
 
 TEST_HASH = "$6$rounds=500000$saltstring$hashvalue"
 
@@ -148,7 +149,8 @@ def test_config_callback_renames_context_and_reports_invalid_values(
 
 
 def test_config_commands_cover_errors_and_global_output(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner, _root = init_project(tmp_path, monkeypatch)
     no_config = local_context("remoteish", tmp_path / "remoteish", ProviderType.YAML)
@@ -303,9 +305,12 @@ def test_context_field_aliases_and_remote_root_update(
 
 
 def test_context_commands_show_list_and_manage_defaults(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    local_project_factory: Callable[..., tuple[Path, Any]],
 ) -> None:
-    runner, _root = init_project(tmp_path, monkeypatch)
+    _root, _entry = local_project_factory()
+    runner = CliRunner()
 
     list_result = runner.invoke(app, ["context", "ls"])
     current_result = runner.invoke(app, ["context", "current"])
@@ -385,9 +390,12 @@ def test_context_dynamic_field_commands_read_update_and_report_errors(
 
 
 def test_context_add_local_remote_and_confirmation_paths(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    local_project_factory: Callable[..., tuple[Path, Any]],
 ) -> None:
-    runner, _root = init_project(tmp_path, monkeypatch)
+    _root, _entry = local_project_factory()
+    runner = CliRunner()
     other_root = tmp_path / "other"
     other_root.mkdir()
     write_config(other_root / "sftpwarden.yaml", default_project_config("qa"))
@@ -533,8 +541,11 @@ def test_context_update_helpers_cover_root_and_type_transitions(
         context_commands.update_remote_root(remote_entry, "/srv/sftpwarden", yes=False)
 
 
-def test_users_list_json_and_table_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    runner, _root = init_project(tmp_path, monkeypatch)
+def test_users_list_json_and_table_outputs(
+    local_project_factory: Callable[..., tuple[Path, Any]],
+) -> None:
+    _root, _entry = local_project_factory()
+    runner = CliRunner()
     add_user(runner)
 
     table_result = runner.invoke(app, ["users"])
@@ -547,9 +558,12 @@ def test_users_list_json_and_table_outputs(tmp_path: Path, monkeypatch: pytest.M
 
 
 def test_core_commands_render_human_outputs_and_dry_runs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    local_project_factory: Callable[..., tuple[Path, Any]],
 ) -> None:
-    runner, root = init_project(tmp_path, monkeypatch)
+    root, _entry = local_project_factory()
+    runner = CliRunner()
     monkeypatch.setattr(
         core_commands, "refresh_context", lambda entry, *, dry_run=False: "refreshed"
     )
@@ -587,9 +601,12 @@ def test_core_commands_render_human_outputs_and_dry_runs(
 
 
 def test_core_commands_json_write_and_error_paths(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    local_project_factory: Callable[..., tuple[Path, Any]],
 ) -> None:
-    runner, root = init_project(tmp_path, monkeypatch)
+    root, _entry = local_project_factory()
+    runner = CliRunner()
     config_path = root / "sftpwarden.yaml"
     entry = load_registry().contexts["dev"]
     loaded = load_config(config_path)
@@ -860,6 +877,9 @@ def test_init_direct_helpers_cover_prompts_sql_and_remote_checks(
         dsn=None,
         query=None,
         table="sftp_users",
+        collection="sftp_users",
+        namespace=None,
+        create_namespace=None,
         create_table=None,
         host=None,
         remote_user="deploy",
@@ -888,6 +908,9 @@ def test_init_direct_helpers_cover_prompts_sql_and_remote_checks(
         dsn=None,
         query=None,
         table="sftp_users",
+        collection="sftp_users",
+        namespace=None,
+        create_namespace=None,
         create_table=None,
         host=None,
         remote_user="deploy",
@@ -911,6 +934,9 @@ def test_init_direct_helpers_cover_prompts_sql_and_remote_checks(
             dsn=None,
             query=None,
             table="sftp_users",
+            collection="sftp_users",
+            namespace=None,
+            create_namespace=None,
             create_table=None,
             host=None,
             remote_user=None,
@@ -926,9 +952,11 @@ def test_init_direct_helpers_cover_prompts_sql_and_remote_checks(
 
 
 def test_user_update_runtime_change_refreshes(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    local_project_factory: Callable[..., tuple[Path, Any]],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runner, _root = init_project(tmp_path, monkeypatch)
+    _root, _entry = local_project_factory()
+    runner = CliRunner()
     add_user(runner)
     calls: list[str] = []
 
@@ -945,9 +973,11 @@ def test_user_update_runtime_change_refreshes(
 
 
 def test_user_commands_cover_error_no_refresh_and_delete_files(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
+    local_project_factory: Callable[..., tuple[Path, Any]],
 ) -> None:
-    runner, root = init_project(tmp_path, monkeypatch)
+    root, _entry = local_project_factory()
+    runner = CliRunner()
     add_user(runner)
     refresh_calls: list[str] = []
     monkeypatch.setattr(
@@ -998,8 +1028,11 @@ def test_user_commands_cover_error_no_refresh_and_delete_files(
     assert (root / "users.yaml").exists()
 
 
-def test_user_remove_can_be_cancelled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    runner, _root = init_project(tmp_path, monkeypatch)
+def test_user_remove_can_be_cancelled(
+    local_project_factory: Callable[..., tuple[Path, Any]],
+) -> None:
+    _root, _entry = local_project_factory()
+    runner = CliRunner()
     add_user(runner)
 
     result = runner.invoke(app, ["user", "remove", "alice"], input="n\n")
@@ -1063,6 +1096,34 @@ def test_watcher_install_replacement_confirmation_paths(
     assert cancelled.exit_code == 1
     assert accepted.exit_code == 0, accepted.output
     assert install_calls[0]["yes"]
+
+
+def test_watcher_install_prompts_for_docker_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner = CliRunner()
+    install_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(watcher_commands, "require_initialized_context", lambda: None)
+    monkeypatch.setattr(watcher_commands, "installed_watcher_mode", lambda: None)
+    monkeypatch.setattr(
+        watcher_commands,
+        "resolve_watcher_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(WatcherDockerFallbackRequired("fallback")),
+    )
+
+    def fake_install_watcher(**kwargs: Any) -> str:
+        install_calls.append(kwargs)
+        if not kwargs["allow_docker_fallback"]:
+            raise WatcherDockerFallbackRequired("fallback")
+        return "installed docker"
+
+    monkeypatch.setattr(watcher_commands, "install_watcher", fake_install_watcher)
+
+    cancelled = runner.invoke(app, ["watcher", "install", "--watcher", "auto"], input="n\n")
+    accepted = runner.invoke(app, ["watcher", "install", "--watcher", "auto"], input="y\n")
+
+    assert cancelled.exit_code == 1
+    assert accepted.exit_code == 0, accepted.output
+    assert install_calls[-1]["allow_docker_fallback"]
+    assert install_calls[-1]["yes"]
 
 
 def test_watcher_install_and_uninstall_error_paths(monkeypatch: pytest.MonkeyPatch) -> None:

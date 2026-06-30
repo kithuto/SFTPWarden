@@ -14,9 +14,11 @@ from sftpwarden.config import (
     FILE_PROVIDER_TYPES,
     KubernetesConfig,
     KubernetesProbeConfig,
+    ProviderType,
     SFTPWardenConfig,
+    provider_local_path,
 )
-from sftpwarden.providers import empty_provider_text
+from sftpwarden.providers import empty_provider_text, provider_from_config
 from sftpwarden.render.compose import runtime_image_reference
 from sftpwarden.utils._version import get_version
 from sftpwarden.utils.constants import CONTAINER_CONFIG_PATH
@@ -26,7 +28,9 @@ KUBERNETES_MANIFEST_FILE = "kubernetes.yml"
 HELM_VALUES_FILE = "values.yaml"
 PROVIDER_DSN_ENV = "SFTPWARDEN_PROVIDER_DSN"
 PROVIDER_MOUNT = "/etc/sftpwarden/provider-data"
+CONFIG_MAP_MOUNT = "/config"
 HOST_KEY_SECRET_MOUNT = "/etc/sftpwarden/host_key_secret"
+TEXT_SYNC_PROVIDER_TYPES = {ProviderType.YAML, ProviderType.CSV}
 
 
 def kubernetes_resource_name(value: str) -> str:
@@ -65,37 +69,44 @@ def kubernetes_config_text(config: SFTPWardenConfig) -> str:
     return dump_config(kubernetes_runtime_config(config))
 
 
-def kubernetes_manifests(config: SFTPWardenConfig) -> list[dict[str, Any]]:
+def kubernetes_manifests(
+    config: SFTPWardenConfig, project_root: str | Path | None = None
+) -> list[dict[str, Any]]:
     """Build Kubernetes resource manifests for SFTPWarden."""
     config.kubernetes.ensure_supported_replicas()
     name = kubernetes_resource_name(config.kubernetes.release)
     namespace = config.kubernetes.namespace
     labels = kubernetes_labels(config)
     resources = [
-        _config_map(config, name, namespace, labels),
+        _config_map(config, name, namespace, labels, project_root),
         _host_keys_secret(name, namespace, labels),
     ]
     if config.provider.type in EXTERNAL_DSN_PROVIDER_TYPES and config.provider.dsn:
         resources.append(_provider_dsn_secret(config, name, namespace, labels))
     resources.extend(_persistent_volume_claims(config, name, namespace, labels))
     resources.append(_service(config.kubernetes, name, namespace, labels))
-    resources.append(_stateful_set(config, name, namespace, labels))
+    resources.append(_stateful_set(config, name, namespace, labels, project_root))
     return resources
 
 
-def kubernetes_manifest_text(config: SFTPWardenConfig) -> str:
+def kubernetes_manifest_text(
+    config: SFTPWardenConfig, project_root: str | Path | None = None
+) -> str:
     """Render Kubernetes manifests as a YAML multi-document stream."""
-    return yaml.safe_dump_all(kubernetes_manifests(config), sort_keys=False)
+    return yaml.safe_dump_all(kubernetes_manifests(config, project_root), sort_keys=False)
 
 
 def write_kubernetes_manifests(config: SFTPWardenConfig, project_root: str | Path = ".") -> Path:
     """Write rendered Kubernetes manifests into the project root."""
-    target = expand_path(project_root) / KUBERNETES_MANIFEST_FILE
-    target.write_text(kubernetes_manifest_text(config), encoding="utf-8")
+    root = expand_path(project_root)
+    target = root / KUBERNETES_MANIFEST_FILE
+    target.write_text(kubernetes_manifest_text(config, root), encoding="utf-8")
     return target
 
 
-def helm_values_model(config: SFTPWardenConfig) -> dict[str, Any]:
+def helm_values_model(
+    config: SFTPWardenConfig, project_root: str | Path | None = None
+) -> dict[str, Any]:
     """Return starter Helm values derived from a project config."""
     repository, tag = split_image(runtime_image_reference(config).image)
     runtime_config = kubernetes_runtime_config(config)
@@ -121,7 +132,7 @@ def helm_values_model(config: SFTPWardenConfig) -> dict[str, Any]:
             "collection": config.provider.collection,
             "dsnSecretName": provider_dsn_secret_name(config),
             "dsnSecretKey": PROVIDER_DSN_ENV,
-            "bootstrapContent": _provider_bootstrap_text(config),
+            "bootstrapContent": _provider_bootstrap_text(config, project_root),
         },
         "persistence": {
             "data": {"enabled": True, "size": config.kubernetes.data_storage_size},
@@ -149,15 +160,16 @@ def helm_values_model(config: SFTPWardenConfig) -> dict[str, Any]:
     return values
 
 
-def helm_values_text(config: SFTPWardenConfig) -> str:
+def helm_values_text(config: SFTPWardenConfig, project_root: str | Path | None = None) -> str:
     """Render starter Helm values YAML."""
-    return yaml.safe_dump(helm_values_model(config), sort_keys=False)
+    return yaml.safe_dump(helm_values_model(config, project_root), sort_keys=False)
 
 
 def write_helm_values(config: SFTPWardenConfig, project_root: str | Path = ".") -> Path:
     """Write starter Helm values into the project root."""
-    target = expand_path(project_root) / HELM_VALUES_FILE
-    target.write_text(helm_values_text(config), encoding="utf-8")
+    root = expand_path(project_root)
+    target = root / HELM_VALUES_FILE
+    target.write_text(helm_values_text(config, root), encoding="utf-8")
     return target
 
 
@@ -192,13 +204,20 @@ def _metadata(name: str, namespace: str, labels: dict[str, str]) -> dict[str, An
 
 
 def _config_map(
-    config: SFTPWardenConfig, name: str, namespace: str, labels: dict[str, str]
+    config: SFTPWardenConfig,
+    name: str,
+    namespace: str,
+    labels: dict[str, str],
+    project_root: str | Path | None,
 ) -> dict[str, Any]:
+    data = {"sftpwarden.yaml": kubernetes_config_text(config)}
+    if _provider_syncs_from_config_map(config):
+        data[_provider_runtime_filename(config)] = _provider_bootstrap_text(config, project_root)
     return {
         "apiVersion": "v1",
         "kind": "ConfigMap",
         "metadata": _metadata(f"{name}-config", namespace, labels),
-        "data": {"sftpwarden.yaml": kubernetes_config_text(config)},
+        "data": data,
     }
 
 
@@ -290,7 +309,11 @@ def _kubernetes_probe(health_probe: dict[str, Any], probe: KubernetesProbeConfig
 
 
 def _stateful_set(
-    config: SFTPWardenConfig, name: str, namespace: str, labels: dict[str, str]
+    config: SFTPWardenConfig,
+    name: str,
+    namespace: str,
+    labels: dict[str, str],
+    project_root: str | Path | None,
 ) -> dict[str, Any]:
     volumes = [
         {"name": "config", "configMap": {"name": f"{name}-config"}},
@@ -328,9 +351,13 @@ def _stateful_set(
         },
     ]
     init_command = "cp /host-key-secret/* /host-keys/ 2>/dev/null || true; chmod 700 /host-keys"
-    provider_bootstrap = _provider_bootstrap_command(config)
+    provider_bootstrap = _provider_bootstrap_command(config, project_root)
     if provider_bootstrap:
         init_volume_mounts.append({"name": "provider", "mountPath": PROVIDER_MOUNT})
+        if _provider_syncs_from_config_map(config):
+            init_volume_mounts.append(
+                {"name": "config", "mountPath": CONFIG_MAP_MOUNT, "readOnly": True}
+            )
         init_command = f"{init_command}; {provider_bootstrap}"
     image = runtime_image_reference(config).image
     env: list[dict[str, Any]] = [{"name": "SFTPWARDEN_CONFIG", "value": CONTAINER_CONFIG_PATH}]
@@ -421,22 +448,46 @@ def _stateful_set(
     }
 
 
-def _provider_bootstrap_text(config: SFTPWardenConfig) -> str:
+def _provider_bootstrap_text(
+    config: SFTPWardenConfig, project_root: str | Path | None = None
+) -> str:
     if config.provider.type not in FILE_PROVIDER_TYPES:
         return ""
+    if config.provider.type in TEXT_SYNC_PROVIDER_TYPES and project_root is not None:
+        provider_path = provider_local_path(project_root, config)
+        if provider_path.exists():
+            provider_from_config(project_root, config).read()
+            return provider_path.read_text(encoding="utf-8")
     return empty_provider_text(config.provider.type)
 
 
-def _provider_bootstrap_command(config: SFTPWardenConfig) -> str | None:
+def _provider_bootstrap_command(
+    config: SFTPWardenConfig, project_root: str | Path | None
+) -> str | None:
     if config.provider.type not in FILE_PROVIDER_TYPES:
         return None
     provider_path = kubernetes_runtime_config(config).provider.path
-    bootstrap_text = _provider_bootstrap_text(config)
+    bootstrap_text = _provider_bootstrap_text(config, project_root)
     quoted_path = shlex.quote(provider_path)
     quoted_dir = shlex.quote(str(Path(provider_path).parent))
+    if _provider_syncs_from_config_map(config):
+        source = f"{CONFIG_MAP_MOUNT}/{_provider_runtime_filename(config)}"
+        return (
+            f"mkdir -p {quoted_dir}; "
+            f"cp {shlex.quote(source)} {quoted_path}; "
+            f"chmod 600 {quoted_path}"
+        )
     quoted_text = shlex.quote(bootstrap_text)
     return (
         f"mkdir -p {quoted_dir}; "
         f"test -f {quoted_path} || printf %s {quoted_text} > {quoted_path}; "
         f"chmod 600 {quoted_path}"
     )
+
+
+def _provider_syncs_from_config_map(config: SFTPWardenConfig) -> bool:
+    return config.provider.type in TEXT_SYNC_PROVIDER_TYPES
+
+
+def _provider_runtime_filename(config: SFTPWardenConfig) -> str:
+    return Path(kubernetes_runtime_config(config).provider.path).name

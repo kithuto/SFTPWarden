@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import platform
 from pathlib import Path
 
 import yaml
@@ -293,8 +294,7 @@ def test_context_type_warns_when_installed_watcher_has_no_local_sync_targets(
     result = runner.invoke(app, ["context", "type", "local", "--yes"])
 
     assert result.exit_code == 0, result.output
-    assert "Watcher is installed but there are no remote local-sync contexts left" in result.output
-    assert "sftpwarden watcher uninstall" in result.output
+    assert "Watcher uninstalled" in result.output
 
 
 def test_manual_project_name_change_reconciles_registered_context(
@@ -417,12 +417,13 @@ def test_validate_json_reports_config_and_provider(tmp_path: Path, monkeypatch) 
 def test_doctor_json_reports_checks() -> None:
     result = CliRunner().invoke(app, ["doctor", "--json"])
     data = json.loads(result.output)
+    sync_binary = "scp" if platform.system() == "Windows" else "rsync"
 
     assert result.exit_code == 0, result.output
     assert {check["name"] for check in data["checks"]} == {
         "docker",
         "ssh",
-        "rsync",
+        sync_binary,
         "kubectl",
         "helm",
     }

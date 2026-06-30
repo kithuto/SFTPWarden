@@ -78,6 +78,12 @@ def test_docker_watcher_can_default_image() -> None:
     assert watcher.image is None
 
 
+def test_auto_watcher_mode_is_valid_without_image() -> None:
+    watcher = WatcherConfig(enabled=True, mode=WatcherMode.AUTO)
+
+    assert watcher.mode == WatcherMode.AUTO
+
+
 def test_kubernetes_data_storage_size_accepts_common_quantities() -> None:
     config = KubernetesConfig(data_storage_size=" 50Gi ")
 

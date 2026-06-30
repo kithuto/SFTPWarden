@@ -163,6 +163,49 @@ def test_backup_restore_sqlite_round_trip(
     assert json.loads(users_result.output)["users"][0]["username"] == "alice"
 
 
+def test_backup_includes_external_provider_user_snapshot(
+    memory_provider_factory: Callable[[ProviderUsers], object],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    user_factory: Callable[..., SFTPUser],
+) -> None:
+    """Database-style providers are backed up through provider/users.json."""
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "mysql-project"
+    root.mkdir()
+    config = default_project_config("dev", ProviderType.MYSQL, dsn="mysql://db/sftp")
+    write_config(root / "sftpwarden.yaml", config)
+    (root / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    save_registry(
+        ContextRegistry(
+            default="dev",
+            contexts={"dev": local_context("dev", root, ProviderType.MYSQL)},
+        )
+    )
+    provider = memory_provider_factory(
+        ProviderUsers(users=[user_factory("alice", comment="SQL provider user")])
+    )
+    monkeypatch.setattr(backup_services, "provider_from_config", lambda *_args: provider)
+
+    backup_path = tmp_path / "mysql-backup.tar.gz"
+    result = create_backup(
+        context_name="dev",
+        output=str(backup_path),
+        include_data=False,
+        dry_run=False,
+    )
+
+    assert "users.yaml" not in result.entries
+    with tarfile.open(backup_path, "r:gz") as archive:
+        names = archive.getnames()
+        snapshot_member = archive.extractfile("provider/users.json")
+        assert snapshot_member is not None
+        snapshot = json.loads(snapshot_member.read().decode("utf-8"))
+    assert "provider/users.json" in names
+    assert snapshot["users"][0]["username"] == "alice"
+    assert snapshot["users"][0]["comment"] == "SQL provider user"
+
+
 def test_remote_backup_restore_and_dry_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

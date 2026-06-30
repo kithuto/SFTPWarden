@@ -446,12 +446,14 @@ def test_ensure_directories_sets_chroot_and_upload_permissions(
 
     ensure_directories(config, resolved)
 
-    root = tmp_path / "data" / "alice"
+    data_root = tmp_path / "data"
+    root = data_root / "alice"
     upload = root / "upload"
+    assert data_root.is_dir()
     assert root.is_dir()
     assert upload.is_dir()
-    assert chowns == [(root, 0, 0), (upload, 12000, 12000)]
-    assert chmods == [(root, 0o755), (upload, 0o750)]
+    assert chowns == [(data_root, 0, 0), (root, 0, 0), (upload, 12000, 12000)]
+    assert chmods == [(data_root, 0o755), (root, 0o755), (upload, 0o750)]
 
 
 def test_chown_path_reports_missing_linux_ownership(monkeypatch: pytest.MonkeyPatch) -> None:

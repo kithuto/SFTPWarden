@@ -185,6 +185,8 @@ def print_provider_mutation_result(
         "runtime_changed": result.runtime_changed,
         "synced": result.sync_output is not None,
         "refreshed": result.refresh_output is not None,
+        "deploy_required": result.deploy_required,
+        "manual_action": result.manual_action,
     }
     if json_output:
         print_json(data)
@@ -200,3 +202,10 @@ def print_provider_mutation_result(
         console.print(result.sync_output)
     if result.refresh_output:
         console.print(result.refresh_output)
+    if result.deploy_required:
+        console.print(
+            "Kubernetes provider changes are saved locally. Run `sftpwarden deploy` "
+            "to sync YAML/CSV users into the provider PVC."
+        )
+    if result.manual_action:
+        console.print(result.manual_action)

@@ -184,6 +184,12 @@ Create a Helm project:
 sftpwarden init prod --deploy helm --yes
 ```
 
+For Kubernetes and Helm projects, `init` checks the configured namespace with
+`kubectl`. If the namespace is missing, interactive init asks whether to create
+it. The default namespace is `sftpwarden`, and `--yes` creates it automatically
+when needed. Use `--namespace <name>` for a different existing or new namespace;
+`--no-create-namespace` aborts when the selected namespace is missing.
+
 Use `context add` instead of `init` only when the SFTPWarden project already exists
 and you just want to register it on this machine.
 
@@ -236,6 +242,10 @@ Important flags:
 | `--table` | Sets the users table name. Default: `sftp_users`. |
 | `--collection` | Sets the MongoDB collection name. Default: `sftp_users`. |
 | `--deploy`, `-d` | Stores the deployment method: `compose`, `kube`, or `helm`. Default: `compose`. |
+| `--namespace` | Sets the Kubernetes namespace for `kube` or `helm` projects. Default: `sftpwarden`. |
+| `--create-namespace` | Creates a missing Kubernetes namespace during `init`. Implied by `--yes` when the namespace is missing. |
+| `--no-create-namespace` | Aborts when the Kubernetes namespace is missing. |
+| `--skip-checks` | Skips remote and Kubernetes prerequisite checks during `init`. Use this only when preparing files before the target system is reachable. |
 | `--create-table` | Creates the SQL table or MongoDB collection/index if missing. |
 | `--no-create-table` | Aborts if the SQL table or MongoDB collection is missing. |
 
@@ -282,7 +292,9 @@ For Kubernetes manifests, deploy renders `kubernetes.yml` and applies it with
 `kubectl`. For Helm mode, deploy writes `values.yaml` and runs
 `helm upgrade --install`. Kubernetes and Helm deploys then restart the runtime
 StatefulSet so PVC/config/probe changes such as `kubernetes.data_storage_size`
-or `kubernetes.liveness_probe.period_seconds` are remounted or reloaded.
+or `kubernetes.liveness_probe.period_seconds` are remounted or reloaded. For
+YAML/CSV providers, this is also the step that copies the current local provider
+file into the provider PVC.
 
 Deploy a critical context without a prompt:
 
@@ -354,6 +366,8 @@ sftpwarden kube delete --yes
 `render` does not require a cluster. `apply`, `status`, `logs`, `doctor`, and
 `delete` use `kubectl`. Delete requires `--yes` unless you confirm interactively.
 `apply` also restarts the runtime StatefulSet after the manifests are applied.
+For YAML/CSV providers, `apply` copies the rendered local provider file into the
+provider PVC during that rollout.
 
 ### `sftpwarden helm`
 
@@ -368,7 +382,9 @@ sftpwarden helm uninstall --yes
 ```
 
 `values` does not require Helm. Template, lint, upgrade, and uninstall require
-`helm`. `upgrade` restarts the runtime StatefulSet after Helm succeeds.
+`helm`. `upgrade` restarts the runtime StatefulSet after Helm succeeds. For
+YAML/CSV providers, `upgrade` copies the rendered local provider file into the
+provider PVC during that rollout.
 Uninstall requires `--yes` unless you confirm interactively.
 
 Source checkouts use the local `charts/sftpwarden` chart. Python package
@@ -402,8 +418,13 @@ Preview the command without running it:
 sftpwarden refresh --dry-run
 ```
 
-Use `refresh` after changing users. Use `deploy` after changing configuration,
-Docker Compose, or starting the runtime.
+Use `refresh` after changing users that are already visible to the runtime. For
+Compose and remote Compose contexts this runs Docker Compose. For Kubernetes
+contexts it runs `kubectl exec` against the runtime pod, which is useful for
+database-backed providers such as PostgreSQL, MariaDB/MySQL, and MongoDB.
+Kubernetes YAML/CSV provider changes require `deploy`, `kube apply`, or
+`helm upgrade --install` because the local file must first be copied into the
+provider PVC.
 
 ### `sftpwarden sync`
 
@@ -452,7 +473,7 @@ sftpwarden doctor
 sftpwarden doctor --json
 ```
 
-It checks tools such as `docker`, `ssh`, `rsync`, `kubectl`, and `helm`.
+It checks tools such as `docker`, `ssh`, `rsync` or `scp`, `kubectl`, and `helm`.
 
 ### `sftpwarden health`
 
@@ -476,9 +497,11 @@ sftpwarden backup --include-data --output full-backup.tar.gz
 sftpwarden backup --dry-run --json
 ```
 
-By default, backup includes config, Compose, provider snapshot, raw local provider
-files, host keys, and runtime state. User data under `data/` is included only with
-`--include-data`.
+By default, backup includes config, Compose, `provider/users.json` with the
+current users read from the provider, raw local provider files, host keys, and
+runtime state. SQL and MongoDB providers are captured through that JSON user
+snapshot when the CLI can reach the configured database. User data under `data/`
+is included only with `--include-data`.
 
 ### `sftpwarden restore`
 
@@ -524,6 +547,11 @@ sftpwarden provider import --input users.csv --merge --json
 `--merge` upserts imported users and keeps destination-only users. `--replace`
 makes the destination exactly match the input file.
 
+When the destination is a Kubernetes YAML/CSV project, import updates the local
+provider file and reports that deploy is required. Database-backed Kubernetes
+providers can be refreshed normally because the runtime reads the database
+directly.
+
 ### `sftpwarden provider copy`
 
 Copies users between two registered contexts.
@@ -538,6 +566,11 @@ sftpwarden provider copy \
 
 Copy supports all readable/mutable providers. Comment-only changes do not refresh
 the runtime because they do not affect runtime user state.
+
+When the destination is a Kubernetes YAML/CSV project, copy updates the local
+provider file and reports that deploy is required. Database-backed Kubernetes
+providers can be refreshed normally because the runtime reads the database
+directly.
 
 ## User Commands
 
@@ -584,6 +617,10 @@ sftpwarden user add alice \
 ```
 
 User mutations refresh the runtime automatically unless `--no-refresh` is used.
+For Kubernetes YAML/CSV providers, the CLI saves the local provider file and
+prints the deploy/apply/upgrade command to run because the provider PVC is synced
+during rollout. For Kubernetes database providers, refresh targets the runtime
+pod with `kubectl exec`.
 
 ### `sftpwarden user update`
 
@@ -825,10 +862,22 @@ sftpwarden watcher status --json
 
 Installs the watcher.
 
-Systemd watcher:
+Auto-detected watcher:
+
+```bash
+sftpwarden watcher install
+sftpwarden watcher install --watcher auto
+```
+
+Native watcher backends:
 
 ```bash
 sftpwarden watcher install --watcher systemd
+sftpwarden watcher install --watcher openrc
+sftpwarden watcher install --watcher runit
+sftpwarden watcher install --watcher supervisord
+sftpwarden watcher install --watcher launchd
+sftpwarden watcher install --watcher windows-task
 ```
 
 Docker watcher:
@@ -841,14 +890,33 @@ sftpwarden watcher install --watcher docker --image registry.example.com/watcher
 Dry-run:
 
 ```bash
-sftpwarden watcher install --watcher systemd --dry-run
+sftpwarden watcher install --dry-run
 ```
 
-Systemd mode uses `sudo` and enables the service so it starts after reboot.
-Docker mode requires explicit dedicated SSH keys for remote contexts.
-Source checkouts build `sftpwarden-watcher:local`; Python package installations
-use `ghcr.io/kithuto/sftpwarden-watcher:<installed-version>` unless `--image`
+By default, install writes the backend file and activates the scheduler. Use
+`--no-activate` to render the file without starting or enabling it. Linux native
+backends such as systemd, OpenRC, runit, and supervisord write into system
+service directories during activation, so those commands use `sudo` and may ask
+for the host user's sudo password.
+
+`auto` detects Windows Task Scheduler on Windows, launchd on macOS, and systemd,
+OpenRC, runit, or supervisord on Linux. If no native scheduler is found,
+interactive installs ask whether to use Docker. `--yes` accepts Docker fallback
+automatically; non-interactive workflows should pass `--watcher docker` when
+Docker is intended.
+
+Native modes run on the host and use the host SSH config, agent, known hosts, and
+default identity. Docker mode requires explicit dedicated SSH keys for remote
+contexts. It writes a Docker-specific context registry with container paths,
+mounts local project folders read-only, and copies mounted keys inside the
+container with private permissions. Source checkouts build
+`sftpwarden-watcher:local`; Python package installations use
+`ghcr.io/kithuto/sftpwarden-watcher:<installed-version>` unless `--image`
 overrides it.
+
+If another watcher backend is already installed, installing a different backend
+requires confirmation or `--yes`. SFTPWarden deactivates the old backend before
+writing and activating the new one.
 
 ### `sftpwarden watcher uninstall`
 
@@ -857,6 +925,9 @@ Removes the watcher.
 ```bash
 sftpwarden watcher uninstall --yes
 ```
+
+Uninstall deactivates the backend-specific scheduler entry, removes the generated
+watcher file, and clears SFTPWarden's watcher metadata.
 
 ## Runtime Commands
 

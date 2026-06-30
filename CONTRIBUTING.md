@@ -131,7 +131,7 @@ sftpwarden/
   contexts/            # Context registry and resolution
   providers/           # YAML, CSV, SQLite, SQL, and MongoDB providers
   refresh/             # Runtime refresh orchestration
-  remote/              # SSH, rsync, and remote deploy support
+  remote/              # SSH, rsync/scp, and remote deploy support
   render/              # Compose and Kubernetes rendering
   security/            # Password/hash helpers
   services/            # Deploy, backup, health, and CLI-facing workflows

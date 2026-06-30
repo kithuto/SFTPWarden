@@ -5,6 +5,7 @@ from pathlib import Path
 
 def test_dockerfile_keeps_runtime_lightweight() -> None:
     dockerfile = Path("docker/runtime/Dockerfile").read_text(encoding="utf-8")
+    entrypoint = Path("docker/runtime/entrypoint.sh").read_text(encoding="utf-8")
 
     assert "EXPOSE 22" in dockerfile
     assert "apk add --no-cache" in dockerfile
@@ -21,6 +22,8 @@ def test_dockerfile_keeps_runtime_lightweight() -> None:
     assert "COPY sftpwarden ./sftpwarden" in dockerfile
     assert "docker/runtime/entrypoint.sh" in dockerfile
     assert "docker/runtime/sshd_config.template" in dockerfile
+    assert "SFTPWARDEN_NOFILE_LIMIT" in entrypoint
+    assert "ulimit -n" in entrypoint
     assert not Path("Dockerfile").exists()
     assert not Path("docker/entrypoint.sh").exists()
     assert not Path("docker/sshd_config").exists()

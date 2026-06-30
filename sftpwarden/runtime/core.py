@@ -827,10 +827,14 @@ def ensure_directories(config: SFTPWardenConfig, resolved: ResolvedUser) -> None
     resolved
         Resolved provider user.
     """
-    root = Path(config.server.data_dir) / resolved.spec.username
+    data_root = Path(config.server.data_dir)
+    root = data_root / resolved.spec.username
     upload = root / resolved.spec.upload_dir
+    data_root.mkdir(parents=True, exist_ok=True)
     root.mkdir(parents=True, exist_ok=True)
     upload.mkdir(parents=True, exist_ok=True)
+    chown_path(data_root, 0, 0)
+    os.chmod(data_root, int(config.isolation.root_permissions, 8))
     chown_path(root, 0, 0)
     os.chmod(root, int(config.isolation.root_permissions, 8))
     chown_path(upload, resolved.uid, resolved.gid)

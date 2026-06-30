@@ -8,11 +8,11 @@ import yaml
 from sftpwarden.config import FILE_PROVIDER_TYPES, SFTPWardenConfig, provider_local_path
 from sftpwarden.utils._version import get_version
 from sftpwarden.utils.constants import CONTAINER_CONFIG_PATH
-from sftpwarden.utils.paths import expand_path
+from sftpwarden.utils.paths import expand_path, source_root
 
 DEFAULT_LOCAL_RUNTIME_IMAGE = "sftpwarden:local"
 GHCR_RUNTIME_IMAGE_REPOSITORY = "ghcr.io/kithuto/sftpwarden"
-SOURCE_ROOT = Path(__file__).resolve().parents[2]
+SOURCE_ROOT = source_root()
 LOCAL_RUNTIME_DOCKERFILE = SOURCE_ROOT / "docker" / "runtime" / "Dockerfile"
 
 

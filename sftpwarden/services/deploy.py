@@ -308,7 +308,7 @@ def kubernetes_resource_ids(config: SFTPWardenConfig) -> list[str]:
 def kubernetes_rendered_manifest_diff_reason(config: SFTPWardenConfig, root: Path) -> str | None:
     """Return a deploy-change reason for Kubernetes manifests."""
     target = root / KUBERNETES_MANIFEST_FILE
-    expected = kubernetes_manifest_text(config)
+    expected = kubernetes_manifest_text(config, root)
     if not target.exists():
         return f"{KUBERNETES_MANIFEST_FILE} is missing"
     if target.read_text(encoding="utf-8") != expected:
@@ -319,7 +319,7 @@ def kubernetes_rendered_manifest_diff_reason(config: SFTPWardenConfig, root: Pat
 def helm_values_diff_reason(config: SFTPWardenConfig, root: Path) -> str | None:
     """Return a deploy-change reason for Helm values."""
     target = root / HELM_VALUES_FILE
-    expected = helm_values_text(config)
+    expected = helm_values_text(config, root)
     if not target.exists():
         return f"{HELM_VALUES_FILE} is missing"
     if target.read_text(encoding="utf-8") != expected:

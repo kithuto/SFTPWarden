@@ -30,8 +30,8 @@ def kube_render(
 ) -> None:
     """Render Kubernetes manifests without applying them."""
     try:
-        loaded = _load_config(context, config)
-        console.print(kubernetes_manifest_text(loaded))
+        entry, loaded = _load_context_config(context, config)
+        console.print(kubernetes_manifest_text(loaded, entry.root))
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -223,13 +223,17 @@ def kube_delete(
 
 
 def _load_config(context: str | None, config: str | None):
+    return _load_context_config(context, config)[1]
+
+
+def _load_context_config(context: str | None, config: str | None):
     entry = resolve_context(config_path=config, context_name=context, reconcile_config=True)
     if not entry.config:
         raise SFTPWardenError(
             f"Context {entry.name} has no local sftpwarden.yaml.",
             suggestion="Use a local or remote local-sync context, or pass --config.",
         )
-    return load_config(entry.config)
+    return entry, load_config(entry.config)
 
 
 def _status_commands(config):

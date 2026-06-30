@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,8 +14,10 @@ from typer.testing import CliRunner
 
 import sftpwarden.cli_commands.core as core_commands
 import sftpwarden.cli_commands.helm as helm_commands
+import sftpwarden.cli_commands.init as init_commands
 import sftpwarden.cli_commands.kubernetes as kube_commands
 import sftpwarden.render.compose as compose_module
+import sftpwarden.services.cli_workflows as cli_workflows
 import sftpwarden.services.deploy as deploy_module
 from sftpwarden.cli import app
 from sftpwarden.config import (
@@ -61,7 +64,35 @@ from sftpwarden.services.deploy import (
 )
 from sftpwarden.system.commands import CommandResult
 from sftpwarden.utils._version import get_version
-from sftpwarden.utils.errors import ContextError, RuntimeError, SFTPWardenError
+from sftpwarden.utils.errors import ContextError, ProviderError, RuntimeError, SFTPWardenError
+
+
+def register_kubernetes_project(
+    local_project_factory: Callable[..., tuple[Path, ContextEntry]],
+    tmp_path: Path,
+    name: str,
+    mode: KubernetesMode,
+) -> Path:
+    """Create a registered Kubernetes project without exercising the init CLI."""
+    root, _entry = local_project_factory(name=name, root=tmp_path / name)
+    config = load_config(root / "sftpwarden.yaml")
+    config.deploy.target = DeployTarget.KUBERNETES
+    config.kubernetes.mode = mode
+    write_config(root / "sftpwarden.yaml", config)
+    compose_file = root / config.docker.compose_file
+    if compose_file.exists():
+        compose_file.unlink()
+    return root
+
+
+@pytest.fixture(autouse=True)
+def fake_init_kubernetes_namespace_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep Kubernetes init tests independent from a live cluster by default."""
+
+    def fake_run(command: list[str], **_kwargs) -> CommandResult:
+        return CommandResult(command, 0, "ok\n", "")
+
+    monkeypatch.setattr(init_commands, "run", fake_run)
 
 
 def test_kubernetes_replicas_are_reserved_for_future_multi_node() -> None:
@@ -130,6 +161,63 @@ def test_kubernetes_manifest_keeps_external_dsn_in_secret() -> None:
     assert "postgresql://user:pass@db/sftp" not in rendered_config
     assert f"${{{PROVIDER_DSN_ENV}}}" in rendered_config
     assert any(secret.get("stringData", {}).get(PROVIDER_DSN_ENV) for secret in secrets)
+
+
+@pytest.mark.parametrize(
+    ("provider_type", "filename", "provider_text"),
+    [
+        (
+            ProviderType.YAML,
+            "users.yaml",
+            "users:\n- username: alice\n  password_hash: '!'\n",
+        ),
+        (
+            ProviderType.CSV,
+            "users.csv",
+            (
+                "username,public_keys,password_hash,uid,gid,upload_dir,comment,disabled\n"
+                "alice,,!,,,upload,Finance,false\n"
+            ),
+        ),
+    ],
+)
+def test_kubernetes_and_helm_sync_local_text_provider(
+    tmp_path: Path,
+    provider_type: ProviderType,
+    filename: str,
+    provider_text: str,
+) -> None:
+    """Sync Kubernetes YAML/CSV provider PVCs from local declarative provider files."""
+    config = default_project_config("prod", provider_type)
+    config.deploy.target = DeployTarget.KUBERNETES
+    (tmp_path / filename).write_text(provider_text, encoding="utf-8")
+
+    manifests = kubernetes_manifests(config, tmp_path)
+    manifest_text = kubernetes_manifest_text(config, tmp_path)
+    values = helm_values_model(config, tmp_path)
+    configmap = next(manifest for manifest in manifests if manifest["kind"] == "ConfigMap")
+    statefulset = next(manifest for manifest in manifests if manifest["kind"] == "StatefulSet")
+    init_container = statefulset["spec"]["template"]["spec"]["initContainers"][0]
+    init_command = init_container["command"][-1]
+
+    assert "alice" in manifest_text
+    assert configmap["data"][filename] == provider_text
+    assert f"cp /config/{filename} /etc/sftpwarden/provider-data/{filename}" in init_command
+    assert f"test -f /etc/sftpwarden/provider-data/{filename}" not in init_command
+    assert {"name": "config", "mountPath": "/config", "readOnly": True} in init_container[
+        "volumeMounts"
+    ]
+    assert values["provider"]["bootstrapContent"] == provider_text
+
+
+def test_kubernetes_text_provider_sync_validates_local_file(tmp_path: Path) -> None:
+    """Fail before deploy when the local declarative provider file is invalid."""
+    config = default_project_config("prod")
+    config.deploy.target = DeployTarget.KUBERNETES
+    (tmp_path / "users.yaml").write_text("users:\n- username: ''\n", encoding="utf-8")
+
+    with pytest.raises(ProviderError, match="Invalid YAML provider file"):
+        kubernetes_manifest_text(config, tmp_path)
 
 
 def test_helm_values_model_reserves_runtime_replicas() -> None:
@@ -228,14 +316,212 @@ def test_init_deploy_flag_persists_compose_kube_and_helm(
     assert not (helm_root / "docker-compose.yml").exists()
 
 
-def test_config_command_updates_kubernetes_values_and_rejects_replicas(
+def test_init_kubernetes_namespace_option_uses_existing_namespace(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Allow Kubernetes config edits while rejecting unsupported replicas."""
+    """Store an explicit namespace and verify it before writing the project."""
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
-    root = tmp_path / "dev"
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs) -> CommandResult:
+        calls.append(command)
+        return CommandResult(command, 0, "namespace exists\n", "")
+
+    monkeypatch.setattr(init_commands, "run", fake_run)
+    root = tmp_path / "kube"
+    result = CliRunner().invoke(
+        app,
+        [
+            "init",
+            "kube",
+            "--root",
+            str(root),
+            "--deploy",
+            "kube",
+            "--namespace",
+            "team-sftp",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert load_config(root / "sftpwarden.yaml").kubernetes.namespace == "team-sftp"
+    assert calls == [["kubectl", "get", "namespace", "team-sftp"]]
+
+
+def test_init_helm_namespace_option_uses_existing_namespace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Apply the namespace init check to Helm projects too."""
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs) -> CommandResult:
+        calls.append(command)
+        return CommandResult(command, 0, "namespace exists\n", "")
+
+    monkeypatch.setattr(init_commands, "run", fake_run)
+    root = tmp_path / "helm"
+    result = CliRunner().invoke(
+        app,
+        [
+            "init",
+            "helm",
+            "--root",
+            str(root),
+            "--deploy",
+            "helm",
+            "--namespace",
+            "team-sftp",
+            "--yes",
+        ],
+    )
+    config = load_config(root / "sftpwarden.yaml")
+
+    assert result.exit_code == 0, result.output
+    assert config.kubernetes.mode == "helm"
+    assert config.kubernetes.namespace == "team-sftp"
+    assert calls == [["kubectl", "get", "namespace", "team-sftp"]]
+
+
+def test_init_kubernetes_namespace_creation_when_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Create a missing Kubernetes namespace when init is allowed to do so."""
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs) -> CommandResult:
+        calls.append(command)
+        if command[:3] == ["kubectl", "get", "namespace"]:
+            return CommandResult(command, 1, "", 'namespaces "team-sftp" not found')
+        return CommandResult(command, 0, "namespace/team-sftp created\n", "")
+
+    monkeypatch.setattr(init_commands, "run", fake_run)
+    result = CliRunner().invoke(
+        app,
+        [
+            "init",
+            "kube",
+            "--root",
+            str(tmp_path / "kube"),
+            "--deploy",
+            "kube",
+            "--namespace",
+            "team-sftp",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert ["kubectl", "create", "namespace", "team-sftp"] in calls
+    assert "Created Kubernetes namespace" in result.output
+
+
+def test_init_default_kubernetes_namespace_is_created_with_yes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Use the default sftpwarden namespace and create it automatically with --yes."""
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs) -> CommandResult:
+        calls.append(command)
+        if command[:3] == ["kubectl", "get", "namespace"]:
+            return CommandResult(command, 1, "", 'namespaces "sftpwarden" not found')
+        return CommandResult(command, 0, "namespace/sftpwarden created\n", "")
+
+    monkeypatch.setattr(init_commands, "run", fake_run)
+    root = tmp_path / "kube"
+    result = CliRunner().invoke(
+        app,
+        ["init", "kube", "--root", str(root), "--deploy", "kube", "--yes"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert load_config(root / "sftpwarden.yaml").kubernetes.namespace == "sftpwarden"
+    assert calls == [
+        ["kubectl", "get", "namespace", "sftpwarden"],
+        ["kubectl", "create", "namespace", "sftpwarden"],
+    ]
+
+
+def test_kubernetes_user_mutation_reports_deploy_instead_of_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Save Kubernetes provider changes locally and guide operators to deploy."""
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "kube"
     runner = CliRunner()
-    runner.invoke(app, ["init", "dev", "--root", str(root), "--deploy", "kube", "--yes"])
+    init = runner.invoke(app, ["init", "kube", "--root", str(root), "--deploy", "kube", "--yes"])
+    refresh_calls: list[object] = []
+    monkeypatch.setattr(
+        cli_workflows,
+        "refresh_context",
+        lambda entry, *, dry_run=False: refresh_calls.append(entry) or "refreshed",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "user",
+            "add",
+            "alice",
+            "--password-hash",
+            "!",
+            "--context",
+            "kube",
+        ],
+    )
+
+    assert init.exit_code == 0, init.output
+    assert result.exit_code == 0, result.output
+    assert "Saved provider change locally" in result.output
+    assert "sftpwarden deploy" in result.output
+    assert refresh_calls == []
+    assert "alice" in (root / "users.yaml").read_text(encoding="utf-8")
+
+
+def test_init_kubernetes_namespace_refusal_is_actionable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Abort init when the namespace is missing and the user refuses creation."""
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(init_commands.Confirm, "ask", lambda *_args, **_kwargs: False)
+
+    def fake_run(command: list[str], **_kwargs) -> CommandResult:
+        return CommandResult(command, 1, "", 'namespaces "team-sftp" not found')
+
+    monkeypatch.setattr(init_commands, "run", fake_run)
+    result = CliRunner().invoke(
+        app,
+        [
+            "init",
+            "kube",
+            "--root",
+            str(tmp_path / "kube"),
+            "--deploy",
+            "kube",
+            "--namespace",
+            "team-sftp",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Kubernetes namespace does not exist: team-sftp" in result.output
+    assert "pass an existing namespace" in result.output
+    assert "--namespace" in result.output
+
+
+def test_config_command_updates_kubernetes_values_and_rejects_replicas(
+    tmp_path: Path,
+    local_project_factory: Callable[..., tuple[Path, ContextEntry]],
+) -> None:
+    """Allow Kubernetes config edits while rejecting unsupported replicas."""
+    runner = CliRunner()
+    root = register_kubernetes_project(
+        local_project_factory, tmp_path, "dev", KubernetesMode.MANIFESTS
+    )
 
     update = runner.invoke(app, ["config", "kubernetes.namespace", "sftp"])
     resize = runner.invoke(app, ["config", "kubernetes.data_storage_size", "50Gi"])
@@ -252,16 +538,14 @@ def test_config_command_updates_kubernetes_values_and_rejects_replicas(
 
 
 def test_deploy_dry_run_dispatches_to_kubernetes_and_helm(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    local_project_factory: Callable[..., tuple[Path, ContextEntry]],
 ) -> None:
     """Expose dry-run deployment actions for manifests and Helm in JSON."""
-    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     runner = CliRunner()
-    kube_root = tmp_path / "kube"
-    helm_root = tmp_path / "helm"
-    runner.invoke(app, ["init", "kube", "--root", str(kube_root), "--deploy", "kube", "--yes"])
+    register_kubernetes_project(local_project_factory, tmp_path, "kube", KubernetesMode.MANIFESTS)
     kube_result = runner.invoke(app, ["deploy", "--context", "kube", "--dry-run", "--json"])
-    runner.invoke(app, ["init", "helm", "--root", str(helm_root), "--deploy", "helm", "--yes"])
+    register_kubernetes_project(local_project_factory, tmp_path, "helm", KubernetesMode.HELM)
     helm_result = runner.invoke(app, ["deploy", "--context", "helm", "--dry-run", "--json"])
 
     kube_data = json.loads(kube_result.output)
@@ -411,13 +695,15 @@ def test_helm_lint_returns_oci_pull_failure(
 
 
 def test_cli_reports_missing_kubectl_and_helm(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    local_project_factory: Callable[..., tuple[Path, ContextEntry]],
 ) -> None:
     """Translate missing kubectl and Helm executables into actionable errors."""
-    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
-    root = tmp_path / "dev"
     runner = CliRunner()
-    runner.invoke(app, ["init", "dev", "--root", str(root), "--deploy", "kube", "--yes"])
+    root = register_kubernetes_project(
+        local_project_factory, tmp_path, "dev", KubernetesMode.MANIFESTS
+    )
 
     def missing(command: list[str], **_kwargs) -> CommandResult:
         return CommandResult(command, 127, "", f"Executable not found: {command[0]}")
@@ -429,8 +715,6 @@ def test_cli_reports_missing_kubectl_and_helm(
 
     config = load_config(root / "sftpwarden.yaml")
     config.kubernetes.mode = KubernetesMode.HELM
-    from sftpwarden.config import write_config
-
     write_config(root / "sftpwarden.yaml", config)
     monkeypatch.setattr(helm_commands, "run", missing)
     helm = runner.invoke(app, ["helm", "lint"])
@@ -758,14 +1042,13 @@ def test_translate_command_failure_messages() -> None:
 
 
 def test_helm_cli_commands_cover_success_paths(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    local_project_factory: Callable[..., tuple[Path, ContextEntry]],
 ) -> None:
     """Cover successful Helm CLI values, template, lint, upgrade, and uninstall."""
-    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
-    root = tmp_path / "helm"
     runner = CliRunner()
-    init = runner.invoke(app, ["init", "helm", "--root", str(root), "--deploy", "helm", "--yes"])
-    assert init.exit_code == 0, init.output
+    root = register_kubernetes_project(local_project_factory, tmp_path, "helm", KubernetesMode.HELM)
     calls: list[tuple[list[str], dict[str, object]]] = []
 
     def fake_run(command: list[str], **kwargs) -> CommandResult:
@@ -830,14 +1113,13 @@ def test_helm_cli_commands_cover_error_paths(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_helm_cli_commands_cover_command_failures(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    local_project_factory: Callable[..., tuple[Path, ContextEntry]],
 ) -> None:
     """Translate failing Helm commands and declined uninstall confirmations."""
-    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
-    root = tmp_path / "helm"
     runner = CliRunner()
-    init = runner.invoke(app, ["init", "helm", "--root", str(root), "--deploy", "helm", "--yes"])
-    assert init.exit_code == 0, init.output
+    register_kubernetes_project(local_project_factory, tmp_path, "helm", KubernetesMode.HELM)
 
     def failing_run(command: list[str], **_kwargs) -> CommandResult:
         return CommandResult(command, 1, "", "namespace missing")
@@ -852,14 +1134,15 @@ def test_helm_cli_commands_cover_command_failures(
 
 
 def test_kube_cli_commands_cover_success_paths(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    local_project_factory: Callable[..., tuple[Path, ContextEntry]],
 ) -> None:
     """Cover successful Kubernetes CLI render, apply, status, logs, doctor, and delete."""
-    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
-    root = tmp_path / "kube"
     runner = CliRunner()
-    init = runner.invoke(app, ["init", "kube", "--root", str(root), "--deploy", "kube", "--yes"])
-    assert init.exit_code == 0, init.output
+    root = register_kubernetes_project(
+        local_project_factory, tmp_path, "kube", KubernetesMode.MANIFESTS
+    )
     config = load_config(root / "sftpwarden.yaml")
     config.kubernetes.storage_class = "fast"
     write_config(root / "sftpwarden.yaml", config)
@@ -894,13 +1177,15 @@ def test_kube_cli_commands_cover_success_paths(
 
 
 def test_kube_cli_commands_cover_error_paths(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    local_project_factory: Callable[..., tuple[Path, ContextEntry]],
 ) -> None:
     """Cover Kubernetes CLI command failures and destructive confirmation paths."""
-    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
-    root = tmp_path / "kube"
     runner = CliRunner()
-    runner.invoke(app, ["init", "kube", "--root", str(root), "--deploy", "kube", "--yes"])
+    root = register_kubernetes_project(
+        local_project_factory, tmp_path, "kube", KubernetesMode.MANIFESTS
+    )
 
     def failing_run(command: list[str], **_kwargs) -> CommandResult:
         return CommandResult(command, 1, "", "namespace missing")

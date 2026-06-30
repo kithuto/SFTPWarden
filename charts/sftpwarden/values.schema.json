@@ -25,6 +25,19 @@
     "provider": {
       "type": "object",
       "properties": {
+        "type": {
+          "type": "string",
+          "description": "Provider type rendered into sftpwarden.yaml. YAML/CSV bootstrap content is copied into the provider PVC during rollout."
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Runtime path for the provider file."
+        },
+        "bootstrapContent": {
+          "type": "string",
+          "description": "Initial YAML/CSV provider content copied into the provider PVC during rollout. Prefer database providers for production user state that must not be embedded in rendered values."
+        },
         "dsnSecretName": {
           "type": ["string", "null"]
         },

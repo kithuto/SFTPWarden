@@ -41,6 +41,8 @@ def test_remote_local_sync_init_creates_sqlite_provider_file(
         query=None,
         table="sftp_users",
         collection="sftp_users",
+        namespace=None,
+        create_namespace=None,
         create_table=None,
         host=None,
         remote_user=None,

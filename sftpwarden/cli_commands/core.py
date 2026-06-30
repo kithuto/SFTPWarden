@@ -51,6 +51,7 @@ from sftpwarden.services.health import project_health
 from sftpwarden.utils.console import console, print_info, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
 from sftpwarden.utils.paths import expand_path
+from sftpwarden.utils.platform import system_is
 from sftpwarden.watcher import (
     derive_watch_targets,
     poll_watch,
@@ -409,6 +410,7 @@ def doctor(json_output: Annotated[bool, typer.Option("--json")] = False) -> None
     json_output
         Whether to emit machine-readable JSON.
     """
+    sync_binary = "scp" if system_is("Windows") else "rsync"
     checks = [
         {
             "name": binary,
@@ -418,7 +420,7 @@ def doctor(json_output: Annotated[bool, typer.Option("--json")] = False) -> None
         for binary, required_for in (
             ("docker", "Docker Compose deployments"),
             ("ssh", "remote contexts"),
-            ("rsync", "remote local-sync contexts"),
+            (sync_binary, "remote local-sync contexts"),
             ("kubectl", "Kubernetes manifest deployments"),
             ("helm", "Helm deployments"),
         )

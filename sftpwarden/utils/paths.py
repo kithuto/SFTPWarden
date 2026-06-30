@@ -39,6 +39,11 @@ def app_home() -> Path:
     return expand_path(os.environ.get("SFTPWARDEN_HOME", DEFAULT_HOME))
 
 
+def source_root() -> Path:
+    """Return the project source root for local source checkouts."""
+    return Path(__file__).resolve().parents[2]
+
+
 def global_config_path() -> Path:
     """Return the global configuration file path.
 

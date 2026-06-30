@@ -26,6 +26,9 @@ kubernetes:
   storageClass: null
 
 provider:
+  # YAML/CSV bootstrap content is copied into the provider PVC on every rollout.
+  # Prefer database providers for production Kubernetes user state that changes
+  # outside deploy cycles or should not be embedded in rendered values.
   type: yaml
   path: /etc/sftpwarden/provider-data/users.yaml
   bootstrapContent: |

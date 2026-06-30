@@ -2,6 +2,10 @@
 {{- $startupProbe := get $probes "startup" | default dict -}}
 {{- $readinessProbe := get $probes "readiness" | default dict -}}
 {{- $livenessProbe := get $probes "liveness" | default dict -}}
+{{- $providerTextType := or (eq .Values.provider.type "yaml") (eq .Values.provider.type "csv") -}}
+{{- $providerHasContent := ne (default "" .Values.provider.bootstrapContent) "" -}}
+{{- $providerSyncsFromConfig := and .Values.persistence.provider.enabled $providerHasContent $providerTextType -}}
+{{- $providerBootstrapsFromValue := and .Values.persistence.provider.enabled $providerHasContent (not $providerTextType) -}}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -29,9 +33,13 @@ spec:
             - |
               cp /host-key-secret/* /host-keys/ 2>/dev/null || true
               chmod 700 /host-keys
-              {{- if and .Values.persistence.provider.enabled .Values.provider.bootstrapContent }}
+              {{- if or $providerSyncsFromConfig $providerBootstrapsFromValue }}
               mkdir -p /etc/sftpwarden/provider-data
+              {{- if $providerSyncsFromConfig }}
+              cp "/config/{{ base .Values.provider.path }}" {{ .Values.provider.path | quote }}
+              {{- else }}
               test -f {{ .Values.provider.path | quote }} || printf %b {{ .Values.provider.bootstrapContent | quote }} > {{ .Values.provider.path | quote }}
+              {{- end }}
               chmod 600 {{ .Values.provider.path | quote }}
               {{- end }}
           volumeMounts:
@@ -40,9 +48,14 @@ spec:
             - name: host-key-secret
               mountPath: /host-key-secret
               readOnly: true
-            {{- if and .Values.persistence.provider.enabled .Values.provider.bootstrapContent }}
+            {{- if or $providerSyncsFromConfig $providerBootstrapsFromValue }}
             - name: provider
               mountPath: /etc/sftpwarden/provider-data
+            {{- end }}
+            {{- if $providerSyncsFromConfig }}
+            - name: config
+              mountPath: /config
+              readOnly: true
             {{- end }}
       containers:
         - name: sftpwarden

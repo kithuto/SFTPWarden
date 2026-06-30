@@ -46,6 +46,7 @@ PostgreSQL, or MongoDB.
 - [User Management](#user-management)
 - [Providers](#providers)
 - [Operations](#operations)
+- [Backup and Restore](#backup-and-restore)
 - [Security](#security)
 - [Documentation](#documentation)
 - [Roadmap](#roadmap)
@@ -66,11 +67,14 @@ PostgreSQL, or MongoDB.
 - **Container-native operations:** generated Compose files, Kubernetes manifests,
   Helm values, `sftpwarden deploy`, `plan`, `refresh`, `watch`, `--dry-run`, and
   `--json` make it practical for local development, CI, and production runbooks.
+- **First-class Kubernetes and Helm support:** generate manifests or Helm values,
+  manage namespaces, PVCs, runtime probes, and declarative YAML/CSV provider
+  syncs while keeping database providers recommended for production clusters.
 - **Context-based workflow:** use Docker-style active contexts for `dev`, `prod`,
   remote local-sync, and remote-only deployments instead of repeating long flags
   on every command.
-- **Remote deployment built in:** deploy through SSH, rsync, and Docker Compose,
-  with systemd or Docker watcher modes for syncing user-provider changes.
+- **Remote deployment built in:** deploy through SSH, rsync/scp, and Docker
+  Compose, with auto-detected watcher backends for syncing user-provider changes.
 - **Portable operations:** copy users between providers, export/import user
   snapshots, create backups, restore safely, and run project/runtime healthchecks.
 - **Operationally conservative defaults:** secrets are not baked into images,
@@ -201,7 +205,25 @@ Pick the model that matches how your team works.
 | Local | Development, demos, single-host testing | Local project folder | No |
 | Remote local-sync | Production managed from a workstation or CI runner | Local project folder synced to remote host | Yes |
 | Remote-only | Existing remote deployments managed in-place | Remote project folder | No |
-| Kubernetes | Platform/SRE teams using `kubectl` or Helm | Kubernetes manifests or Helm values | No |
+| Kubernetes | Platform/SRE teams using `kubectl` or Helm | Project config plus generated manifests or Helm values | No |
+
+Compose is the default when `--deploy` is omitted. Choose the deployment target
+explicitly during `init` when you already know where the project will run:
+
+```bash
+sftpwarden init dev --deploy compose --yes
+sftpwarden init prod --deploy kube --yes
+sftpwarden init prod --deploy helm --yes
+```
+
+If a project was initialized with the default and you want to change it before
+deploying, update the project config and preview the generated deployment:
+
+```bash
+sftpwarden config deploy.target kubernetes
+sftpwarden config kubernetes.mode helm
+sftpwarden deploy --dry-run
+```
 
 Local:
 
@@ -250,6 +272,22 @@ sftpwarden helm values --write
 sftpwarden helm template
 sftpwarden deploy --dry-run
 ```
+
+During Kubernetes or Helm init, SFTPWarden checks the namespace. If it does not
+exist, interactive init asks whether to create it; `--yes` creates it
+automatically. The default namespace is `sftpwarden`; use `--namespace <name>`
+for an existing or custom namespace, or `--no-create-namespace` to require it to
+exist already.
+
+For Kubernetes projects that use YAML or CSV providers, the local provider file
+is declarative: `sftpwarden deploy`, `sftpwarden kube apply`, and
+`sftpwarden helm upgrade` render its current contents and copy them into the
+provider PVC during the runtime rollout. `refresh` reloads users already visible
+inside the runtime; it does not copy local YAML/CSV files into a cluster by
+itself. Treat Kubernetes YAML/CSV provider files as deployment material because
+the rendered manifests or Helm values include their user entries. For production
+Kubernetes, prefer database providers when user state must change outside deploy
+cycles or when provider data should not be carried in manifests.
 
 Kubernetes and Helm projects reserve `10Gi` for SFTP user uploads by default.
 Increase that PVC before deploying with:
@@ -354,6 +392,13 @@ Updating only `comment` does not refresh the runtime because comments are metada
 | PostgreSQL | Yes | Yes | Existing platform or product databases |
 | MongoDB | Yes | Yes | Existing document databases |
 
+For production Kubernetes environments, prefer PostgreSQL, MariaDB/MySQL, or
+MongoDB. The runtime reads those providers directly, so external provider changes
+can be picked up by the runtime sync loop or an explicit `sftpwarden refresh`.
+YAML/CSV remain useful for GitOps-style Kubernetes deployments where deploy is
+the synchronization point. If you use YAML/CSV in Kubernetes, keep the provider
+file in the same review and secret-handling process as the generated manifests.
+
 SQL providers read from `sftp_users` by default. The table should include:
 
 ```text
@@ -454,11 +499,12 @@ sftpwarden provider export --format json > users.json
   `local-sync` contexts.
 - `sftpwarden refresh` tells a running runtime to reload users immediately.
 - Configuration, Docker Compose, Kubernetes, and Helm changes require
-  `sftpwarden deploy`.
+  `sftpwarden deploy`; Kubernetes YAML/CSV provider files are also copied to the
+  provider PVC by deploy/apply/upgrade.
 - `sftpwarden health` validates config, provider readability, Compose drift, and
   runtime health where available.
-- `sftpwarden backup` stores config, provider snapshot, host keys, and runtime
-  state. It excludes `data/` unless `--include-data` is explicitly used.
+- `sftpwarden backup` stores config, a provider user snapshot, host keys, and
+  runtime state. It excludes `data/` unless `--include-data` is explicitly used.
 - `sftpwarden provider copy` moves users between contexts/providers with explicit
   `--merge` or `--replace` semantics.
 
@@ -466,11 +512,69 @@ sftpwarden provider export --format json > users.json
 default. Kubernetes manifest mode uses `kubectl`, and Helm mode uses `helm`.
 Missing tools are reported with actionable messages.
 
-For production watcher installs, prefer `systemd` so SSH uses the host's normal
-identity, agent, `~/.ssh/config`, known hosts, bastions, and `ProxyJump` settings.
-Docker watcher mode is stricter and requires explicit dedicated deployment keys.
-Source checkouts use `sftpwarden-watcher:local`; Python package installations use
+Watcher installs default to `auto`. SFTPWarden detects the host scheduler and
+uses Windows Task Scheduler, macOS launchd, or Linux systemd, OpenRC, runit, or
+supervisord when available. You can force a backend with `--watcher systemd`,
+`--watcher openrc`, `--watcher runit`, `--watcher supervisord`,
+`--watcher launchd`, `--watcher windows-task`, or `--watcher docker`.
+
+Native watcher modes use the host's normal SSH identity, agent, `~/.ssh/config`,
+known hosts, bastions, and `ProxyJump` settings. Docker watcher mode is stricter
+and requires explicit dedicated deployment keys. It mounts watched project
+folders read-only and copies mounted keys inside the container with private
+permissions before syncing. Source checkouts use `sftpwarden-watcher:local`;
+Python package installations use
 `ghcr.io/kithuto/sftpwarden-watcher:<installed-version>` unless `--image` is set.
+
+## Backup and Restore
+
+Back up the active context before upgrades, provider migrations, or risky
+configuration changes:
+
+```bash
+sftpwarden backup --output sftpwarden-prod.tar.gz --yes
+```
+
+The default backup includes `sftpwarden.yaml`, generated deployment files,
+available file-backed provider data, `provider/users.json` with the current
+users read from the provider, host keys, and runtime state. That user snapshot is
+also created for SQL and MongoDB providers when the CLI can reach the configured
+database. The backup does not include uploaded SFTP user files under `data/`
+unless you ask for that explicitly:
+
+```bash
+sftpwarden backup --include-data --output sftpwarden-prod-full.tar.gz
+```
+
+Preview backup contents in automation with:
+
+```bash
+sftpwarden backup --dry-run --json
+```
+
+Restore into the active context with:
+
+```bash
+sftpwarden restore sftpwarden-prod.tar.gz --yes
+```
+
+Use `--include-data` only when the archive was created with user data and you
+intend to overwrite the current `data/` tree:
+
+```bash
+sftpwarden restore sftpwarden-prod-full.tar.gz --include-data --yes
+```
+
+Restore creates a safety backup before overwriting files. After restoring, review
+and apply the deployment so the running runtime matches the restored project:
+
+```bash
+sftpwarden deploy --dry-run
+sftpwarden deploy --yes
+```
+
+Backup archives can contain DSNs, provider snapshots, host keys, and uploaded
+user files when `--include-data` is used. Store them like infrastructure secrets.
 
 ## Security
 

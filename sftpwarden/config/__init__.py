@@ -75,7 +75,13 @@ class RemoteStorage(StrEnum):
 class WatcherMode(StrEnum):
     """Supported watcher installation modes."""
 
+    AUTO = "auto"
     SYSTEMD = "systemd"
+    OPENRC = "openrc"
+    RUNIT = "runit"
+    SUPERVISORD = "supervisord"
+    LAUNCHD = "launchd"
+    WINDOWS_TASK = "windows-task"
     DOCKER = "docker"
 
 
@@ -513,7 +519,7 @@ class WatcherConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False
-    mode: WatcherMode = WatcherMode.SYSTEMD
+    mode: WatcherMode = WatcherMode.AUTO
     image: str | None = None
 
     @model_validator(mode="after")
@@ -525,7 +531,7 @@ class WatcherConfig(BaseModel):
         WatcherConfig
             Validated watcher config.
         """
-        if self.mode == WatcherMode.SYSTEMD and self.image:
+        if self.mode != WatcherMode.DOCKER and self.image:
             raise ValueError("watcher.image is only valid when watcher.mode is docker.")
         return self
 

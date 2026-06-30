@@ -104,18 +104,40 @@ sftpwarden config kubernetes.namespace sftpwarden
 sftpwarden config kubernetes.kube_context kind-sftpwarden
 ```
 
-Kubernetes rendering is separate from applying. `sftpwarden kube render` and
-`sftpwarden helm values` do not require a live cluster. `kube apply`, `kube
-status`, `kube logs`, `kube doctor`, `helm template`, `helm lint`, `helm upgrade`,
-and `helm uninstall` require the matching external tool.
+Kubernetes rendering is separate from applying. After a project exists,
+`sftpwarden kube render` and `sftpwarden helm values` do not require a live
+cluster. `kube apply`, `kube status`, `kube logs`, `kube doctor`, `helm template`,
+`helm lint`, `helm upgrade`, and `helm uninstall` require the matching external
+tool.
 
-The default Kubernetes namespace is `sftpwarden`. Use
-`sftpwarden config kubernetes.namespace <name>` when a cluster policy requires a
-different namespace.
+The default Kubernetes namespace is `sftpwarden`. During `init`, SFTPWarden
+checks the configured namespace with `kubectl`. If the namespace is missing,
+interactive init asks whether to create it; `--yes` accepts namespace creation by
+default. Pass `--namespace <name>` when you want a different existing or new
+namespace, or use `--no-create-namespace` to abort instead of creating a missing
+namespace. Use `sftpwarden config kubernetes.namespace <name>` later when a
+cluster policy requires a different namespace.
 
-File-backed providers use a provider PVC. The Kubernetes init container creates
-an empty YAML/CSV provider file when the PVC is new, and never overwrites an
-existing provider file.
+If you are preparing manifests or values before cluster access is available, run
+`init` with `--skip-checks`, then create or select the namespace before the first
+deploy.
+
+File-backed providers use a provider PVC. YAML and CSV providers are declarative
+for Kubernetes projects: when SFTPWarden writes and applies manifests or Helm
+values from a local project, it renders the current local `users.yaml` or
+`users.csv` into the deployment and the init container copies that content into
+the provider PVC during the runtime rollout. That means the users in the cluster
+match the provider file that was deployed. Treat the rendered manifest or Helm
+values as operational deployment material because they include the YAML/CSV user
+entries that will be copied to the provider PVC.
+
+`sftpwarden refresh` reloads users that are already visible inside the running
+runtime. It does not copy local YAML/CSV files into Kubernetes by itself, and the
+watcher is only for remote `local-sync` contexts. For YAML/CSV on Kubernetes,
+use `sftpwarden deploy`, `sftpwarden kube apply`, or
+`sftpwarden helm upgrade --install` after changing the local provider file.
+SQLite provider PVCs are initialized as a database file for single-pod lab use,
+but local SQLite files are not declaratively copied into Kubernetes.
 
 The SFTP user data PVC defaults to `10Gi`. Increase it through project config
 and deploy the generated manifests or values:
@@ -158,9 +180,19 @@ SFTPWarden v1.2 supports one runtime pod per context. `kubernetes.replicas` and
 Helm `runtime.replicas` are reserved for future multi-node support and currently
 accept only `1`.
 
+The runtime entrypoint clamps the inherited open-file limit to `65536` by
+default before starting OpenSSH. This avoids container platforms that set an
+extremely high `nofile` limit causing `internal-sftp` chroot sessions to stall
+while closing file descriptors. Override `SFTPWARDEN_NOFILE_LIMIT` only when your
+platform has a specific reason to use a different value.
+
 For serious Kubernetes environments, use PostgreSQL, MariaDB/MySQL, or MongoDB.
-YAML/CSV fit GitOps-style deployments. SQLite is acceptable only for single-pod
-lab deployments and should not be used for multi-writer production workloads.
+The runtime reads those providers directly, so changes written to the database
+are available to the runtime sync loop and can also be forced with
+`sftpwarden refresh`. YAML/CSV fit GitOps-style deployments where deploy is the
+sync point, especially key-only or small reviewed environments. SQLite is
+acceptable only for single-pod lab deployments and should not be used for
+multi-writer production workloads.
 
 ## Watcher
 
@@ -170,6 +202,7 @@ YAML/CSV/SQLite user provider files to remote hosts. It does not sync
 
 ```bash
 sftpwarden watcher status
+sftpwarden watcher install --dry-run
 sftpwarden watcher install --watcher systemd --dry-run
 sftpwarden watcher install --watcher docker --yes
 sftpwarden watcher uninstall --yes
@@ -178,15 +211,54 @@ sftpwarden watcher uninstall --yes
 Watched files are derived from the context registry and provider configuration.
 Configuration, Compose, Kubernetes, and Helm changes require an explicit deploy.
 
-Systemd watcher installation uses `sudo` for service setup and enables the service
-with `systemctl enable --now`. Use this mode for production when SSH should use
-the host's default identity, agent, SSH config, bastions, or `ProxyJump`.
+Watcher installation defaults to `auto`. SFTPWarden detects the local host and
+chooses the first supported native scheduler:
 
-Docker watcher mode mounts the context registry, local project folders, and only
-explicit dedicated SSH keys read-only. It does not mount `~/.ssh` and does not
+- Windows: Task Scheduler.
+- macOS: launchd.
+- Linux: systemd, OpenRC, runit, then supervisord.
+
+Use a concrete backend when operations policy requires one:
+
+```bash
+sftpwarden watcher install --watcher systemd
+sftpwarden watcher install --watcher openrc
+sftpwarden watcher install --watcher runit
+sftpwarden watcher install --watcher supervisord
+sftpwarden watcher install --watcher launchd
+sftpwarden watcher install --watcher windows-task
+```
+
+Watcher install writes the generated backend file and activates it by default.
+Use `--dry-run` to review the scheduler commands first, or `--no-activate` when
+you only want SFTPWarden to render the file. Linux native scheduler backends
+install service files under system locations, so their activation and uninstall
+commands use `sudo` and may ask for the host user's sudo password.
+
+Native watcher modes run `sftpwarden watch` on the host and use the host's default
+SSH identity, agent, SSH config, known hosts, bastions, and `ProxyJump`. This is
+the recommended production shape when those SSH features matter. Windows native
+watcher sync uses OpenSSH `scp` for the single provider file; Linux and macOS use
+`rsync`.
+
+If no native scheduler is detected, interactive installs ask whether to use the
+Docker watcher. With `--yes`, Docker fallback is accepted automatically. In
+non-interactive use, pass `--watcher docker` explicitly when that is the intended
+mode.
+
+Docker watcher mode writes a Docker-specific context registry with Linux
+container paths, mounts local project folders read-only, and mounts only explicit
+dedicated SSH keys. The entrypoint copies those keys inside the container with
+private permissions before syncing. It does not mount `~/.ssh` and does not
 require Docker socket access. Source checkouts build `sftpwarden-watcher:local`;
 Python package installations use
 `ghcr.io/kithuto/sftpwarden-watcher:<installed-version>` unless `--image` is set.
+
+`sftpwarden watcher uninstall` deactivates the scheduler backend, removes the
+generated watcher file, and clears SFTPWarden's watcher metadata. Installing a
+different watcher backend first deactivates the old backend, then writes and
+activates the new one. Removing the last remote `local-sync` context prompts to
+uninstall the watcher; with `--yes`, it is removed automatically.
 
 ## Provider Transfer
 
@@ -220,7 +292,8 @@ sftpwarden provider copy \
 `--merge` upserts source users and keeps destination-only users. `--replace`
 makes the destination exactly match the source. Provider transfer refreshes only
 when runtime-relevant user fields change; comment-only changes do not trigger a
-refresh.
+refresh. Kubernetes YAML/CSV destinations report that a deploy is required,
+because the provider PVC is synchronized during deploy rather than by refresh.
 
 ## Backup and Restore
 
@@ -236,9 +309,11 @@ Restore a backup:
 sftpwarden restore sftpwarden-prod.tar.gz --yes
 ```
 
-Backups include project config, Compose file, provider snapshot, raw local
-provider files when available, host keys, and runtime state. SFTP user data under
-`data/` is excluded unless you pass `--include-data`.
+Backups include project config, Compose file, `provider/users.json` with the
+current users read from the provider, raw local provider files when available,
+host keys, and runtime state. SQL and MongoDB providers are captured through that
+JSON user snapshot when the CLI can reach the configured database. SFTP user data
+under `data/` is excluded unless you pass `--include-data`.
 
 Backups may contain secrets if DSNs or environment references are stored in
 `sftpwarden.yaml`. Store backup archives with the same care as infrastructure
@@ -293,6 +368,14 @@ Provider data changed but users did not update:
 sftpwarden plan
 sftpwarden refresh --dry-run
 sftpwarden refresh
+```
+
+For Kubernetes YAML/CSV providers, use deploy/apply/upgrade instead because the
+local provider file must be copied into the provider PVC:
+
+```bash
+sftpwarden deploy --dry-run
+sftpwarden deploy --yes
 ```
 
 Healthcheck fails in Docker Compose:

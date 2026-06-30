@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 import sftpwarden.cli_commands.provider as provider_commands
 import sftpwarden.services.provider_transfer as transfer_services
 from sftpwarden.cli import app
-from sftpwarden.config import ProviderType, default_project_config
+from sftpwarden.config import DeployTarget, ProviderType, default_project_config
 from sftpwarden.contexts import ContextEntry, ContextRegistry, remote_context, save_registry
 from sftpwarden.services.provider_transfer import (
     ProviderMutationResult,
@@ -89,6 +89,22 @@ def test_provider_transfer_serialization_and_service_mutations(
     )
     assert result.refresh_output == "refreshed"
     assert refresh_calls == [entry]
+
+    refresh_calls.clear()
+    kubernetes_config = default_project_config("dev")
+    kubernetes_config.deploy.target = DeployTarget.KUBERNETES
+    kubernetes_result = write_provider_users(
+        entry=entry,
+        config=kubernetes_config,
+        provider=memory_provider_factory(ProviderUsers(users=[])),
+        source_users=users,
+        mode="replace",
+        dry_run=False,
+        no_refresh=False,
+    )
+    assert kubernetes_result.deploy_required
+    assert kubernetes_result.refresh_output is None
+    assert refresh_calls == []
 
     dry_provider = memory_provider_factory(ProviderUsers(users=[]))
     dry_result = write_provider_users(
@@ -173,6 +189,22 @@ def test_provider_transfer_cli_output_and_error_modes(
     assert "synced" in result.output
     assert "refreshed" in result.output
 
+    deploy_mutation = ProviderMutationResult(
+        source_count=1,
+        destination_count=1,
+        changed=True,
+        runtime_changed=True,
+        deploy_required=True,
+    )
+    monkeypatch.setattr(
+        provider_commands,
+        "import_provider_users",
+        lambda **_kwargs: deploy_mutation,
+    )
+    deploy_result = runner.invoke(app, ["provider", "import", "--input", "users.json", "--merge"])
+    assert deploy_result.exit_code == 0
+    assert "Run `sftpwarden deploy`" in deploy_result.output
+
     monkeypatch.setattr(provider_commands, "copy_provider_users", lambda **_kwargs: mutation)
     result = runner.invoke(
         app,
@@ -190,6 +222,7 @@ def test_provider_transfer_cli_output_and_error_modes(
     )
     assert result.exit_code == 0
     assert json.loads(result.output)["dry_run"]
+    assert "deploy_required" in json.loads(result.output)
 
     no_change = ProviderMutationResult(0, 0, False, False)
     provider_commands.print_provider_mutation_result(no_change, dry_run=False, json_output=False)
