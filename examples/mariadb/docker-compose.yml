@@ -1,6 +1,0 @@
-services:
-  sftpwarden:
-    image: sftpwarden:local
-    build:
-      context: ../..
-      dockerfile: docker/runtime/Dockerfile

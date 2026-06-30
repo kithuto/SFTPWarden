@@ -3,6 +3,5 @@ project:
   name: mysql-example
 provider:
   type: mysql
-  path: /etc/sftpwarden/users.yaml
   dsn: "${SFTPWARDEN_MYSQL_DSN}"
-  query: "select username, public_keys, password_hash, uid, gid, upload_dir, comment, disabled from sftp_users"
+  table: sftp_users

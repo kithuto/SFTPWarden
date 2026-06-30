@@ -3,6 +3,5 @@ project:
   name: mongodb-example
 provider:
   type: mongodb
-  path: /etc/sftpwarden/users.yaml
   dsn: "${SFTPWARDEN_MONGODB_DSN}"
   collection: sftp_users
