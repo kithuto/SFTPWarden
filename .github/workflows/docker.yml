@@ -9,7 +9,6 @@ on:
       - "charts/**"
       - "pyproject.toml"
       - ".dockerignore"
-      - ".github/workflows/docker.yml"
 
 permissions:
   contents: read
@@ -161,28 +160,7 @@ jobs:
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          python - <<'PY'
-          import os
-          import re
-          from pathlib import Path
-
-          version = os.environ["VERSION"]
-          chart = Path("charts/sftpwarden/Chart.yaml").read_text(encoding="utf-8")
-          values = Path("charts/sftpwarden/values.yaml").read_text(encoding="utf-8")
-
-          def chart_value(name: str) -> str:
-              match = re.search(rf"^{name}:\s*\"?([^\"\n]+)\"?\s*$", chart, re.MULTILINE)
-              if not match:
-                  raise SystemExit(f"Missing {name} in Chart.yaml.")
-              return match.group(1)
-
-          if chart_value("version") != version:
-              raise SystemExit("Chart.yaml version must match pyproject.toml version.")
-          if chart_value("appVersion") != version:
-              raise SystemExit("Chart.yaml appVersion must match pyproject.toml version.")
-          if not re.search(rf'(?m)^\s+tag:\s*"?{re.escape(version)}"?\s*$', values):
-              raise SystemExit("values.yaml image tag must match pyproject.toml version.")
-          PY
+          python tools/verify_helm_release_metadata.py --version "$VERSION"
 
       - name: Log in to GHCR for Helm
         env:

@@ -9,7 +9,6 @@ on:
       - "SECURITY.md"
       - "CODE_OF_CONDUCT.md"
       - "docs/**"
-      - ".github/workflows/docs.yml"
 
 permissions:
   contents: read

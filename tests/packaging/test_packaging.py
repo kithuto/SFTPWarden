@@ -117,6 +117,48 @@ def test_release_versions_are_consistent() -> None:
     assert changelog_headings[0].startswith(f"## [{version}] - ")
 
 
+def test_helm_release_metadata_script_enforces_empty_values_tag(tmp_path: Path) -> None:
+    """Use the same Helm release metadata check in tests and publish workflows."""
+    script = Path("tools/verify_helm_release_metadata.py")
+    version = get_version()
+    success = subprocess.run(
+        [sys.executable, str(script), "--version", version],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    chart = tmp_path / "Chart.yaml"
+    values = tmp_path / "values.yaml"
+    chart.write_text(
+        f'apiVersion: v2\nname: sftpwarden\nversion: {version}\nappVersion: "{version}"\n',
+        encoding="utf-8",
+    )
+    values.write_text(
+        f'image:\n  repository: ghcr.io/kithuto/sftpwarden\n  tag: "{version}"\n',
+        encoding="utf-8",
+    )
+    failure = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--version",
+            version,
+            "--chart",
+            str(chart),
+            "--values",
+            str(values),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert success.returncode == 0, success.stderr
+    assert failure.returncode == 1
+    assert "values.yaml image.tag must stay empty" in failure.stderr
+
+
 def test_database_extras_cover_public_provider_aliases() -> None:
     """Expose database provider extras through the documented aliases."""
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))

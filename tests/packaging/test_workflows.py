@@ -42,6 +42,7 @@ def test_docs_workflow_only_builds_and_deploys_from_main() -> None:
     assert "branches: [dev]" not in text
     assert "README.md" in text
     assert "docs/**" in text
+    assert ".github/workflows/docs.yml" not in text
     assert_uses_action(text, "actions/upload-pages-artifact")
     assert_uses_action(text, "actions/deploy-pages")
 
@@ -67,6 +68,8 @@ def test_docker_workflow_publishes_from_main_only_when_version_changes() -> None
     assert "pull_request:" not in text
     assert 'tags: ["v*"]' not in text
     assert "charts/**" in text
+    assert ".github/workflows/docker.yml" not in text
+    assert "tools/**" not in text
     assert "BEFORE_SHA: ${{ github.event.before }}" in text
     assert "previous_version" in text
     assert "changed: ${{ steps.version.outputs.changed }}" in text
@@ -82,8 +85,7 @@ def test_docker_workflow_publishes_helm_chart_after_images() -> None:
     assert "publish-helm-chart:" in text
     assert "needs: [version, build]" in text
     assert_uses_action(text, "azure/setup-helm")
-    assert "Chart.yaml version must match pyproject.toml version." in text
-    assert "values.yaml image tag must match pyproject.toml version." in text
+    assert 'python tools/verify_helm_release_metadata.py --version "$VERSION"' in text
     assert "helm registry login ghcr.io" in text
     package_command = (
         'helm package charts/sftpwarden --destination dist --version "$VERSION" '
@@ -104,6 +106,7 @@ def test_release_workflow_publishes_from_main_only_when_version_changes() -> Non
     assert "changed: ${{ steps.version.outputs.changed }}" in text
     assert "if: needs.verify.outputs.changed == 'true'" in text
     assert "pyproject.toml" in text
+    assert ".github/workflows/release.yml" not in text
     assert "sftpwarden.__version__" not in text
     assert "pypa/gh-action-pypi-publish" in text
     assert "softprops/action-gh-release" in text
