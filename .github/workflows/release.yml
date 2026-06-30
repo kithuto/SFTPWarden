@@ -9,7 +9,6 @@ on:
       - "README.md"
       - "LICENSE"
       - "CHANGELOG.md"
-      - ".github/workflows/release.yml"
 
 permissions:
   contents: write
