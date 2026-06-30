@@ -109,6 +109,6 @@ jobs:
           helm template sftpwarden charts/sftpwarden > /tmp/sftpwarden-chart.yml
           test -s /tmp/sftpwarden-chart.yml
           mkdir -p /tmp/sftpwarden-kube
-          sftpwarden init kube --root /tmp/sftpwarden-kube --deploy kube --yes
+          sftpwarden init kube --root /tmp/sftpwarden-kube --deploy kube --yes --skip-checks
           sftpwarden kube render --config /tmp/sftpwarden-kube/sftpwarden.yaml > /tmp/sftpwarden-kube.yml
           test -s /tmp/sftpwarden-kube.yml

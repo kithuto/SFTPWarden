@@ -95,14 +95,21 @@ def test_default_config_and_provider_path_helpers(tmp_path: Path) -> None:
     mysql_config = default_project_config(
         "dev", ProviderType.MYSQL, dsn="mysql://user:pass@db/sftp", table="custom_users"
     )
+    runtime_config = default_project_config("dev")
+    posix_host_config = default_project_config("dev")
     relative_config = SFTPWardenConfig(
         project=ProjectConfig(name="dev"),
         provider=ProviderConfig(type=ProviderType.YAML, path="nested/users.yaml"),
     )
+    posix_host_config.provider.path = "/home/operator/external-users.yaml"
 
     assert csv_config.provider.path.endswith("users.csv")
     assert mysql_config.provider.table == "custom_users"
     assert provider_local_path(tmp_path, csv_config) == tmp_path / "users.csv"
+    assert provider_local_path(tmp_path, runtime_config) == tmp_path / "users.yaml"
+    assert provider_local_path(tmp_path, posix_host_config) == Path(
+        "/home/operator/external-users.yaml"
+    )
     assert provider_local_path(tmp_path, relative_config) == tmp_path / "nested" / "users.yaml"
     assert '"name": "dev"' in config_as_json(csv_config)
 

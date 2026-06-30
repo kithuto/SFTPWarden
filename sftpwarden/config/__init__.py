@@ -65,6 +65,12 @@ SQL_QUERY_PROVIDER_TYPES = {
 WATCHER_SYNC_PROVIDER_TYPES = FILE_PROVIDER_TYPES
 
 
+def _is_container_provider_path(path: PurePosixPath) -> bool:
+    """Return whether a POSIX provider path points inside the runtime config dir."""
+    container_root = PurePosixPath(CONTAINER_PROVIDER_DIR)
+    return path == container_root or container_root in path.parents
+
+
 class RemoteStorage(StrEnum):
     """Supported storage modes for remote contexts."""
 
@@ -754,11 +760,11 @@ def provider_local_path(project_root: str | Path, config: SFTPWardenConfig) -> P
     root = expand_path(project_root)
     raw_path = str(config.provider.path)
     container_path = PurePosixPath(raw_path)
-    if container_path.is_absolute():
+    if container_path.is_absolute() and _is_container_provider_path(container_path):
         validate_provider_path(container_path.name)
         return root / container_path.name
     provider_path = Path(raw_path)
-    if provider_path.is_absolute():
+    if provider_path.is_absolute() or container_path.is_absolute():
         validate_provider_path(provider_path.name)
         return provider_path
     validate_relative_safe_path(str(provider_path), field_name="provider.path")
