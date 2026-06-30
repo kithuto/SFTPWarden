@@ -14,6 +14,7 @@ from sftpwarden.render.kubernetes import (
     KUBERNETES_MANIFEST_FILE,
     helm_values_text,
     kubernetes_manifest_text,
+    kubernetes_resource_name,
     write_helm_values,
     write_kubernetes_manifests,
 )
@@ -180,6 +181,8 @@ def kubernetes_deployment_plan(
         ["apply", "-f", KUBERNETES_MANIFEST_FILE],
         namespace=loaded.kubernetes.namespace,
     )
+    restart_command = kubernetes_runtime_restart_command(loaded)
+    runtime_statefulset = f"StatefulSet/{kubernetes_resource_name(loaded.kubernetes.release)}"
     return DeploymentPlan(
         context=context.name,
         target=DeployTarget.KUBERNETES.value,
@@ -195,6 +198,11 @@ def kubernetes_deployment_plan(
                 description="Apply Kubernetes manifests with kubectl",
                 command=command,
                 resources=kubernetes_resource_ids(loaded),
+            ),
+            DeployAction(
+                description="Restart runtime StatefulSet to remount deployment changes",
+                command=restart_command,
+                resources=[runtime_statefulset],
             ),
         ],
     )
@@ -219,6 +227,8 @@ def helm_deployment_plan(
             HELM_VALUES_FILE,
         ],
     )
+    restart_command = kubernetes_runtime_restart_command(loaded)
+    runtime_statefulset = f"StatefulSet/{kubernetes_resource_name(loaded.kubernetes.release)}"
     return DeploymentPlan(
         context=context.name,
         target=DeployTarget.KUBERNETES.value,
@@ -228,6 +238,11 @@ def helm_deployment_plan(
         actions=[
             DeployAction(description="Render Helm values", resources=["values.yaml"]),
             DeployAction(description="Upgrade or install Helm release", command=command),
+            DeployAction(
+                description="Restart runtime StatefulSet to remount deployment changes",
+                command=restart_command,
+                resources=[runtime_statefulset],
+            ),
         ],
     )
 
@@ -246,6 +261,19 @@ def kubectl_command(
         command.extend(["-n", namespace])
     command.extend(args)
     return command
+
+
+def kubernetes_runtime_restart_command(config: SFTPWardenConfig) -> list[str]:
+    """Build the kubectl command that restarts the rendered runtime StatefulSet."""
+    return kubectl_command(
+        config,
+        [
+            "rollout",
+            "restart",
+            f"statefulset/{kubernetes_resource_name(config.kubernetes.release)}",
+        ],
+        namespace=config.kubernetes.namespace,
+    )
 
 
 def helm_command(config: SFTPWardenConfig, args: list[str]) -> list[str]:

@@ -60,10 +60,20 @@ auth:
   allow_public_key: true
   allow_password: true
   recommended: password
+
+healthcheck:
+  interval_seconds: 30
+  timeout_seconds: 10
+  retries: 3
+  start_period_seconds: 20
 ```
 
 `server.container_port` is not supported. The container SSH port is always `22`;
 `server.port` controls the host port exposed by Docker Compose.
+
+`healthcheck` controls the generated Docker Compose container healthcheck timing.
+The healthcheck command itself stays `sftpwarden runtime health` inside the
+runtime container.
 
 You can read or update any project setting with `sftpwarden config`:
 
@@ -100,6 +110,19 @@ kubernetes:
   kube_context: null
   service_type: ClusterIP
   storage_class: null
+  data_storage_size: 10Gi
+  startup_probe:
+    failure_threshold: 30
+    period_seconds: 5
+    timeout_seconds: 5
+  readiness_probe:
+    failure_threshold: 3
+    period_seconds: 10
+    timeout_seconds: 5
+  liveness_probe:
+    failure_threshold: 3
+    period_seconds: 30
+    timeout_seconds: 5
   replicas: 1
 ```
 
@@ -125,6 +148,15 @@ to `kubectl` or Helm. The generated Helm values use the Helm-style key
 `kubernetes.storage_class` can stay `null` to use the cluster default storage
 class, or be set to a named StorageClass.
 
+`kubernetes.data_storage_size` controls the SFTP user data PVC, where uploaded
+files live. It defaults to `10Gi` and is rendered as `persistence.data.size` in
+generated Helm values.
+
+`kubernetes.startup_probe`, `kubernetes.readiness_probe`, and
+`kubernetes.liveness_probe` control the generated Kubernetes runtime health
+probes. They are rendered directly into `kubernetes.yml` and as `probes.startup`,
+`probes.readiness`, and `probes.liveness` in generated Helm values.
+
 `kubernetes.replicas` is reserved for future multi-node support. SFTPWarden v1.2
 accepts only `1`; higher values fail with an explanation because multi-pod
 runtime support requires shared storage, shared host keys, provider-safe refresh,
@@ -137,6 +169,10 @@ sftpwarden config deploy.target kubernetes
 sftpwarden config kubernetes.mode helm
 sftpwarden config kubernetes.namespace sftpwarden
 sftpwarden config kubernetes.kube_context kind-sftpwarden
+sftpwarden config kubernetes.data_storage_size 50Gi
+sftpwarden config healthcheck.interval_seconds 45
+sftpwarden config kubernetes.startup_probe.failure_threshold 60
+sftpwarden config kubernetes.liveness_probe.period_seconds 45
 sftpwarden config kubernetes.replicas 1
 ```
 

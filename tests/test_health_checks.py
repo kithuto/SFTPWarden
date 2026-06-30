@@ -40,6 +40,10 @@ def test_project_health_report_and_compose_healthcheck(
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     root = tmp_path / "project"
     config = default_project_config("dev")
+    config.healthcheck.interval_seconds = 45
+    config.healthcheck.timeout_seconds = 7
+    config.healthcheck.retries = 5
+    config.healthcheck.start_period_seconds = 30
     write_config(root / "sftpwarden.yaml", config)
     (root / "users.yaml").write_text("users: []\n", encoding="utf-8")
     compose = (
@@ -73,6 +77,10 @@ def test_project_health_report_and_compose_healthcheck(
         "--config",
         "/etc/sftpwarden/sftpwarden.yaml",
     ]
+    assert rendered["services"]["sftpwarden"]["healthcheck"]["interval"] == "45s"
+    assert rendered["services"]["sftpwarden"]["healthcheck"]["timeout"] == "7s"
+    assert rendered["services"]["sftpwarden"]["healthcheck"]["retries"] == 5
+    assert rendered["services"]["sftpwarden"]["healthcheck"]["start_period"] == "30s"
 
 
 def test_compose_runtime_image_resolves_local_pip_and_custom_modes(

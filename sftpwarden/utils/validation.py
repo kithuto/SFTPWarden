@@ -14,10 +14,11 @@ def validate_relative_safe_path(value: str, *, field_name: str) -> None:
     field_name
         Field name used in error messages.
     """
+    normalized = value.replace("\\", "/")
     path = Path(value)
-    if path.is_absolute():
+    if path.is_absolute() or normalized.startswith("/"):
         raise ValueError(f"{field_name} must be relative.")
-    if not value or any(part in {"", ".", ".."} for part in path.parts):
+    if not value or any(part in {"", ".", ".."} for part in normalized.split("/")):
         raise ValueError(f"{field_name} must not contain empty, current, or parent segments.")
 
 

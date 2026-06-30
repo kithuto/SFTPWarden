@@ -1,6 +1,6 @@
 image:
   repository: ghcr.io/kithuto/sftpwarden
-  tag: "1.2.0"
+  tag: ""
   pullPolicy: IfNotPresent
 
 runtime:
@@ -47,6 +47,20 @@ persistence:
   provider:
     enabled: true
     size: 1Gi
+
+probes:
+  startup:
+    failureThreshold: 30
+    periodSeconds: 5
+    timeoutSeconds: 5
+  readiness:
+    failureThreshold: 3
+    periodSeconds: 10
+    timeoutSeconds: 5
+  liveness:
+    failureThreshold: 3
+    periodSeconds: 30
+    timeoutSeconds: 5
 
 hostKeys:
   secretName: sftpwarden-host-keys

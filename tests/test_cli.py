@@ -10,6 +10,7 @@ import sftpwarden.cli_commands.core as core_commands
 import sftpwarden.cli_commands.init as init_commands
 import sftpwarden.cli_commands.runtime as runtime_commands
 import sftpwarden.services.cli_workflows as cli_workflows
+import sftpwarden.utils.files as file_utils
 from sftpwarden.cli import app
 from sftpwarden.config import load_config, write_config
 from sftpwarden.contexts import load_registry
@@ -22,6 +23,12 @@ def test_init_named_context_creates_project_name(tmp_path: Path, monkeypatch) ->
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     root = tmp_path / "dev-project"
     runner = CliRunner()
+    chmods: list[tuple[Path, int]] = []
+    monkeypatch.setattr(
+        file_utils.os,
+        "chmod",
+        lambda path, mode: chmods.append((Path(path), mode)),
+    )
 
     result = runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
 
@@ -30,8 +37,8 @@ def test_init_named_context_creates_project_name(tmp_path: Path, monkeypatch) ->
     assert config.project.name == "dev"
     assert (root / "users.yaml").exists()
     assert (root / "docker-compose.yml").exists()
-    assert ((root / "sftpwarden.yaml").stat().st_mode & 0o777) == 0o600
-    assert ((root / "users.yaml").stat().st_mode & 0o777) == 0o600
+    assert (root / "sftpwarden.yaml", 0o600) in chmods
+    assert (root / "users.yaml", 0o600) in chmods
 
 
 def test_init_without_root_uses_current_directory_and_sets_active_context(
@@ -161,6 +168,8 @@ def test_config_command_reads_and_updates_project_config(tmp_path: Path, monkeyp
     read_result = runner.invoke(app, ["config", "server.port"])
     null_result = runner.invoke(app, ["config", "provider.dsn"])
     update_result = runner.invoke(app, ["config", "server.port", "2200"])
+    health_update = runner.invoke(app, ["config", "healthcheck.interval_seconds", "45"])
+    probe_update = runner.invoke(app, ["config", "kubernetes.liveness_probe.period_seconds", "45"])
 
     config = load_config(root / "sftpwarden.yaml")
     assert read_result.exit_code == 0, read_result.output
@@ -168,7 +177,11 @@ def test_config_command_reads_and_updates_project_config(tmp_path: Path, monkeyp
     assert null_result.exit_code == 0, null_result.output
     assert null_result.output.strip() == "null"
     assert update_result.exit_code == 0, update_result.output
+    assert health_update.exit_code == 0, health_update.output
+    assert probe_update.exit_code == 0, probe_update.output
     assert config.server.port == 2200
+    assert config.healthcheck.interval_seconds == 45
+    assert config.kubernetes.liveness_probe.period_seconds == 45
 
 
 def test_config_project_name_renames_active_context(tmp_path: Path, monkeypatch) -> None:

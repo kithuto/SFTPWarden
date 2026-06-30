@@ -40,6 +40,58 @@
           "type": "string"
         }
       }
+    },
+    "persistence": {
+      "type": "object",
+      "properties": {
+        "data": {
+          "type": "object",
+          "properties": {
+            "size": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[0-9]+(\\.[0-9]+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$",
+              "description": "Requested storage size for the SFTP user data PersistentVolumeClaim."
+            }
+          }
+        }
+      }
+    },
+    "probes": {
+      "type": "object",
+      "properties": {
+        "startup": {
+          "$ref": "#/definitions/probe"
+        },
+        "readiness": {
+          "$ref": "#/definitions/probe"
+        },
+        "liveness": {
+          "$ref": "#/definitions/probe"
+        }
+      }
+    }
+  },
+  "definitions": {
+    "probe": {
+      "type": "object",
+      "properties": {
+        "failureThreshold": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of consecutive failed runtime health checks before the probe fails."
+        },
+        "periodSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Seconds between runtime health checks."
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Seconds before one runtime health check attempt times out."
+        }
+      }
     }
   },
   "allOf": [

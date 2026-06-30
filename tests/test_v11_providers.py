@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import sftpwarden.utils.files as file_utils
 from sftpwarden.config import ProviderConfig, ProviderType, default_project_config
 from sftpwarden.providers import MariaDBProvider, MongoDBProvider, SQLiteProvider, provider_class
 from sftpwarden.providers.mongodb_provider import mongodb_database_name
@@ -23,10 +24,17 @@ def test_provider_registry_exposes_v11_providers() -> None:
 
 def test_sqlite_provider_round_trip_and_mutations(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     user_factory: Callable[..., SFTPUser],
 ) -> None:
     """SQLite stores and mutates users in a local private database file."""
     db_path = tmp_path / "users.sqlite"
+    chmods: list[tuple[Path, int]] = []
+    monkeypatch.setattr(
+        file_utils.os,
+        "chmod",
+        lambda chmod_path, mode: chmods.append((Path(chmod_path), mode)),
+    )
     provider = SQLiteProvider(
         config=ProviderConfig(type=ProviderType.SQLITE, path="/etc/sftpwarden/users.sqlite"),
         path=db_path,
@@ -44,7 +52,7 @@ def test_sqlite_provider_round_trip_and_mutations(
     assert provider.table_exists()
     assert [loaded_user.username for loaded_user in loaded.users] == ["alice"]
     assert loaded.users[0].comment == "updated"
-    assert (db_path.stat().st_mode & 0o777) == 0o600
+    assert chmods and all(call == (db_path, 0o600) for call in chmods)
     with pytest.raises(ProviderError, match="Unknown user"):
         provider.remove_user("missing")
 

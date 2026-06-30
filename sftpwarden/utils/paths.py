@@ -19,7 +19,13 @@ def expand_path(value: str | Path) -> Path:
     Path
         Expanded path.
     """
-    return Path(os.path.expandvars(str(value))).expanduser()
+    raw = os.path.expandvars(str(value))
+    if raw == "~" or raw.startswith(("~/", "~\\")):
+        home = os.environ.get("HOME")
+        if home:
+            suffix = raw[2:] if len(raw) > 1 else ""
+            return Path(home) / suffix
+    return Path(raw).expanduser()
 
 
 def app_home() -> Path:

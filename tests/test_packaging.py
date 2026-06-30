@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import tomllib
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlparse
+
+import yaml
 
 import sftpwarden
 import sftpwarden.utils._version as version_module
@@ -83,12 +86,35 @@ def test_package_metadata_is_public_release_ready() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     project = pyproject["project"]
 
-    assert project["version"] == "1.2.0"
+    assert project["version"] == get_version()
+    assert re.fullmatch(r"\d+\.\d+\.\d+", project["version"])
     assert "Development Status :: 5 - Production/Stable" in project["classifiers"]
     assert project["license"] == "MIT"
     assert project["license-files"] == ["LICENSE"]
     assert project["readme"] == "README.md"
     assert project["urls"]["Documentation"] == "https://kithuto.github.io/sftpwarden/"
+
+
+def test_release_versions_are_consistent() -> None:
+    """Keep package, chart, generated image tags, examples, and changelog aligned."""
+    version = get_version()
+    chart = yaml.safe_load(Path("charts/sftpwarden/Chart.yaml").read_text(encoding="utf-8"))
+    values = yaml.safe_load(Path("charts/sftpwarden/values.yaml").read_text(encoding="utf-8"))
+    example_values = yaml.safe_load(
+        Path("examples/kubernetes/values-postgresql.yaml").read_text(encoding="utf-8")
+    )
+    changelog_headings = [
+        line
+        for line in Path("CHANGELOG.md").read_text(encoding="utf-8").splitlines()
+        if line.startswith("## [") and line != "## [Unreleased]"
+    ]
+
+    assert sftpwarden.__version__ == version
+    assert chart["version"] == version
+    assert chart["appVersion"] == version
+    assert values["image"]["tag"] == ""
+    assert example_values["image"]["tag"] == ""
+    assert changelog_headings[0].startswith(f"## [{version}] - ")
 
 
 def test_database_extras_cover_public_provider_aliases() -> None:

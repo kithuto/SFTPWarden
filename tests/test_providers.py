@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+import sftpwarden.utils.files as file_utils
 from sftpwarden.config import ProviderConfig, ProviderType
 from sftpwarden.providers import (
     CSVProvider,
@@ -63,9 +66,15 @@ def test_provider_registry_returns_registered_classes() -> None:
     assert provider_class(ProviderType.POSTGRESQL) is PostgreSQLProvider
 
 
-def test_csv_provider_round_trip(tmp_path) -> None:
+def test_csv_provider_round_trip(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "users.csv"
     provider = CSVProvider(config=ProviderConfig(type=ProviderType.CSV), path=path)
+    chmods: list[tuple[Path, int]] = []
+    monkeypatch.setattr(
+        file_utils.os,
+        "chmod",
+        lambda chmod_path, mode: chmods.append((Path(chmod_path), mode)),
+    )
     users = ProviderUsers(
         users=[
             SFTPUser(
@@ -87,7 +96,7 @@ def test_csv_provider_round_trip(tmp_path) -> None:
     assert loaded.users[0].gid == 10002
     assert loaded.users[0].upload_dir == "dropbox"
     assert loaded.users[0].comment == "Finance dropbox"
-    assert (path.stat().st_mode & 0o777) == 0o600
+    assert chmods == [(path, 0o600)]
 
 
 def test_file_provider_reports_missing_file(tmp_path) -> None:

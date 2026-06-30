@@ -26,7 +26,7 @@ from sftpwarden.system.commands import command_text, run_checked
 from sftpwarden.utils._version import get_version
 from sftpwarden.utils.collections import unique_items
 from sftpwarden.utils.errors import ContextError
-from sftpwarden.utils.paths import app_home, contexts_path
+from sftpwarden.utils.paths import app_home, contexts_path, expand_path
 
 DEFAULT_LOCAL_WATCHER_IMAGE = "sftpwarden-watcher:local"
 GHCR_WATCHER_IMAGE_REPOSITORY = "ghcr.io/kithuto/sftpwarden-watcher"
@@ -570,7 +570,7 @@ def docker_watcher_ssh_volumes() -> list[str]:
                 suggestion="Use an existing dedicated deployment key with --ssh-key.",
             )
         volumes.append(f"{key_path}:{key_path}:ro")
-    known_hosts = Path.home() / ".ssh" / "known_hosts"
+    known_hosts = expand_path("~/.ssh/known_hosts")
     if volumes and known_hosts.exists():
         volumes.append(f"{known_hosts}:/root/.ssh/known_hosts:ro")
     return volumes

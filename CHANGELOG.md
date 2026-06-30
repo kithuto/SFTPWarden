@@ -43,6 +43,20 @@ feedback. It summarizes the main features planned for future releases.
 - Add basic RBAC.
 - Add local login and OIDC support.
 
+## [1.2.1] - 2026-06-29
+
+### Added
+
+- Configurable Kubernetes user data PVC sizing for manifests and generated Helm
+  values.
+- Configurable Docker Compose healthcheck timings and Kubernetes/Helm runtime
+  probe timings.
+
+### Fixed
+
+- Improved Windows and cross-platform CLI/test compatibility outside the Linux
+  runtime container.
+
 ## [1.2.0] - 2026-06-27
 
 ### Added

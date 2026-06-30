@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -297,7 +298,9 @@ def test_missing_user_actions_can_be_disabled() -> None:
     assert actions == []
 
 
-def test_render_sshd_config_and_state_path_use_configured_locations(tmp_path: Path) -> None:
+def test_render_sshd_config_and_state_path_use_configured_locations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config = SFTPWardenConfig.model_validate(
         {
             "version": 1,
@@ -311,6 +314,13 @@ def test_render_sshd_config_and_state_path_use_configured_locations(tmp_path: Pa
         }
     )
     target = tmp_path / "sshd_config"
+    chmods: list[tuple[Path, int]] = []
+    monkeypatch.setattr(
+        runtime_module.os,
+        "chmod",
+        lambda path, mode: chmods.append((Path(path), mode)),
+        raising=False,
+    )
 
     render_sshd_config(config, target)
 
@@ -318,7 +328,7 @@ def test_render_sshd_config_and_state_path_use_configured_locations(tmp_path: Pa
     assert "PasswordAuthentication no" in text
     assert "PubkeyAuthentication yes" in text
     assert "Match Group sftpusers" in text
-    assert (target.stat().st_mode & 0o777) == 0o644
+    assert chmods == [(target, 0o644)]
     assert state_path(config) == tmp_path / "state" / "state.json"
 
 
@@ -418,12 +428,20 @@ def test_ensure_directories_sets_chroot_and_upload_permissions(
         }
     )
     resolved = ResolvedUser(spec=user("alice", uid=12000, gid=12000), uid=12000, gid=12000)
-    chowns: list[tuple[str, int, int]] = []
+    chowns: list[tuple[Path, int, int]] = []
+    chmods: list[tuple[Path, int]] = []
 
     monkeypatch.setattr(
         runtime_module.os,
         "chown",
-        lambda path, uid, gid: chowns.append((str(path), uid, gid)),
+        lambda path, uid, gid: chowns.append((Path(path), uid, gid)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        runtime_module.os,
+        "chmod",
+        lambda path, mode: chmods.append((Path(path), mode)),
+        raising=False,
     )
 
     ensure_directories(config, resolved)
@@ -432,9 +450,15 @@ def test_ensure_directories_sets_chroot_and_upload_permissions(
     upload = root / "upload"
     assert root.is_dir()
     assert upload.is_dir()
-    assert (root.stat().st_mode & 0o777) == 0o755
-    assert (upload.stat().st_mode & 0o777) == 0o750
-    assert chowns == [(str(root), 0, 0), (str(upload), 12000, 12000)]
+    assert chowns == [(root, 0, 0), (upload, 12000, 12000)]
+    assert chmods == [(root, 0o755), (upload, 0o750)]
+
+
+def test_chown_path_reports_missing_linux_ownership(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delattr(runtime_module.os, "chown", raising=False)
+
+    with pytest.raises(RuntimeError, match="Linux file ownership"):
+        runtime_module.chown_path("/data/alice", 0, 0)
 
 
 def test_disable_missing_marks_existing_system_users_disabled(
@@ -476,14 +500,21 @@ def test_disable_missing_returns_when_feature_is_disabled(
 
 
 def test_user_exists_handles_present_and_missing_users(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(runtime_module.pwd, "getpwnam", lambda username: object())
+    monkeypatch.setattr(runtime_module, "pwd", SimpleNamespace(getpwnam=lambda username: object()))
     assert runtime_module.user_exists("alice")
 
     def missing_user(_username: str) -> object:
         raise KeyError
 
-    monkeypatch.setattr(runtime_module.pwd, "getpwnam", missing_user)
+    monkeypatch.setattr(runtime_module, "pwd", SimpleNamespace(getpwnam=missing_user))
     assert not runtime_module.user_exists("alice")
+
+
+def test_user_exists_reports_missing_posix_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runtime_module, "pwd", None)
+
+    with pytest.raises(RuntimeError, match="POSIX user lookup"):
+        runtime_module.user_exists("alice")
 
 
 def test_write_authorized_keys_uses_restricted_key_options(
@@ -503,6 +534,14 @@ def test_write_authorized_keys_uses_restricted_key_options(
         runtime_module.os,
         "chown",
         lambda path, uid, gid: chowns.append((str(path), uid, gid)),
+        raising=False,
+    )
+    chmods: list[tuple[Path, int]] = []
+    monkeypatch.setattr(
+        runtime_module.os,
+        "chmod",
+        lambda path, mode: chmods.append((Path(path), mode)),
+        raising=False,
     )
     resolved = ResolvedUser(
         spec=user(
@@ -517,7 +556,7 @@ def test_write_authorized_keys_uses_restricted_key_options(
 
     target = auth_dir / "alice"
     assert target.read_text(encoding="utf-8").startswith("restrict ssh-ed25519")
-    assert (target.stat().st_mode & 0o777) == 0o644
+    assert chmods == [(target, 0o644)]
     assert chowns == [(str(target), 0, 0)]
 
 

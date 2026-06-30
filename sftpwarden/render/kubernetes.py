@@ -13,10 +13,12 @@ from sftpwarden.config import (
     EXTERNAL_DSN_PROVIDER_TYPES,
     FILE_PROVIDER_TYPES,
     KubernetesConfig,
+    KubernetesProbeConfig,
     SFTPWardenConfig,
 )
 from sftpwarden.providers import empty_provider_text
 from sftpwarden.render.compose import runtime_image_reference
+from sftpwarden.utils._version import get_version
 from sftpwarden.utils.constants import CONTAINER_CONFIG_PATH
 from sftpwarden.utils.paths import expand_path
 
@@ -98,7 +100,11 @@ def helm_values_model(config: SFTPWardenConfig) -> dict[str, Any]:
     repository, tag = split_image(runtime_image_reference(config).image)
     runtime_config = kubernetes_runtime_config(config)
     values: dict[str, Any] = {
-        "image": {"repository": repository, "tag": tag or "1.2.0", "pullPolicy": "IfNotPresent"},
+        "image": {
+            "repository": repository,
+            "tag": tag or get_version(),
+            "pullPolicy": "IfNotPresent",
+        },
         "runtime": {"replicas": config.kubernetes.replicas},
         "sftpwardenConfig": kubernetes_config_text(config),
         "service": {"type": config.kubernetes.service_type.value, "port": config.server.port},
@@ -118,9 +124,14 @@ def helm_values_model(config: SFTPWardenConfig) -> dict[str, Any]:
             "bootstrapContent": _provider_bootstrap_text(config),
         },
         "persistence": {
-            "data": {"enabled": True, "size": "10Gi"},
+            "data": {"enabled": True, "size": config.kubernetes.data_storage_size},
             "state": {"enabled": True, "size": "1Gi"},
             "provider": {"enabled": config.provider.type in FILE_PROVIDER_TYPES, "size": "1Gi"},
+        },
+        "probes": {
+            "startup": _helm_probe_values(config.kubernetes.startup_probe),
+            "readiness": _helm_probe_values(config.kubernetes.readiness_probe),
+            "liveness": _helm_probe_values(config.kubernetes.liveness_probe),
         },
         "hostKeys": {
             "secretName": host_keys_secret_name(config.kubernetes.release),
@@ -156,6 +167,14 @@ def split_image(image: str) -> tuple[str, str | None]:
         return image, None
     repository, tag = image.rsplit(":", 1)
     return repository, tag
+
+
+def _helm_probe_values(probe: KubernetesProbeConfig) -> dict[str, int]:
+    return {
+        "periodSeconds": probe.period_seconds,
+        "timeoutSeconds": probe.timeout_seconds,
+        "failureThreshold": probe.failure_threshold,
+    }
 
 
 def host_keys_secret_name(release: str) -> str:
@@ -209,7 +228,13 @@ def _persistent_volume_claims(
     config: SFTPWardenConfig, name: str, namespace: str, labels: dict[str, str]
 ) -> list[dict[str, Any]]:
     claims = [
-        _pvc(f"{name}-data", namespace, labels, config.kubernetes.storage_class, "10Gi"),
+        _pvc(
+            f"{name}-data",
+            namespace,
+            labels,
+            config.kubernetes.storage_class,
+            config.kubernetes.data_storage_size,
+        ),
         _pvc(f"{name}-state", namespace, labels, config.kubernetes.storage_class, "1Gi"),
     ]
     if config.provider.type in FILE_PROVIDER_TYPES:
@@ -252,6 +277,15 @@ def _service(
             "selector": labels,
             "ports": [{"name": "sftp", "port": 22, "targetPort": "sftp"}],
         },
+    }
+
+
+def _kubernetes_probe(health_probe: dict[str, Any], probe: KubernetesProbeConfig) -> dict[str, Any]:
+    return {
+        **health_probe,
+        "failureThreshold": probe.failure_threshold,
+        "periodSeconds": probe.period_seconds,
+        "timeoutSeconds": probe.timeout_seconds,
     }
 
 
@@ -354,22 +388,15 @@ def _stateful_set(
                             "ports": [{"name": "sftp", "containerPort": 22}],
                             "env": env,
                             "volumeMounts": volume_mounts,
-                            "startupProbe": {
-                                **health_probe,
-                                "failureThreshold": 30,
-                                "periodSeconds": 5,
-                                "timeoutSeconds": 5,
-                            },
-                            "readinessProbe": {
-                                **health_probe,
-                                "periodSeconds": 10,
-                                "timeoutSeconds": 5,
-                            },
-                            "livenessProbe": {
-                                **health_probe,
-                                "periodSeconds": 30,
-                                "timeoutSeconds": 5,
-                            },
+                            "startupProbe": _kubernetes_probe(
+                                health_probe, config.kubernetes.startup_probe
+                            ),
+                            "readinessProbe": _kubernetes_probe(
+                                health_probe, config.kubernetes.readiness_probe
+                            ),
+                            "livenessProbe": _kubernetes_probe(
+                                health_probe, config.kubernetes.liveness_probe
+                            ),
                             "securityContext": {
                                 "privileged": False,
                                 "allowPrivilegeEscalation": False,

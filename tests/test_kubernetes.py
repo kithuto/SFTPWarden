@@ -60,6 +60,7 @@ from sftpwarden.services.deploy import (
     translate_command_failure,
 )
 from sftpwarden.system.commands import CommandResult
+from sftpwarden.utils._version import get_version
 from sftpwarden.utils.errors import ContextError, RuntimeError, SFTPWardenError
 
 
@@ -76,23 +77,36 @@ def test_kubernetes_manifest_rendering_includes_core_resources() -> None:
     config.kubernetes.mode = KubernetesMode.MANIFESTS
     config.kubernetes.namespace = "sftp"
     config.kubernetes.release = "sftp-prod"
+    config.kubernetes.data_storage_size = "50Gi"
+    config.kubernetes.startup_probe.timeout_seconds = 7
+    config.kubernetes.startup_probe.failure_threshold = 12
+    config.kubernetes.readiness_probe.period_seconds = 15
+    config.kubernetes.liveness_probe.period_seconds = 45
 
     manifests = kubernetes_manifests(config)
     rendered = kubernetes_manifest_text(config)
     kinds = {manifest["kind"] for manifest in manifests}
     statefulset = next(manifest for manifest in manifests if manifest["kind"] == "StatefulSet")
+    data_pvc = next(
+        manifest
+        for manifest in manifests
+        if manifest["kind"] == "PersistentVolumeClaim"
+        and manifest["metadata"]["name"] == "sftp-prod-data"
+    )
 
     assert {"ConfigMap", "Secret", "PersistentVolumeClaim", "Service", "StatefulSet"} <= kinds
     assert statefulset["spec"]["replicas"] == 1
-    probe_command = statefulset["spec"]["template"]["spec"]["containers"][0]["startupProbe"][
-        "exec"
-    ]["command"]
+    assert data_pvc["spec"]["resources"]["requests"]["storage"] == "50Gi"
+    container = statefulset["spec"]["template"]["spec"]["containers"][0]
+    probe_command = container["startupProbe"]["exec"]["command"]
     init_container = statefulset["spec"]["template"]["spec"]["initContainers"][0]
     assert probe_command[:3] == ["sftpwarden", "runtime", "health"]
-    assert (
-        statefulset["spec"]["template"]["spec"]["containers"][0]["startupProbe"]["timeoutSeconds"]
-        == 5
-    )
+    assert container["startupProbe"]["timeoutSeconds"] == 7
+    assert container["startupProbe"]["failureThreshold"] == 12
+    assert container["readinessProbe"]["periodSeconds"] == 15
+    assert container["readinessProbe"]["failureThreshold"] == 3
+    assert container["livenessProbe"]["periodSeconds"] == 45
+    assert container["livenessProbe"]["failureThreshold"] == 3
     assert "provider-data/users.yaml" in init_container["command"][-1]
     assert any(mount["name"] == "provider" for mount in init_container["volumeMounts"])
     assert "sftp-prod-data" in rendered
@@ -122,11 +136,16 @@ def test_helm_values_model_reserves_runtime_replicas() -> None:
     """Generate Helm values with reserved single-replica runtime settings."""
     config = default_project_config("prod")
     config.kubernetes.release = "prod"
+    config.kubernetes.data_storage_size = "50Gi"
+    config.kubernetes.liveness_probe.period_seconds = 45
 
     values = helm_values_model(config)
 
     assert values["runtime"]["replicas"] == 1
     assert values["kubernetes"]["release"] == "prod"
+    assert values["persistence"]["data"]["size"] == "50Gi"
+    assert values["probes"]["startup"]["failureThreshold"] == 30
+    assert values["probes"]["liveness"]["periodSeconds"] == 45
     assert values["provider"]["bootstrapContent"] == "users: []\n"
     assert "sftpwardenConfig" in values
 
@@ -219,10 +238,14 @@ def test_config_command_updates_kubernetes_values_and_rejects_replicas(
     runner.invoke(app, ["init", "dev", "--root", str(root), "--deploy", "kube", "--yes"])
 
     update = runner.invoke(app, ["config", "kubernetes.namespace", "sftp"])
+    resize = runner.invoke(app, ["config", "kubernetes.data_storage_size", "50Gi"])
     invalid = runner.invoke(app, ["config", "kubernetes.replicas", "2"])
+    loaded = load_config(root / "sftpwarden.yaml")
 
     assert update.exit_code == 0, update.output
-    assert load_config(root / "sftpwarden.yaml").kubernetes.namespace == "sftp"
+    assert resize.exit_code == 0, resize.output
+    assert loaded.kubernetes.namespace == "sftp"
+    assert loaded.kubernetes.data_storage_size == "50Gi"
     assert invalid.exit_code == 1
     assert "Kubernetes replicas > 1 are not supported yet" in invalid.output
     assert "Set kubernetes.replicas to 1" in invalid.output
@@ -248,9 +271,17 @@ def test_deploy_dry_run_dispatches_to_kubernetes_and_helm(
     assert helm_result.exit_code == 0, helm_result.output
     assert kube_data["plan"]["target"] == "kubernetes"
     assert kube_data["plan"]["mode"] == "manifests"
-    assert "kubectl" in kube_data["plan"]["actions"][-1]["command"][0]
+    kube_plan_commands = [
+        action["command"] for action in kube_data["plan"]["actions"] if action["command"]
+    ]
+    helm_plan_commands = [
+        action["command"] for action in helm_data["plan"]["actions"] if action["command"]
+    ]
+    assert any(command[0] == "kubectl" and "apply" in command for command in kube_plan_commands)
+    assert any(command[0] == "kubectl" and "rollout" in command for command in kube_plan_commands)
     assert helm_data["plan"]["mode"] == "helm"
-    assert "helm" in helm_data["plan"]["actions"][-1]["command"][0]
+    assert any(command[0] == "helm" and "upgrade" in command for command in helm_plan_commands)
+    assert any(command[0] == "kubectl" and "rollout" in command for command in helm_plan_commands)
 
 
 def test_kubectl_and_helm_command_generation() -> None:
@@ -308,7 +339,11 @@ def test_helm_chart_reference_uses_local_chart_or_versioned_oci(
         ),
         config,
     )
-    command = plan.actions[-1].command or []
+    command = next(
+        action.command or []
+        for action in plan.actions
+        if action.command and action.command[0] == "helm"
+    )
     assert command[command.index(HELM_OCI_CHART_REF) + 1 :][:2] == ["--version", "9.9.9"]
 
 
@@ -317,7 +352,8 @@ def test_helm_lint_pulls_oci_chart_when_local_chart_is_missing(
 ) -> None:
     """Pull the published OCI chart before linting installed-package charts."""
     config = default_project_config("prod")
-    chart = HelmChartReference(reference=HELM_OCI_CHART_REF, version="1.2.0")
+    version = get_version()
+    chart = HelmChartReference(reference=HELM_OCI_CHART_REF, version=version)
     calls: list[list[str]] = []
 
     def fake_run(command: list[str], **_kwargs) -> CommandResult:
@@ -329,9 +365,9 @@ def test_helm_lint_pulls_oci_chart_when_local_chart_is_missing(
     result = helm_commands._run_helm_lint(config, chart, cwd=str(tmp_path))
 
     assert result.returncode == 0
-    assert calls[0][:5] == ["helm", "pull", HELM_OCI_CHART_REF, "--version", "1.2.0"]
+    assert calls[0][:5] == ["helm", "pull", HELM_OCI_CHART_REF, "--version", version]
     assert calls[1][0:2] == ["helm", "lint"]
-    assert calls[1][2].endswith("/sftpwarden")
+    assert Path(calls[1][2]).name == "sftpwarden"
 
 
 def test_helm_lint_requires_version_for_oci_chart(tmp_path: Path) -> None:
@@ -348,7 +384,8 @@ def test_helm_lint_returns_oci_pull_failure(
 ) -> None:
     """Return the Helm pull failure without attempting to lint a missing chart."""
     config = default_project_config("prod")
-    chart = HelmChartReference(reference=HELM_OCI_CHART_REF, version="1.2.0")
+    version = get_version()
+    chart = HelmChartReference(reference=HELM_OCI_CHART_REF, version=version)
     calls: list[list[str]] = []
 
     def failing_run(command: list[str], **_kwargs) -> CommandResult:
@@ -367,7 +404,7 @@ def test_helm_lint_returns_oci_pull_failure(
         "pull",
         HELM_OCI_CHART_REF,
         "--version",
-        "1.2.0",
+        version,
         "--untar",
         "--untardir",
     ]
@@ -411,12 +448,18 @@ def test_cli_reports_missing_kubectl_and_helm(
 
 
 def test_chart_schema_limits_runtime_replicas() -> None:
-    """Constrain Helm runtime replicas to one through the chart schema."""
+    """Constrain Helm runtime replicas, PVC sizing, and probe timings."""
     schema = json.loads(Path("charts/sftpwarden/values.schema.json").read_text(encoding="utf-8"))
 
     replicas = schema["properties"]["runtime"]["properties"]["replicas"]
+    data_size = schema["properties"]["persistence"]["properties"]["data"]["properties"]["size"]
+    probe = schema["definitions"]["probe"]["properties"]
     assert replicas["maximum"] == 1
     assert replicas["minimum"] == 1
+    assert data_size["description"].startswith("Requested storage size")
+    assert probe["failureThreshold"]["minimum"] == 1
+    assert probe["periodSeconds"]["minimum"] == 1
+    assert probe["timeoutSeconds"]["minimum"] == 1
 
 
 def test_example_values_are_valid_yaml() -> None:
@@ -426,6 +469,8 @@ def test_example_values_are_valid_yaml() -> None:
     assert values["runtime"]["replicas"] == 1
     assert values["provider"]["type"] == "postgresql"
     assert values["provider"]["createDsnSecret"] is False
+    assert values["probes"]["startup"]["failureThreshold"] == 30
+    assert values["probes"]["liveness"]["periodSeconds"] == 30
     assert "type: postgresql" in values["sftpwardenConfig"]
     assert 'dsn: "${SFTPWARDEN_PROVIDER_DSN}"' in values["sftpwardenConfig"]
 
@@ -449,6 +494,7 @@ def test_render_helpers_cover_image_without_tag_and_storage_class() -> None:
     config = default_project_config("prod")
     config.deploy.target = DeployTarget.KUBERNETES
     config.kubernetes.storage_class = "fast"
+    config.kubernetes.data_storage_size = "50Gi"
 
     assert split_image("registry.example.com/sftpwarden") == (
         "registry.example.com/sftpwarden",
@@ -458,8 +504,10 @@ def test_render_helpers_cover_image_without_tag_and_storage_class() -> None:
         manifest
         for manifest in kubernetes_manifests(config)
         if manifest["kind"] == "PersistentVolumeClaim"
+        and manifest["metadata"]["name"] == "prod-data"
     )
     assert pvc["spec"]["storageClassName"] == "fast"
+    assert pvc["spec"]["resources"]["requests"]["storage"] == "50Gi"
 
 
 def test_deploy_services_cover_apply_paths_and_diff_detection(
@@ -488,7 +536,18 @@ def test_deploy_services_cover_apply_paths_and_diff_detection(
     assert "Deploy target: kubernetes" in text
     assert applied == "Applied Kubernetes manifests for prod."
     assert config.kubernetes.namespace == "sftpwarden"
-    assert calls[-1][0][:3] == ["kubectl", "-n", "sftpwarden"]
+    assert any(
+        command[:3] == ["kubectl", "-n", "sftpwarden"] and "apply" in command
+        for command, _cwd in calls
+    )
+    assert calls[-1][0] == [
+        "kubectl",
+        "-n",
+        "sftpwarden",
+        "rollout",
+        "restart",
+        "statefulset/prod",
+    ]
     assert kubernetes_rendered_manifest_diff_reason(config, root) is None
     (root / "kubernetes.yml").write_text("stale", encoding="utf-8")
     assert kubernetes_rendered_manifest_diff_reason(config, root) == (
@@ -502,7 +561,9 @@ def test_deploy_services_cover_apply_paths_and_diff_detection(
     calls.clear()
     helm_applied = apply_deployment_plan(entry, runner=runner)
     assert helm_applied == "Deployed prod with Helm."
-    assert calls[-1][0][0] == "helm"
+    assert any(command[0] == "helm" and "upgrade" in command for command, _cwd in calls)
+    assert calls[-1][0][0] == "kubectl"
+    assert "rollout" in calls[-1][0]
     assert helm_values_diff_reason(config, root) is None
     (root / "values.yaml").write_text("stale", encoding="utf-8")
     assert helm_values_diff_reason(config, root) == "values.yaml differs from current configuration"
@@ -732,6 +793,7 @@ def test_helm_cli_commands_cover_success_paths(
         assert result.exit_code == 0, result.output
     assert (root / "values.yaml").exists()
     assert any(call[0][0] == "helm" and "template" in call[0] for call in calls)
+    assert any(call[0][0] == "kubectl" and "rollout" in call[0] for call in calls)
     assert any(call[0][0] == "helm" and "uninstall" in call[0] for call in calls)
     assert "--install" not in results[5].output
 

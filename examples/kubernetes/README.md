@@ -19,6 +19,22 @@ sftpwarden deploy --dry-run
 sftpwarden helm upgrade --install
 ```
 
+The SFTP upload PVC defaults to `10Gi`. For generated SFTPWarden projects,
+increase it before deploying with:
+
+```bash
+sftpwarden config kubernetes.data_storage_size 50Gi
+sftpwarden deploy --dry-run
+```
+
+Probe timings are configurable in generated projects before deploy:
+
+```bash
+sftpwarden config kubernetes.startup_probe.failure_threshold 60
+sftpwarden config kubernetes.liveness_probe.period_seconds 45
+sftpwarden deploy --dry-run
+```
+
 The PostgreSQL values example expects a Secret named `sftpwarden-provider`:
 
 ```bash

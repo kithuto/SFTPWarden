@@ -118,23 +118,39 @@ def helm_upgrade(
     try:
         entry, loaded = _load_context_config(context, None)
         plan = helm_deployment_plan(entry, loaded)
-        command = plan.actions[-1].command or []
-        if not install:
-            command = [part for part in command if part != "--install"]
+        commands = _helm_upgrade_commands(plan, install=install)
+        if not commands:
+            raise SFTPWardenError("Helm upgrade command was not generated.")
         if dry_run:
             if json_output:
-                print_json({"dry_run": True, "plan": plan.as_dict(), "command": command})
+                print_json(
+                    {
+                        "dry_run": True,
+                        "plan": plan.as_dict(),
+                        "command": commands[0],
+                        "commands": commands,
+                    }
+                )
                 return
-            console.print(" ".join(command))
+            console.print("\n".join(" ".join(command) for command in commands))
             return
         if entry.root:
             write_helm_values(loaded, entry.root)
+        results = []
         with terminal_status("Applying Helm release"):
-            result = run(command, cwd=entry.root)
-        if result.returncode != 0:
-            raise translate_command_failure(result)
+            for command in commands:
+                result = run(command, cwd=entry.root)
+                if result.returncode != 0:
+                    raise translate_command_failure(result)
+                results.append(result.stdout.strip())
         if json_output:
-            print_json({"dry_run": False, "plan": plan.as_dict(), "result": result.stdout.strip()})
+            print_json(
+                {
+                    "dry_run": False,
+                    "plan": plan.as_dict(),
+                    "result": "\n".join(output for output in results if output),
+                }
+            )
             return
         print_success("Helm release applied.")
     except SFTPWardenError as exc:
@@ -175,6 +191,19 @@ def _load_context_config(context: str | None, config: str | None):
             suggestion="Use a local or remote local-sync context, or pass --config.",
         )
     return entry, load_config(entry.config)
+
+
+def _helm_upgrade_commands(plan, *, install: bool) -> list[list[str]]:
+    commands = [list(action.command) for action in plan.actions if action.command]
+    if install:
+        return commands
+    filtered = []
+    for command in commands:
+        if command and command[0] == "helm" and "upgrade" in command:
+            filtered.append([part for part in command if part != "--install"])
+            continue
+        filtered.append(command)
+    return filtered
 
 
 def _run_helm_lint(

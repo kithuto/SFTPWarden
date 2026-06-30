@@ -117,6 +117,38 @@ File-backed providers use a provider PVC. The Kubernetes init container creates
 an empty YAML/CSV provider file when the PVC is new, and never overwrites an
 existing provider file.
 
+The SFTP user data PVC defaults to `10Gi`. Increase it through project config
+and deploy the generated manifests or values:
+
+```bash
+sftpwarden config kubernetes.data_storage_size 50Gi
+sftpwarden plan
+sftpwarden deploy --dry-run
+sftpwarden deploy --yes
+```
+
+`sftpwarden plan` reports `kubernetes.yml` or `values.yaml` drift after the
+change. `sftpwarden deploy` updates the PVC request and restarts the runtime
+StatefulSet so the mounted volume is remounted. Your StorageClass must allow
+volume expansion; Kubernetes does not shrink existing PVCs.
+
+Runtime healthcheck timing is also configurable. Compose projects use
+`healthcheck.*`; Kubernetes manifest and generated Helm projects use the
+`kubernetes.*_probe.*` settings:
+
+```bash
+sftpwarden config healthcheck.interval_seconds 45
+sftpwarden config healthcheck.timeout_seconds 15
+sftpwarden config kubernetes.startup_probe.failure_threshold 60
+sftpwarden config kubernetes.liveness_probe.period_seconds 45
+sftpwarden deploy --dry-run
+sftpwarden deploy --yes
+```
+
+`sftpwarden plan` reports Compose, manifest, or values drift after these changes.
+`sftpwarden deploy` regenerates the deployment files and restarts or recreates
+the runtime as needed for the active deployment target.
+
 Database providers should receive DSNs through a Kubernetes Secret. In Helm,
 set `provider.dsnSecretName` and reference the same environment variable from
 `sftpwardenConfig`; prefer creating the Secret outside the values file for
@@ -271,4 +303,6 @@ docker compose exec sftpwarden sftpwarden runtime health --json
 ```
 
 The generated Docker Compose file uses `sftpwarden runtime health` as its
-container healthcheck.
+container healthcheck. Tune its timing with `healthcheck.interval_seconds`,
+`healthcheck.timeout_seconds`, `healthcheck.retries`, and
+`healthcheck.start_period_seconds`, then run `sftpwarden deploy`.

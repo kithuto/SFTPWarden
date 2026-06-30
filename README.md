@@ -251,6 +251,19 @@ sftpwarden helm template
 sftpwarden deploy --dry-run
 ```
 
+Kubernetes and Helm projects reserve `10Gi` for SFTP user uploads by default.
+Increase that PVC before deploying with:
+
+```bash
+sftpwarden config kubernetes.data_storage_size 50Gi
+sftpwarden deploy --dry-run
+sftpwarden deploy --yes
+```
+
+Compose healthcheck timing and Kubernetes probe timing are configurable too:
+use `healthcheck.*` for Compose and `kubernetes.*_probe.*` for generated
+manifests or Helm values.
+
 Source checkouts use the local chart. Python package installations use the
 published GHCR OCI chart with the same version as the installed CLI.
 

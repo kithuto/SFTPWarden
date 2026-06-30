@@ -280,7 +280,9 @@ sftpwarden deploy --dry-run --json
 
 For Kubernetes manifests, deploy renders `kubernetes.yml` and applies it with
 `kubectl`. For Helm mode, deploy writes `values.yaml` and runs
-`helm upgrade --install`.
+`helm upgrade --install`. Kubernetes and Helm deploys then restart the runtime
+StatefulSet so PVC/config/probe changes such as `kubernetes.data_storage_size`
+or `kubernetes.liveness_probe.period_seconds` are remounted or reloaded.
 
 Deploy a critical context without a prompt:
 
@@ -351,6 +353,7 @@ sftpwarden kube delete --yes
 
 `render` does not require a cluster. `apply`, `status`, `logs`, `doctor`, and
 `delete` use `kubectl`. Delete requires `--yes` unless you confirm interactively.
+`apply` also restarts the runtime StatefulSet after the manifests are applied.
 
 ### `sftpwarden helm`
 
@@ -365,7 +368,8 @@ sftpwarden helm uninstall --yes
 ```
 
 `values` does not require Helm. Template, lint, upgrade, and uninstall require
-`helm`. Uninstall requires `--yes` unless you confirm interactively.
+`helm`. `upgrade` restarts the runtime StatefulSet after Helm succeeds.
+Uninstall requires `--yes` unless you confirm interactively.
 
 Source checkouts use the local `charts/sftpwarden` chart. Python package
 installations use the published OCI chart
@@ -773,6 +777,8 @@ sftpwarden config project.name dev2
 sftpwarden config server.port 2200
 sftpwarden config sync.interval_seconds 30
 sftpwarden config auth.allow_password false
+sftpwarden config healthcheck.interval_seconds 45
+sftpwarden config kubernetes.liveness_probe.period_seconds 45
 ```
 
 Values are parsed with YAML scalar rules, so numbers become numbers, `true` and
@@ -876,4 +882,9 @@ sftpwarden runtime health --json
 ```
 
 The generated Docker Compose file uses this command as the container healthcheck.
-It exits `0` when critical runtime checks pass and `1` when they fail.
+Tune the Compose timings with `healthcheck.interval_seconds`,
+`healthcheck.timeout_seconds`, `healthcheck.retries`, and
+`healthcheck.start_period_seconds`. Kubernetes manifests and generated Helm values
+use `kubernetes.startup_probe.*`, `kubernetes.readiness_probe.*`, and
+`kubernetes.liveness_probe.*`. The command exits `0` when critical runtime checks
+pass and `1` when they fail.

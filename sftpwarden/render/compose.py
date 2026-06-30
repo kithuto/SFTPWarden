@@ -79,6 +79,7 @@ def compose_model(
     if config.provider.type in FILE_PROVIDER_TYPES:
         provider_path = provider_local_path(root, config)
         volumes.insert(1, f"./{provider_path.name}:{config.provider.path}:ro")
+    healthcheck = config.healthcheck
     service = {
         "container_name": config.docker.container_name,
         "image": image.image,
@@ -99,10 +100,10 @@ def compose_model(
                 "--config",
                 CONTAINER_CONFIG_PATH,
             ],
-            "interval": "30s",
-            "timeout": "10s",
-            "retries": 3,
-            "start_period": "20s",
+            "interval": f"{healthcheck.interval_seconds}s",
+            "timeout": f"{healthcheck.timeout_seconds}s",
+            "retries": healthcheck.retries,
+            "start_period": f"{healthcheck.start_period_seconds}s",
         },
     }
     if image.build:

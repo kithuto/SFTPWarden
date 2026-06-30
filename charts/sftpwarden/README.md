@@ -14,6 +14,29 @@ data. For YAML/CSV providers, the init container creates an empty provider file
 in the provider PVC when it does not already exist. Existing provider data is not
 overwritten.
 
+The SFTP user data PVC defaults to `10Gi`. Increase it with
+`persistence.data.size`:
+
+```bash
+helm upgrade --install sftpwarden charts/sftpwarden \
+  --namespace sftpwarden \
+  --set persistence.data.size=50Gi
+kubectl rollout restart statefulset/sftpwarden --namespace sftpwarden
+```
+
+Your StorageClass must allow volume expansion, and Kubernetes does not shrink
+existing PVCs.
+
+Runtime probes run `sftpwarden runtime health` inside the container. Tune them
+with `probes.startup`, `probes.readiness`, and `probes.liveness`:
+
+```bash
+helm upgrade --install sftpwarden charts/sftpwarden \
+  --namespace sftpwarden \
+  --set probes.startup.failureThreshold=60 \
+  --set probes.liveness.periodSeconds=45
+```
+
 Use PostgreSQL, MariaDB/MySQL, or MongoDB providers for serious Kubernetes
 deployments. YAML/CSV fit GitOps-style workflows, and SQLite is only appropriate
 for single-pod lab deployments.

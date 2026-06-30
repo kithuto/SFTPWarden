@@ -6,7 +6,15 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from sftpwarden.config import SFTPWardenConfig, WatcherConfig, WatcherMode, load_config
+from sftpwarden.config import (
+    HealthcheckConfig,
+    KubernetesConfig,
+    KubernetesProbeConfig,
+    SFTPWardenConfig,
+    WatcherConfig,
+    WatcherMode,
+    load_config,
+)
 from sftpwarden.runtime import render_sshd_config_text
 from sftpwarden.utils.errors import ConfigError
 
@@ -68,6 +76,58 @@ def test_docker_watcher_can_default_image() -> None:
     watcher = WatcherConfig(enabled=True, mode=WatcherMode.DOCKER)
 
     assert watcher.image is None
+
+
+def test_kubernetes_data_storage_size_accepts_common_quantities() -> None:
+    config = KubernetesConfig(data_storage_size=" 50Gi ")
+
+    assert config.data_storage_size == "50Gi"
+
+
+@pytest.mark.parametrize("value", ["", "0", "-1Gi", "tenGi", "10GB"])
+def test_kubernetes_data_storage_size_rejects_invalid_quantities(value: str) -> None:
+    with pytest.raises(ValidationError, match="data_storage_size"):
+        KubernetesConfig(data_storage_size=value)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("interval_seconds", 0),
+        ("timeout_seconds", 0),
+        ("retries", 0),
+        ("start_period_seconds", -1),
+    ],
+)
+def test_healthcheck_timings_reject_invalid_values(field: str, value: int) -> None:
+    with pytest.raises(ValidationError, match=field):
+        HealthcheckConfig(**{field: value})
+
+
+@pytest.mark.parametrize("field", ["period_seconds", "timeout_seconds", "failure_threshold"])
+def test_kubernetes_probe_timings_reject_invalid_values(field: str) -> None:
+    with pytest.raises(ValidationError, match=field):
+        KubernetesProbeConfig(**{field: 0})
+
+
+def test_kubernetes_partial_probe_config_keeps_probe_specific_defaults() -> None:
+    config = SFTPWardenConfig.model_validate(
+        {
+            "version": 1,
+            "project": {"name": "dev"},
+            "kubernetes": {
+                "startup_probe": {"failure_threshold": 60},
+                "liveness_probe": {"timeout_seconds": 8},
+            },
+        }
+    )
+
+    assert config.kubernetes.startup_probe.period_seconds == 5
+    assert config.kubernetes.startup_probe.timeout_seconds == 5
+    assert config.kubernetes.startup_probe.failure_threshold == 60
+    assert config.kubernetes.liveness_probe.period_seconds == 30
+    assert config.kubernetes.liveness_probe.timeout_seconds == 8
+    assert config.kubernetes.liveness_probe.failure_threshold == 3
 
 
 def test_password_authentication_is_enabled_by_default() -> None:

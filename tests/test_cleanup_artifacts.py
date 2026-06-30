@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import tools.clean_artifacts as cleanup_tool
@@ -53,3 +54,54 @@ def test_cleanup_dry_run_and_tox_safety(tmp_path: Path, monkeypatch) -> None:
 
     assert active_tox.skipped == [".tox cleanup skipped from inside tox"]
     assert (root / ".tox").exists()
+
+
+def test_cleanup_retries_read_only_directory_removal(tmp_path: Path, monkeypatch) -> None:
+    """Clear read-only artifact bits when shutil reports a permission error."""
+    root = tmp_path / "repo"
+    temp = tmp_path / "tmp"
+    cache = root / "sftpwarden" / "__pycache__"
+    cache.mkdir(parents=True)
+    monkeypatch.setattr(cleanup_tool, "ROOT", root)
+    monkeypatch.setattr(cleanup_tool, "TMP_ROOT", temp)
+    monkeypatch.setattr(cleanup_tool, "REMOVE_RETRY_DELAY_SECONDS", 0)
+
+    def rmtree_with_permission_callback(path: Path, *, onexc=None, onerror=None) -> None:
+        error = PermissionError("access denied")
+        path_name = os.fspath(path)
+        if onexc is not None:
+            onexc(os.rmdir, path_name, error)
+            return
+        assert onerror is not None
+        onerror(os.rmdir, path_name, (PermissionError, error, None))
+
+    monkeypatch.setattr(cleanup_tool.shutil, "rmtree", rmtree_with_permission_callback)
+
+    result = cleanup_tool.cleanup({"python"}, docker=False, dry_run=False)
+
+    assert result.skipped == []
+    assert result.removed == [str(cache)]
+    assert not cache.exists()
+
+
+def test_cleanup_skips_artifact_that_stays_locked(tmp_path: Path, monkeypatch) -> None:
+    """Continue cleanup when an artifact remains locked after retries."""
+    root = tmp_path / "repo"
+    temp = tmp_path / "tmp"
+    cache = root / "sftpwarden" / "__pycache__"
+    cache.mkdir(parents=True)
+    monkeypatch.setattr(cleanup_tool, "ROOT", root)
+    monkeypatch.setattr(cleanup_tool, "TMP_ROOT", temp)
+    monkeypatch.setattr(cleanup_tool, "REMOVE_RETRY_DELAY_SECONDS", 0)
+
+    def locked_rmtree(path: Path, **kwargs: object) -> None:
+        raise PermissionError("still locked")
+
+    monkeypatch.setattr(cleanup_tool.shutil, "rmtree", locked_rmtree)
+
+    result = cleanup_tool.cleanup({"python"}, docker=False, dry_run=False)
+
+    assert result.removed == []
+    assert len(result.skipped) == 1
+    assert "could not remove" in result.skipped[0]
+    assert cache.exists()
