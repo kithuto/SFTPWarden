@@ -117,6 +117,20 @@ def test_release_versions_are_consistent() -> None:
     assert changelog_headings[0].startswith(f"## [{version}] - ")
 
 
+def test_examples_are_cli_first_guides() -> None:
+    """Keep public examples guided by SFTPWarden commands instead of static Compose files."""
+    example_dirs = sorted(path for path in Path("examples").iterdir() if path.is_dir())
+    static_compose_files = sorted(Path("examples").glob("*/docker-compose.yml"))
+    missing_readmes = [path for path in example_dirs if not (path / "README.md").is_file()]
+
+    assert example_dirs
+    assert static_compose_files == []
+    assert missing_readmes == []
+    for readme in [Path("examples/README.md"), *(path / "README.md" for path in example_dirs)]:
+        text = readme.read_text(encoding="utf-8")
+        assert "sftpwarden " in text
+
+
 def test_helm_release_metadata_script_enforces_empty_values_tag(tmp_path: Path) -> None:
     """Use the same Helm release metadata check in tests and publish workflows."""
     script = Path("tools/verify_helm_release_metadata.py")

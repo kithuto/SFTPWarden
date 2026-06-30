@@ -1,6 +1,10 @@
 # Kubernetes Example
 
-Create a Kubernetes-targeted project:
+This example shows SFTPWarden Kubernetes manifest and Helm workflows. Use it when
+you want cluster-managed storage, probes, namespace handling, and a
+database-backed provider for production-style deployments.
+
+Create a Kubernetes manifest project:
 
 ```bash
 sftpwarden init prod --deploy kube --yes
@@ -9,7 +13,7 @@ sftpwarden deploy --dry-run
 sftpwarden kube apply
 ```
 
-For Helm:
+Create a Helm project:
 
 ```bash
 sftpwarden init prod --deploy helm --yes
