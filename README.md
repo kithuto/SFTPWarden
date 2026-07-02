@@ -627,18 +627,18 @@ sphinx-build -b html docs docs/_build/html
 See the [changelog](https://github.com/kithuto/sftpwarden/blob/main/CHANGELOG.md)
 for released versions and the longer future roadmap.
 
-### v1.3 - Audit and Observability
+### v1.3 - Named Public Keys, Provider Schema v2, and CLI UX
+
+- Add named SSH keys with fingerprints, expiry, disabled state, and rotation
+  workflows.
+- Add provider schema v2 with safe migrations.
+- Move user/key commands toward resource-first CLI grammar.
+
+### v1.4 - Audit and Transfer Visibility
 
 - Add audit logging for CLI and runtime operations.
-- Add commands for listing, tailing, and exporting audit events.
-- Add richer runtime status and operational visibility.
-
-### v1.4 - Advanced Security and Supply Chain
-
-- Add SSH host key pinning.
-- Add assisted key rotation workflows.
-- Add support for secret files.
-- Add production-oriented security checks.
+- Add commands for listing, tailing, filtering, and exporting audit events.
+- Add transfer visibility and richer runtime status.
 
 ## Contributing
 

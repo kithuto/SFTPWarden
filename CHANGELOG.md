@@ -9,39 +9,67 @@ The format follows Keep a Changelog, and this project uses Semantic Versioning.
 ### Planned
 
 This roadmap is directional and may change as SFTPWarden receives operational
-feedback. It summarizes the main features planned for future releases.
+feedback. It summarizes the main public roadmap through v2.0.
 
-#### v1.3 - Audit and Observability
+#### v1.3 - Named Public Keys, Provider Schema v2, and CLI UX
 
-- Add audit logging.
-- Add audit commands for listing, tailing, and exporting events.
-- Add richer runtime status output.
-- Add runtime metrics.
+- Add named SSH keys with fingerprints, comments, expiry, disabled state, and
+  rotation workflows.
+- Add provider schema v2 with safe migrations for file, SQL, SQLite, and MongoDB
+  providers.
+- Move user/key commands toward resource-first CLI grammar.
+- Keep legacy anonymous `public_keys` provider data readable during upgrades.
 
-#### v1.4 - Advanced Security and Supply Chain
+#### v1.4 - Audit and Transfer Visibility
 
-- Add SSH host key pinning.
-- Add assisted key rotation workflows.
-- Add support for secret files.
-- Add production-oriented security checks.
-- Add Docker image signing and release provenance.
+- Add local JSONL audit logging for user, key, provider, deploy, refresh,
+  backup, restore, watcher, and runtime sync operations.
+- Add audit commands for listing, tailing, filtering, and exporting events.
+- Add transfer visibility commands for recent SFTP file activity.
+- Add richer runtime status with provider, user, key, sync, backup, and error
+  context.
 
-#### v1.5 - Integrations and Policies
+#### v1.5 - Security Hardening
 
-- Add a read-only HTTP JSON provider.
-- Add user templates.
-- Add user groups or tags.
-- Add provider schema migrations.
-- Add provider diagnostics.
+- Add production-oriented `sftpwarden security check` profiles and strict mode.
+- Add secret-file support for DSNs and sensitive provider settings.
+- Add host key fingerprint and assisted host key rotation workflows.
+- Strengthen release security with signing, provenance, SBOM, audit, and scan
+  gates where practical.
 
-#### v2.0 - Enterprise Web Console
+#### v1.6 - Access Policies
 
-- Add an optional web console.
-- Add a management API with OpenAPI documentation.
-- Add dashboard, user, provider, context, deploy, runtime, backup, audit, health,
-  security, and diagnostics views.
-- Add basic RBAC.
-- Add local login and OIDC support.
+- Add first-class user access modes such as read/write, upload-only,
+  download-only, and disabled.
+- Document and test runtime enforcement boundaries for OpenSSH/internal-sftp.
+- Prepare the model for per-path policies, file pattern filters, and atomic
+  upload workflows.
+
+#### v1.7 - User Lifecycle and Quotas
+
+- Add user expiry, review dates, tags, owners, disabled reasons, and lifecycle
+  metadata.
+- Add inactive-user review and bulk disable dry-run workflows.
+- Add quota status, quota recalculation, and quota configuration groundwork.
+
+#### v1.8 - Retention and Cleanup
+
+- Add retention policies for deleting, archiving, or moving old SFTP data.
+- Require safe dry-run output before destructive cleanup.
+- Audit retention actions and include readable archive manifests.
+
+#### v1.9 - Diagnostics and Supportability
+
+- Add redacted diagnostics bundles for support and incident response.
+- Expand `doctor` with deeper local, remote, Compose, Kubernetes, and Helm checks.
+- Centralize secret redaction for audit, diagnostics, and security output.
+
+#### v2.0 - API and OpenAPI
+
+- Add an optional management API under `/api/v1`.
+- Publish OpenAPI documentation and stable API schemas.
+- Reuse existing CLI service-layer behavior for API operations.
+- Add token-based authentication and audit API mutations.
 
 ## [1.2.1] - 2026-06-29
 
