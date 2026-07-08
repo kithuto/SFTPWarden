@@ -287,6 +287,7 @@ class ProviderConfig(BaseModel):
     query: str | None = None
     table: str = "sftp_users"
     collection: str = "sftp_users"
+    user_schema: int = Field(default=1, ge=1)
 
     @field_validator("path")
     @classmethod
@@ -673,6 +674,7 @@ def default_project_config(
     query: str | None = None,
     table: str = "sftp_users",
     collection: str = "sftp_users",
+    user_schema: int = 2,
     deploy_target: DeployTarget = DeployTarget.COMPOSE,
     kubernetes_mode: KubernetesMode = KubernetesMode.MANIFESTS,
 ) -> SFTPWardenConfig:
@@ -692,6 +694,8 @@ def default_project_config(
         SQL users table name.
     collection
         MongoDB users collection name.
+    user_schema
+        Provider user schema version to initialize.
     deploy_target
         Initial deployment target for generated projects.
     kubernetes_mode
@@ -720,6 +724,7 @@ def default_project_config(
                 dsn=dsn,
                 query=query,
                 table=table,
+                user_schema=user_schema,
             ),
         )
     if provider == ProviderType.MONGODB:
@@ -732,13 +737,14 @@ def default_project_config(
                 path=provider_path,
                 dsn=dsn,
                 collection=collection,
+                user_schema=user_schema,
             ),
         )
     return SFTPWardenConfig(
         project=ProjectConfig(name=name),
         deploy=deploy_config,
         kubernetes=kubernetes_config,
-        provider=ProviderConfig(type=provider, path=provider_path),
+        provider=ProviderConfig(type=provider, path=provider_path, user_schema=user_schema),
     )
 
 

@@ -2,7 +2,7 @@
 
 This example shows the MySQL provider. SFTPWarden reads and mutates users
 through the configured `sftp_users` table. The included `schema.sql` mirrors the
-default table expected by SFTPWarden.
+schema v2 tables expected by SFTPWarden, including `sftp_user_keys`.
 
 Create a new MySQL-backed project:
 
@@ -15,7 +15,7 @@ sftpwarden init mysql-example \
   --dsn '${SFTPWARDEN_MYSQL_DSN}' \
   --create-table \
   --yes
-sftpwarden user add alice --no-refresh
+sftpwarden user create alice --no-refresh
 sftpwarden deploy --dry-run
 sftpwarden deploy
 ```

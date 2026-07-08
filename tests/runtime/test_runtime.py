@@ -30,7 +30,7 @@ from sftpwarden.runtime.core import (
     validate_runtime_users,
     write_authorized_keys,
 )
-from sftpwarden.users import users_fingerprint
+from sftpwarden.users import SFTPUserKey, users_fingerprint
 from sftpwarden.utils.errors import RuntimeError
 
 TEST_SHADOW_HASH = "$6$rounds=500000$saltstring$hashvalue"
@@ -560,6 +560,49 @@ def test_write_authorized_keys_uses_restricted_key_options(
     assert target.read_text(encoding="utf-8").startswith("restrict ssh-ed25519")
     assert chmods == [(target, 0o644)]
     assert chowns == [(str(target), 0, 0)]
+
+
+def test_write_authorized_keys_uses_only_active_named_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_path = runtime_module.Path
+    auth_dir = tmp_path / "authorized_keys"
+
+    def fake_path(value: str) -> Path:
+        if value == "/etc/sftpwarden/authorized_keys":
+            return auth_dir
+        return real_path(value)
+
+    monkeypatch.setattr(runtime_module, "Path", fake_path)
+    monkeypatch.setattr(runtime_module, "chown_path", lambda *_args: None)
+    monkeypatch.setattr(runtime_module.os, "chmod", lambda *_args: None, raising=False)
+    resolved = ResolvedUser(
+        spec=SFTPUser(
+            username="alice",
+            keys=[
+                SFTPUserKey(
+                    name="prod-ci",
+                    public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests",
+                ),
+                SFTPUserKey(name="old-ci", public_key="ssh-ed25519 AAAA", disabled=True),
+                SFTPUserKey(
+                    name="expired-ci",
+                    public_key="ssh-ed25519 AAAB",
+                    expires_at="2000-01-01",
+                ),
+            ],
+        ),
+        uid=12000,
+        gid=12000,
+    )
+
+    write_authorized_keys(SFTPWardenConfig(project=ProjectConfig(name="dev")), resolved)
+
+    text = (auth_dir / "alice").read_text(encoding="utf-8")
+    assert "sftpwarden:key=prod-ci" in text
+    assert "fingerprint=SHA256:" in text
+    assert "old-ci" not in text
+    assert "expired-ci" not in text
 
 
 def test_load_runtime_inputs_loads_config_users_and_state(

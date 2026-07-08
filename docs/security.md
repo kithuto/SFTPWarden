@@ -7,7 +7,7 @@ your hosts and networks. Treat it as infrastructure.
 
 - Users and secrets are not baked into Docker images.
 - Plaintext passwords are rejected in provider data.
-- `sftpwarden user add --password` hashes before writing provider data.
+- `sftpwarden user create --password` hashes before writing provider data.
 - Host keys, user data, and UID/GID state are persisted outside the image.
 - Removed users are disabled; their data is not deleted.
 - User data is deleted only with the explicit `sftpwarden user remove --delete-files`
@@ -71,6 +71,18 @@ auth:
   recommended: public_key
 ```
 
+In schema v2, disabled or expired keys are not written to `authorized_keys`.
+The runtime writes only active keys and keeps OpenSSH `restrict` options on every
+line. Schema v1 `public_keys` remains supported for simple key-only deployments.
+
+Named key controls in schema v2 are operator-facing and auditable:
+
+- key names must match `^[a-z][a-z0-9._-]{0,63}$`;
+- fingerprints are derived from the public key and validated when present;
+- duplicate key names and duplicate fingerprints are rejected per user;
+- `sftpwarden user key rotate`, `expire`, `disable`, and `enable` update one key
+  without copying raw keys between commands.
+
 ## Remote Watcher SSH
 
 Use a native watcher mode for production when the host's SSH configuration,
@@ -95,7 +107,7 @@ Kubernetes deployments keep the same boundaries:
   UID/GID state.
 - Host keys are loaded from a Secret from the start; do not commit real host keys
   to Git.
-- SFTPWarden v1.2 runs one OpenSSH runtime pod per context. `replicas > 1` is
+- SFTPWarden v1.3 runs one OpenSSH runtime pod per context. `replicas > 1` is
   reserved and rejected until shared storage, shared host keys, provider-safe
   refresh, and UID/GID consistency are implemented.
 - Use PostgreSQL, MariaDB/MySQL, or MongoDB providers for production Kubernetes

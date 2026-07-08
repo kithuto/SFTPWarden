@@ -16,6 +16,7 @@ except ModuleNotFoundError:
 from sftpwarden.config import SFTPWardenConfig, load_config
 from sftpwarden.providers import ProviderUsers, SFTPUser, load_users, users_fingerprint
 from sftpwarden.system.commands import run, run_checked
+from sftpwarden.users.models import SFTPUserKey
 from sftpwarden.utils.console import console
 from sftpwarden.utils.constants import CONTAINER_CONFIG_PATH
 from sftpwarden.utils.errors import RuntimeError
@@ -341,7 +342,7 @@ def validate_runtime_users(config: SFTPWardenConfig, users: ProviderUsers) -> No
         if user.disabled:
             continue
         has_password = has_usable_password_hash(user)
-        has_key = bool(user.public_keys)
+        has_key = bool(user.active_public_keys())
         if has_password and config.auth.allow_password:
             continue
         if has_key and config.auth.allow_public_key:
@@ -855,10 +856,22 @@ def write_authorized_keys(config: SFTPWardenConfig, resolved: ResolvedUser) -> N
     auth_dir.mkdir(parents=True, exist_ok=True)
     path = auth_dir / resolved.spec.username
     key_options = "restrict"
-    lines = [f"{key_options} {key}" for key in resolved.spec.public_keys]
+    lines = [authorized_key_line(key_options, key) for key in resolved.spec.active_keys()]
     path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
     chown_path(path, 0, 0)
     os.chmod(path, 0o644)
+
+
+def authorized_key_line(key_options: str, key: SFTPUserKey) -> str:
+    """Render one restricted authorized_keys line."""
+    key_type, key_blob = key.public_key.split()[:2]
+    comment_parts = []
+    if key.name:
+        comment_parts.append(f"sftpwarden:key={key.name}")
+    if key.fingerprint:
+        comment_parts.append(f"fingerprint={key.fingerprint}")
+    comment = " ".join(comment_parts)
+    return f"{key_options} {key_type} {key_blob} {comment}".rstrip()
 
 
 def disable_missing(config: SFTPWardenConfig, desired: ProviderUsers, state: RuntimeState) -> None:

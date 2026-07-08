@@ -4,6 +4,7 @@ project:
 provider:
   type: yaml
   path: /etc/sftpwarden/users.yaml
+  user_schema: 2
 healthcheck:
   interval_seconds: 30
   timeout_seconds: 10

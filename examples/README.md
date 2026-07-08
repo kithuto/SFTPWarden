@@ -20,7 +20,8 @@ commands, not maintained by hand in provider example folders.
 | `watcher-docker/` | Docker watcher installation | Hosts without a native watcher scheduler |
 
 Start new projects with `sftpwarden init`; it writes the right project config and
-generated deployment files for the selected provider:
+generated deployment files for the selected provider. New projects use user
+schema v2 unless you pass `--user-schema 1` explicitly:
 
 ```bash
 mkdir -p ~/sftpwarden-yaml

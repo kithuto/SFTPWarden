@@ -102,7 +102,7 @@ def test_kubernetes_replicas_are_reserved_for_future_multi_node() -> None:
 
 
 def test_kubernetes_manifest_rendering_includes_core_resources() -> None:
-    """Render the Kubernetes resources required by the v1.2 operating model."""
+    """Render the Kubernetes resources required by the v1.3 operating model."""
     config = default_project_config("prod")
     config.deploy.target = DeployTarget.KUBERNETES
     config.kubernetes.mode = KubernetesMode.MANIFESTS
@@ -234,7 +234,7 @@ def test_helm_values_model_reserves_runtime_replicas() -> None:
     assert values["persistence"]["data"]["size"] == "50Gi"
     assert values["probes"]["startup"]["failureThreshold"] == 30
     assert values["probes"]["liveness"]["periodSeconds"] == 45
-    assert values["provider"]["bootstrapContent"] == "users: []\n"
+    assert values["provider"]["bootstrapContent"] == "schema_version: 2\nusers: []\n"
     assert "sftpwardenConfig" in values
 
     external = default_project_config(
@@ -747,7 +747,7 @@ def test_chart_schema_limits_runtime_replicas() -> None:
 
 
 def test_example_values_are_valid_yaml() -> None:
-    """Keep Kubernetes example values valid and aligned with v1.2 defaults."""
+    """Keep Kubernetes example values valid and aligned with v1.3 defaults."""
     values = yaml.safe_load(Path("examples/kubernetes/values-postgresql.yaml").read_text())
 
     assert values["runtime"]["replicas"] == 1

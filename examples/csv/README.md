@@ -9,7 +9,7 @@ Create a new CSV-backed project:
 mkdir -p ~/sftpwarden-csv
 cd ~/sftpwarden-csv
 sftpwarden init csv-example --provider csv --yes
-sftpwarden user add alice --no-refresh
+sftpwarden user create alice --no-refresh
 sftpwarden deploy --dry-run
 sftpwarden deploy
 ```
@@ -23,8 +23,10 @@ sftpwarden context add csv-example --root . --yes
 sftpwarden deploy --context csv-example --dry-run
 ```
 
-The provider file is `users.csv`. Keep the header row intact and replace the
-example password hash before using it outside local testing.
+The provider file is `users.csv`. This checked-out example pins
+`provider.user_schema: 2`; the `keys` column stores named keys as JSON. Keep the
+header row intact and replace the example password hash and public key before
+using it outside local testing.
 
 Use `sftpwarden refresh --context csv-example` after changing users and
 `sftpwarden deploy --context csv-example` after changing `sftpwarden.yaml`.

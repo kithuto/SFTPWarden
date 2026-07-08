@@ -13,6 +13,7 @@
 self
 operations
 configuration
+named-keys
 ```
 
 ```{toctree}

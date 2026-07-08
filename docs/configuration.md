@@ -44,6 +44,7 @@ project:
 provider:
   type: yaml
   path: /etc/sftpwarden/users.yaml
+  user_schema: 2
 ```
 
 Common runtime settings:
@@ -173,7 +174,7 @@ generated Helm values.
 probes. They are rendered directly into `kubernetes.yml` and as `probes.startup`,
 `probes.readiness`, and `probes.liveness` in generated Helm values.
 
-`kubernetes.replicas` is reserved for future multi-node support. SFTPWarden v1.2
+`kubernetes.replicas` is reserved for future multi-node support. SFTPWarden v1.3
 accepts only `1`; higher values fail with an explanation because multi-pod
 runtime support requires shared storage, shared host keys, provider-safe refresh,
 and UID/GID consistency.
@@ -200,6 +201,7 @@ YAML:
 provider:
   type: yaml
   path: /etc/sftpwarden/users.yaml
+  user_schema: 2
 ```
 
 CSV:
@@ -208,6 +210,7 @@ CSV:
 provider:
   type: csv
   path: /etc/sftpwarden/users.csv
+  user_schema: 2
 ```
 
 In Kubernetes manifest and Helm projects, YAML and CSV providers are treated as
@@ -224,6 +227,7 @@ SQLite:
 provider:
   type: sqlite
   path: /etc/sftpwarden/users.sqlite
+  user_schema: 2
 ```
 
 SQLite uses Python's built-in `sqlite3` module and does not need an optional
@@ -239,6 +243,7 @@ provider:
   type: mysql
   dsn: "${SFTPWARDEN_MYSQL_DSN}"
   table: sftp_users
+  user_schema: 2
 ```
 
 MariaDB:
@@ -248,6 +253,7 @@ provider:
   type: mariadb
   dsn: "${SFTPWARDEN_MARIADB_DSN}"
   table: sftp_users
+  user_schema: 2
 ```
 
 PostgreSQL:
@@ -257,6 +263,7 @@ provider:
   type: postgresql
   dsn: "${SFTPWARDEN_POSTGRES_DSN}"
   table: sftp_users
+  user_schema: 2
 ```
 
 MongoDB:
@@ -266,6 +273,7 @@ provider:
   type: mongodb
   dsn: "${SFTPWARDEN_MONGODB_DSN}"
   collection: sftp_users
+  user_schema: 2
 ```
 
 The DSN follows the standard database URL convention:
@@ -290,12 +298,55 @@ runtime pod to reload the current database-backed users, and the runtime sync
 loop also reconciles periodically. Database providers also avoid carrying
 YAML/CSV user entries in generated manifests or Helm values.
 
-Relational SQL providers read and mutate the configured users table. The default
-columns are:
+Relational SQL providers read and mutate the configured users table. Schema v1
+uses these columns:
 
 ```text
 username, public_keys, password_hash, uid, gid, upload_dir, comment, disabled
 ```
+
+User provider schemas:
+
+- `user_schema: 1` stores simple anonymous public keys in `public_keys`.
+- `user_schema: 2` stores named keys with metadata. YAML uses a top-level
+  `schema_version: 2` and `keys` entries. CSV uses a `keys` JSON column. SQLite,
+  MySQL, MariaDB, and PostgreSQL use the configured users table plus
+  `sftp_user_keys` for key rows. MongoDB embeds `keys` in each user document.
+
+New `sftpwarden init` projects default to schema v2. Existing configs that omit
+`provider.user_schema` continue to behave as schema v1 until explicitly migrated.
+
+YAML schema v2:
+
+```yaml
+schema_version: 2
+users:
+  - username: alice
+    keys:
+      - name: prod-ci
+        public_key: ssh-ed25519 AAAA...
+        comment: CI deploy key
+        disabled: false
+        expires_at: 2027-01-01
+```
+
+CSV schema v2 uses a `keys` JSON column:
+
+```text
+username,keys,password_hash,uid,gid,upload_dir,comment,disabled
+alice,"[{""name"":""prod-ci"",""public_key"":""ssh-ed25519 AAAA...""}]",,,,,,false
+```
+
+SQL schema v2 keeps `sftp_users` and adds the key table:
+
+```text
+sftp_user_keys:
+username, name, public_key, fingerprint, comment, disabled, created_at,
+updated_at, expires_at, source, metadata
+```
+
+MongoDB schema v2 embeds a `keys` array in each user document and stores
+`schema_version: 2` on v2 documents written by SFTPWarden.
 
 When you initialize a project with MySQL, MariaDB, or PostgreSQL, SFTPWarden
 checks whether the table exists. If it is missing, interactive `init` asks whether

@@ -1,3 +1,2 @@
-username,public_keys,password_hash,uid,gid,upload_dir,disabled
-alice,,$6$rounds=500000$example$replace-with-real-hash,,,upload,false
-
+username,keys,password_hash,uid,gid,upload_dir,comment,disabled
+alice,"[{""name"":""laptop"",""public_key"":""ssh-ed25519 AAAA alice@example"",""comment"":""Example key; replace before use"",""source"":""example""}]",$6$rounds=500000$example$replace-with-real-hash,,,upload,Example user,false

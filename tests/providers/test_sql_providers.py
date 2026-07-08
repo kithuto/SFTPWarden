@@ -18,11 +18,18 @@ from sftpwarden.providers.sql import (
     delete_missing_sql_users,
     delete_sql_user,
     parse_sql_bool,
+    replace_sql_user_keys_for_user,
+    sql_user_keys_table,
+    upsert_sql_user,
     upsert_sql_users,
     users_from_sql_rows,
 )
-from sftpwarden.users import ProviderUsers, SFTPUser
+from sftpwarden.users import ProviderUsers, SFTPUser, SFTPUserKey
 from sftpwarden.utils.errors import ProviderError
+
+TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests"
+SECOND_TEST_KEY = "ssh-ed25519 ZmFrZS1zcWwtMg=="
+TEST_HASH = "$6$rounds=500000$saltstring$hashvalue"
 
 
 class FakeCursor:
@@ -57,6 +64,15 @@ class FakeCursor:
 
     def fetchall(self) -> list[dict[str, Any]]:
         return self.rows
+
+
+class SequentialFetchCursor(FakeCursor):
+    def __init__(self, fetches: list[list[dict[str, Any]]]) -> None:
+        super().__init__()
+        self._fetches = list(fetches)
+
+    def fetchall(self) -> list[dict[str, Any]]:
+        return self._fetches.pop(0)
 
 
 class FakeConnection:
@@ -133,12 +149,13 @@ def install_fake_psycopg(monkeypatch: pytest.MonkeyPatch, connection: FakeConnec
     monkeypatch.setitem(sys.modules, "psycopg.rows", rows)
 
 
-def mysql_provider() -> MySQLProvider:
+def mysql_provider(*, user_schema: int = 1) -> MySQLProvider:
     return MySQLProvider(
         config=ProviderConfig(
             type=ProviderType.MYSQL,
             dsn="mysql://user:pass@db.example.com:3307/sftp",
             table="sftp_users",
+            user_schema=user_schema,
         )
     )
 
@@ -164,12 +181,13 @@ def mariadb_provider() -> MariaDBProvider:
     )
 
 
-def postgres_provider() -> PostgreSQLProvider:
+def postgres_provider(*, user_schema: int = 1) -> PostgreSQLProvider:
     return PostgreSQLProvider(
         config=ProviderConfig(
             type=ProviderType.POSTGRESQL,
             dsn="postgresql://user:pass@db.example.com:5432/sftp",
             table="sftp_users",
+            user_schema=user_schema,
         )
     )
 
@@ -204,9 +222,33 @@ def test_mysql_provider_reads_users_with_default_query(monkeypatch: pytest.Monke
     assert connection.kwargs["cursorclass"] is object  # type: ignore[attr-defined]
 
 
+def test_mysql_provider_reads_schema_v2_key_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    cursor = SequentialFetchCursor(
+        [
+            [sample_row()],
+            [{"username": "alice", "name": "prod", "public_key": TEST_KEY}],
+        ]
+    )
+    connection = FakeConnection(cursor)
+    install_fake_pymysql(monkeypatch, connection)
+
+    users = mysql_provider(user_schema=2).read()
+
+    assert users.schema_version == 2
+    assert users.users[0].keys[0].name == "prod"
+    assert cursor.executed[1][0].startswith("select username, name, public_key")
+
+
 def test_sql_provider_empty_text_is_empty() -> None:
     assert MySQLProvider.empty_text() == ""
     assert PostgreSQLProvider.empty_text() == ""
+
+
+def test_sql_user_keys_table_names_follow_users_table() -> None:
+    assert sql_user_keys_table("sftp_users") == "sftp_user_keys"
+    assert sql_user_keys_table("partners") == "partners_keys"
+    assert sql_user_keys_table("tenant.sftp_users") == "tenant.sftp_user_keys"
+    assert sql_user_keys_table("tenant.partners") == "tenant.partners_keys"
 
 
 def test_sql_helpers_cover_list_keys_empty_upsert_and_delete_edges() -> None:
@@ -242,6 +284,69 @@ def test_sql_helpers_cover_list_keys_empty_upsert_and_delete_edges() -> None:
     assert cursor.executed[0] == ("delete from sftp_users", None)
 
 
+def test_sql_helpers_handle_schema_v2_key_rows_and_replacements() -> None:
+    users = users_from_sql_rows(
+        [sample_row(), sample_row("bob")],
+        schema_version=2,
+        key_rows=[
+            {"username": "ignored", "public_key": TEST_KEY},
+            {
+                "username": "alice",
+                "name": "prod",
+                "public_key": TEST_KEY,
+                "disabled": "yes",
+                "metadata": '{"env": "prod"}',
+            },
+            {
+                "username": "bob",
+                "name": "laptop",
+                "public_key": SECOND_TEST_KEY,
+                "metadata": "not-json",
+            },
+        ],
+    )
+    empty_cursor = FakeCursor()
+    one_user_cursor = FakeCursor()
+    delete_cursor = FakeCursor()
+
+    upsert_sql_users(
+        empty_cursor,
+        "sftp_users",
+        ProviderUsers(schema_version=2, users=[]),
+        dialect="mysql",
+        schema_version=2,
+    )
+    replace_sql_user_keys_for_user(one_user_cursor, "sftp_users", users.users[0], dialect="mysql")
+    replace_sql_user_keys_for_user(
+        one_user_cursor,
+        "sftp_users",
+        SFTPUser(username="empty", password_hash=TEST_HASH),
+        dialect="mysql",
+    )
+    upsert_sql_user(
+        one_user_cursor,
+        "sftp_users",
+        users.users[0],
+        dialect="postgres",
+        schema_version=2,
+    )
+    delete_sql_user(delete_cursor, "sftp_users", "alice", schema_version=2)
+
+    assert users.schema_version == 2
+    assert users.users[0].keys[0].metadata == {"env": "prod"}
+    assert users.users[0].keys[0].disabled
+    assert users.users[1].keys[0].metadata == {}
+    assert empty_cursor.executed == [("delete from sftp_user_keys", None)]
+    assert any(
+        statement.startswith("insert into sftp_user_keys")
+        for statement, _rows in one_user_cursor.executed_many
+    )
+    assert delete_cursor.executed[0] == (
+        "delete from sftp_user_keys where username = %s",
+        ["alice"],
+    )
+
+
 def test_mysql_provider_validates_and_executes_custom_read_query(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -273,13 +378,63 @@ def test_mysql_provider_mutates_users_and_commits(monkeypatch: pytest.MonkeyPatc
     assert any(statement.startswith("create table sftp_users") for statement, _ in cursor.executed)
 
 
+def test_mysql_provider_create_table_creates_key_table_for_schema_v2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+    install_fake_pymysql(monkeypatch, connection)
+
+    mysql_provider(user_schema=2).create_table()
+
+    assert any(statement.startswith("create table sftp_users") for statement, _ in cursor.executed)
+    assert any(
+        statement.startswith("create table sftp_user_keys") for statement, _ in cursor.executed
+    )
+    assert connection.committed
+
+
+def test_mysql_provider_write_schema_v2_creates_missing_key_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+    install_fake_pymysql(monkeypatch, connection)
+    users = ProviderUsers(
+        schema_version=2,
+        users=[SFTPUser(username="alice", keys=[SFTPUserKey(name="prod", public_key=TEST_KEY)])],
+    )
+
+    mysql_provider(user_schema=1).write(users)
+
+    assert cursor.executed[0][0].startswith("create table if not exists sftp_user_keys")
+    assert any(statement == "delete from sftp_user_keys" for statement, _ in cursor.executed)
+    assert any(
+        statement.startswith("insert into sftp_user_keys") for statement, _ in cursor.executed_many
+    )
+
+
+def test_mysql_provider_rolls_back_failed_schema_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = FakeCursor(execute_error=RuntimeError("create keys failed"))
+    connection = FakeConnection(cursor)
+    install_fake_pymysql(monkeypatch, connection)
+
+    with pytest.raises(RuntimeError, match="create keys failed"):
+        mysql_provider().ensure_schema_storage(2)
+
+    assert connection.rolled_back
+    assert connection.closed
+
+
 def test_mysql_provider_rolls_back_failed_write(monkeypatch: pytest.MonkeyPatch) -> None:
     cursor = FakeCursor(execute_error=RuntimeError("delete failed"))
     connection = FakeConnection(cursor)
     install_fake_pymysql(monkeypatch, connection)
 
     with pytest.raises(RuntimeError, match="delete failed"):
-        mysql_provider().write(ProviderUsers(users=[sample_user()]))
+        mysql_provider().write(ProviderUsers(schema_version=1, users=[sample_user()]))
 
     assert connection.rolled_back
     assert connection.closed
@@ -339,6 +494,26 @@ def test_mysql_provider_table_exists_returns_true(monkeypatch: pytest.MonkeyPatc
     install_fake_pymysql(monkeypatch, connection)
 
     assert mysql_provider().table_exists()
+
+
+def test_mysql_provider_table_exists_requires_key_table_for_schema_v2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class MissingKeyTableCursor(FakeCursor):
+        def execute(self, statement: str, params: Any = None) -> None:
+            self.executed.append((statement, params))
+            if statement.startswith("select 1 from sftp_user_keys"):
+                raise Exception(1146, "table does not exist")
+
+    cursor = MissingKeyTableCursor()
+    connection = FakeConnection(cursor)
+    install_fake_pymysql(monkeypatch, connection)
+
+    assert not mysql_provider(user_schema=2).table_exists()
+    assert cursor.executed == [
+        ("select 1 from sftp_users limit 1", None),
+        ("select 1 from sftp_user_keys limit 1", None),
+    ]
 
 
 def test_mysql_connect_kwargs_rejects_non_mysql_scheme() -> None:
@@ -421,6 +596,23 @@ def test_postgres_provider_reads_users_with_default_query(monkeypatch: pytest.Mo
     assert "row_factory" in connection.kwargs  # type: ignore[attr-defined]
 
 
+def test_postgres_provider_reads_schema_v2_key_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    cursor = SequentialFetchCursor(
+        [
+            [sample_row()],
+            [{"username": "alice", "name": "prod", "public_key": TEST_KEY}],
+        ]
+    )
+    connection = FakeConnection(cursor)
+    install_fake_psycopg(monkeypatch, connection)
+
+    users = postgres_provider(user_schema=2).read()
+
+    assert users.schema_version == 2
+    assert users.users[0].keys[0].name == "prod"
+    assert cursor.executed[1][0].startswith("select username, name, public_key")
+
+
 def test_postgres_provider_validates_and_executes_custom_read_query(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -448,6 +640,41 @@ def test_postgres_provider_mutates_users(monkeypatch: pytest.MonkeyPatch) -> Non
     assert any("on conflict (username)" in statement for statement, _ in cursor.executed_many)
     assert ("delete from sftp_users where username = %s", ["bob"]) in cursor.executed
     assert any(statement.startswith("create table sftp_users") for statement, _ in cursor.executed)
+
+
+def test_postgres_provider_create_table_creates_key_table_for_schema_v2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+    install_fake_psycopg(monkeypatch, connection)
+
+    postgres_provider(user_schema=2).create_table()
+
+    assert any(statement.startswith("create table sftp_users") for statement, _ in cursor.executed)
+    assert any(
+        statement.startswith("create table sftp_user_keys") for statement, _ in cursor.executed
+    )
+
+
+def test_postgres_provider_write_schema_v2_creates_missing_key_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = FakeCursor()
+    connection = FakeConnection(cursor)
+    install_fake_psycopg(monkeypatch, connection)
+    users = ProviderUsers(
+        schema_version=2,
+        users=[SFTPUser(username="alice", keys=[SFTPUserKey(name="prod", public_key=TEST_KEY)])],
+    )
+
+    postgres_provider(user_schema=1).write(users)
+
+    assert cursor.executed[0][0].startswith("create table if not exists sftp_user_keys")
+    assert any(statement == "delete from sftp_user_keys" for statement, _ in cursor.executed)
+    assert any(
+        statement.startswith("insert into sftp_user_keys") for statement, _ in cursor.executed_many
+    )
 
 
 def test_postgres_provider_table_exists_handles_missing_table(
@@ -482,8 +709,40 @@ def test_postgres_provider_table_exists_returns_true(monkeypatch: pytest.MonkeyP
     assert postgres_provider().table_exists()
 
 
+def test_postgres_provider_table_exists_requires_key_table_for_schema_v2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class MissingTableError(Exception):
+        sqlstate = "42P01"
+
+    class MissingKeyTableCursor(FakeCursor):
+        def execute(self, statement: str, params: Any = None) -> None:
+            self.executed.append((statement, params))
+            if statement.startswith("select 1 from sftp_user_keys"):
+                raise MissingTableError()
+
+    cursor = MissingKeyTableCursor()
+    connection = FakeConnection(cursor)
+    install_fake_psycopg(monkeypatch, connection)
+
+    assert not postgres_provider(user_schema=2).table_exists()
+    assert cursor.executed == [
+        ("select 1 from sftp_users limit 1", None),
+        ("select 1 from sftp_user_keys limit 1", None),
+    ]
+
+
 @pytest.mark.parametrize(
-    "method_name", ["read", "write", "upsert_user", "remove_user", "table_exists", "create_table"]
+    "method_name",
+    [
+        "read",
+        "write",
+        "upsert_user",
+        "remove_user",
+        "table_exists",
+        "create_table",
+        "ensure_schema_storage",
+    ],
 )
 def test_postgres_provider_reports_missing_optional_dependency(
     monkeypatch: pytest.MonkeyPatch, method_name: str
@@ -493,11 +752,12 @@ def test_postgres_provider_reports_missing_optional_dependency(
     provider = postgres_provider()
     args = {
         "read": (),
-        "write": (ProviderUsers(users=[sample_user()]),),
+        "write": (ProviderUsers(schema_version=1, users=[sample_user()]),),
         "upsert_user": (sample_user(),),
         "remove_user": ("alice",),
         "table_exists": (),
         "create_table": (),
+        "ensure_schema_storage": (2,),
     }[method_name]
 
     with pytest.raises(ProviderError, match="postgres optional dependency"):
@@ -505,7 +765,15 @@ def test_postgres_provider_reports_missing_optional_dependency(
 
 
 @pytest.mark.parametrize(
-    "method_name", ["write", "upsert_user", "remove_user", "table_exists", "create_table"]
+    "method_name",
+    [
+        "write",
+        "upsert_user",
+        "remove_user",
+        "table_exists",
+        "create_table",
+        "ensure_schema_storage",
+    ],
 )
 def test_postgres_provider_mutations_require_dsn(method_name: str) -> None:
     provider = PostgreSQLProvider(
@@ -519,6 +787,7 @@ def test_postgres_provider_mutations_require_dsn(method_name: str) -> None:
         "remove_user": ("alice",),
         "table_exists": (),
         "create_table": (),
+        "ensure_schema_storage": (2,),
     }[method_name]
 
     with pytest.raises(ProviderError, match="requires dsn|mutations require dsn"):

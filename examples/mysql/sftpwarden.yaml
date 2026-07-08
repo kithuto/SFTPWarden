@@ -5,3 +5,4 @@ provider:
   type: mysql
   dsn: "${SFTPWARDEN_MYSQL_DSN}"
   table: sftp_users
+  user_schema: 2

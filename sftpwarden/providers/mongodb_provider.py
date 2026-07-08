@@ -8,6 +8,7 @@ from sftpwarden.config import ProviderType
 from sftpwarden.providers.base import BaseProvider
 from sftpwarden.providers.registry import register_provider
 from sftpwarden.users.models import ProviderUsers, SFTPUser
+from sftpwarden.users.schemas import detect_mapping_schema, user_schema
 from sftpwarden.utils.errors import ProviderError
 
 
@@ -38,7 +39,16 @@ class MongoDBProvider(BaseProvider):
         """
         collection = self._collection()
         documents = list(collection.find({}, {"_id": False}).sort("username", 1))
-        return ProviderUsers(users=[user_from_mongodb_document(document) for document in documents])
+        user_documents = [
+            document
+            for document in documents
+            if document.get("username") != "__sftpwarden_schema__"
+        ]
+        schema = detect_mapping_schema({"users": user_documents}, fallback_schema=1)
+        return ProviderUsers(
+            schema_version=schema.version,
+            users=[user_from_mongodb_document(document) for document in user_documents],
+        )
 
     def write(self, users: ProviderUsers) -> None:
         """Replace MongoDB users with a desired user set.
@@ -52,7 +62,7 @@ class MongoDBProvider(BaseProvider):
         self.ensure_collection()
         usernames = [user.username for user in users.users]
         for user in users.users:
-            document = mongodb_document_from_user(user)
+            document = mongodb_document_from_user(user, schema_version=users.schema_version)
             collection.replace_one({"_id": user.username}, document, upsert=True)
         if usernames:
             collection.delete_many({"_id": {"$nin": usernames}})
@@ -71,7 +81,7 @@ class MongoDBProvider(BaseProvider):
         self.ensure_collection()
         collection.replace_one(
             {"_id": user.username},
-            mongodb_document_from_user(user),
+            mongodb_document_from_user(user, schema_version=self.config.user_schema),
             upsert=True,
         )
 
@@ -149,7 +159,7 @@ def mongodb_database_name(dsn: str) -> str:
     return database
 
 
-def mongodb_document_from_user(user: SFTPUser) -> dict[str, Any]:
+def mongodb_document_from_user(user: SFTPUser, *, schema_version: int = 1) -> dict[str, Any]:
     """Convert a user to a MongoDB document.
 
     Parameters
@@ -162,7 +172,10 @@ def mongodb_document_from_user(user: SFTPUser) -> dict[str, Any]:
     dict[str, Any]
         MongoDB document.
     """
-    document = user.model_dump(mode="json", exclude_none=True)
+    schema = user_schema(schema_version)
+    document = schema.user_to_mapping(user)
+    if schema.include_schema_version:
+        document["schema_version"] = schema.version
     document["_id"] = user.username
     document["username"] = user.username
     return document
@@ -183,4 +196,5 @@ def user_from_mongodb_document(document: dict[str, Any]) -> SFTPUser:
     """
     data = dict(document)
     data.pop("_id", None)
+    data.pop("schema_version", None)
     return SFTPUser.model_validate(data)

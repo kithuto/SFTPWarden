@@ -63,20 +63,26 @@ __all__ = [
 ]
 
 
-def empty_provider_text(provider_type: ProviderType) -> str:
+def empty_provider_text(provider_type: ProviderType, *, user_schema: int = 2) -> str:
     """Return empty provider text for a provider type.
 
     Parameters
     ----------
     provider_type
         Provider type.
+    user_schema
+        User schema version for providers with file seed content. Defaults to v2.
 
     Returns
     -------
     str
         Empty provider document.
     """
-    return provider_class(provider_type).empty_text()
+    provider = provider_class(provider_type)
+    schema_factory = getattr(provider, "empty_text_for_schema", None)
+    if schema_factory is not None:
+        return schema_factory(user_schema)
+    return provider.empty_text()
 
 
 def load_users_from_project(project_root: str | Path, config) -> ProviderUsers:
@@ -105,6 +111,7 @@ def load_users(
     query: str | None = None,
     table: str = "sftp_users",
     collection: str = "sftp_users",
+    user_schema: int = 2,
 ) -> ProviderUsers:
     """Load users from an explicit provider.
 
@@ -122,6 +129,8 @@ def load_users(
         SQL table name.
     collection
         MongoDB collection name.
+    user_schema
+        Preferred user schema for providers that need initialization context.
 
     Returns
     -------
@@ -135,6 +144,7 @@ def load_users(
         query=query,
         table=table,
         collection=collection,
+        user_schema=user_schema,
     ).read()
 
 
@@ -146,6 +156,7 @@ def save_users(
     dsn: str | None = None,
     table: str = "sftp_users",
     collection: str = "sftp_users",
+    user_schema: int | None = None,
 ) -> None:
     """Save users to an explicit provider.
 
@@ -163,13 +174,18 @@ def save_users(
         SQL table name.
     collection
         MongoDB collection name.
+    user_schema
+        Optional schema version to mark before writing.
     """
+    if user_schema is not None:
+        users = ProviderUsers(schema_version=user_schema, users=users.users)
     build_provider(
         provider_type,
         path=path,
         dsn=dsn,
         table=table,
         collection=collection,
+        user_schema=users.schema_version,
     ).write(users)
 
 

@@ -176,7 +176,7 @@ set `provider.dsnSecretName` and reference the same environment variable from
 `sftpwardenConfig`; prefer creating the Secret outside the values file for
 production deployments.
 
-SFTPWarden v1.2 supports one runtime pod per context. `kubernetes.replicas` and
+SFTPWarden v1.3 supports one runtime pod per context. `kubernetes.replicas` and
 Helm `runtime.replicas` are reserved for future multi-node support and currently
 accept only `1`.
 
@@ -318,6 +318,23 @@ under `data/` is excluded unless you pass `--include-data`.
 Backups may contain secrets if DSNs or environment references are stored in
 `sftpwarden.yaml`. Store backup archives with the same care as infrastructure
 secrets.
+
+## User Schema Migration
+
+Schema v1 keeps simple `public_keys` on each user. Schema v2 adds named keys and
+per-key lifecycle metadata. Inspect and migrate explicitly:
+
+```bash
+sftpwarden provider schema show
+sftpwarden provider keys migrate --dry-run
+sftpwarden provider schema migrate --to 2 --dry-run
+sftpwarden provider schema migrate --to 2 --backup --yes
+```
+
+Advanced key commands such as `disable`, `rename`, `rotate`, `expire`, and
+`import` prompt before migrating a v1 provider to v2. Ordinary reads never
+rewrite provider data. Mutable migrations create a logical YAML backup by
+default unless `--no-backup` is used.
 
 ## Runtime State
 

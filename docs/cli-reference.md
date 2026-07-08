@@ -30,12 +30,16 @@ project. You do not need to know SFTPWarden internals to use these commands.
   - [sftpwarden provider export](#sftpwarden-provider-export)
   - [sftpwarden provider import](#sftpwarden-provider-import)
   - [sftpwarden provider copy](#sftpwarden-provider-copy)
+  - [sftpwarden provider schema](#sftpwarden-provider-schema)
+  - [sftpwarden provider keys migrate](#sftpwarden-provider-keys-migrate)
 - [User Commands](#user-commands)
   - [sftpwarden users](#sftpwarden-users)
   - [sftpwarden user show](#sftpwarden-user-show)
-  - [sftpwarden user add](#sftpwarden-user-add)
+  - [sftpwarden user create](#sftpwarden-user-create)
   - [sftpwarden user update](#sftpwarden-user-update)
+  - [sftpwarden user disable and enable](#sftpwarden-user-disable-and-enable)
   - [sftpwarden user remove](#sftpwarden-user-remove)
+  - [sftpwarden user key](#sftpwarden-user-key)
 - [Context Commands](#context-commands)
   - [sftpwarden context ls](#sftpwarden-context-ls)
   - [sftpwarden context current](#sftpwarden-context-current)
@@ -70,7 +74,7 @@ mkdir -p ~/sftpwarden-dev
 cd ~/sftpwarden-dev
 sftpwarden init dev --yes
 sftpwarden deploy
-sftpwarden user add alice --password "correct horse battery staple"
+sftpwarden user create alice --password "correct horse battery staple"
 sftpwarden refresh
 ```
 
@@ -115,7 +119,7 @@ options, for example:
 
 ```bash
 sftpwarden con<TAB>
-sftpwarden user add --<TAB>
+sftpwarden user create --<TAB>
 ```
 
 If you want to review or install the shell script manually, print it instead:
@@ -154,6 +158,16 @@ Use `--root` only when you want to initialize a folder without `cd`:
 ```bash
 sftpwarden init dev --root ~/sftpwarden-dev --yes
 ```
+
+Choose the user provider schema explicitly when you want to pin the format:
+
+```bash
+sftpwarden init demo --user-schema 1 --yes
+sftpwarden init prod --user-schema 2 --yes
+```
+
+Schema v1 is the simple `public_keys` format. Schema v2 is the default for new
+projects and enables named key lifecycle metadata.
 
 Create a new remote local-sync project:
 
@@ -572,6 +586,28 @@ provider file and reports that deploy is required. Database-backed Kubernetes
 providers can be refreshed normally because the runtime reads the database
 directly.
 
+### `sftpwarden provider schema`
+
+Inspects and migrates the user schema used by the selected provider.
+
+```bash
+sftpwarden provider schema show
+sftpwarden provider schema migrate --to 2 --dry-run
+sftpwarden provider schema migrate --to 2 --backup --yes
+```
+
+Migrations never happen during ordinary reads. A write migration creates a
+logical YAML backup by default unless `--no-backup` is used.
+
+### `sftpwarden provider keys migrate`
+
+Shortcut for migrating anonymous `public_keys` users to schema v2 named keys.
+
+```bash
+sftpwarden provider keys migrate --dry-run
+sftpwarden provider keys migrate --backup --yes
+```
+
 ## User Commands
 
 ### `sftpwarden users`
@@ -591,26 +627,26 @@ Prints one user as JSON.
 sftpwarden user show alice
 ```
 
-### `sftpwarden user add`
+### `sftpwarden user create`
 
 Adds a user to the provider.
 
 Password user:
 
 ```bash
-sftpwarden user add alice --password "correct horse battery staple"
+sftpwarden user create alice --password "correct horse battery staple"
 ```
 
 Public key user:
 
 ```bash
-sftpwarden user add alice --public-key "ssh-ed25519 AAAA..."
+sftpwarden user create alice --public-key "ssh-ed25519 AAAA..."
 ```
 
 With metadata:
 
 ```bash
-sftpwarden user add alice \
+sftpwarden user create alice \
   --password "correct horse battery staple" \
   --comment "Finance inbox" \
   --upload-dir inbound
@@ -630,11 +666,18 @@ Changes an existing user.
 sftpwarden user update alice --comment "Finance inbox"
 sftpwarden user update alice --upload-dir inbound
 sftpwarden user update alice --uid 12001 --gid 12001
-sftpwarden user update alice --disabled
-sftpwarden user update alice --enabled
 ```
 
 Updating only `comment` does not refresh the runtime because comments are metadata.
+
+### `sftpwarden user disable` and `enable`
+
+Disables or enables an entire user.
+
+```bash
+sftpwarden user disable alice
+sftpwarden user enable alice
+```
 
 ### `sftpwarden user remove`
 
@@ -652,6 +695,31 @@ sftpwarden user remove alice --delete-files --yes
 
 `--delete-files` also accepts `--force-delete-files` as an explicit alias. Use it
 carefully; file deletion is irreversible.
+
+### `sftpwarden user key`
+
+Manages SSH keys for one user.
+
+```bash
+sftpwarden user key list alice
+sftpwarden user key show alice prod-ci
+sftpwarden user key add alice prod-ci --public-key ./prod-ci.pub
+sftpwarden user key remove alice prod-ci --yes
+sftpwarden user key disable alice prod-ci
+sftpwarden user key enable alice prod-ci
+sftpwarden user key rename alice old-name new-name
+sftpwarden user key rotate alice prod-ci --public-key ./prod-ci-new.pub
+sftpwarden user key expire alice prod-ci --at 2027-01-01
+sftpwarden user key import alice --from-dir ./keys
+```
+
+Schema v1 providers can list, show, add, and remove anonymous keys using
+deterministic names and fingerprints. Operations that require persisted key
+metadata migrate to schema v2 after confirmation. In non-interactive use, pass
+`--yes`; with `--dry-run`, SFTPWarden shows the migration and key operation
+without writing changes. During `key import --from-dir`, each key name defaults
+to the `.pub` file name without the extension unless `--name` is provided for a
+single-file import.
 
 ## Context Commands
 

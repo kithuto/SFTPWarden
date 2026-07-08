@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -11,7 +12,7 @@ import sftpwarden.utils.files as file_utils
 from sftpwarden.config import ProviderConfig, ProviderType, default_project_config
 from sftpwarden.providers import MariaDBProvider, MongoDBProvider, SQLiteProvider, provider_class
 from sftpwarden.providers.mongodb_provider import mongodb_database_name
-from sftpwarden.users import ProviderUsers, SFTPUser
+from sftpwarden.users import ProviderUsers, SFTPUser, SFTPUserKey
 from sftpwarden.utils.errors import ProviderError
 
 
@@ -55,6 +56,78 @@ def test_sqlite_provider_round_trip_and_mutations(
     assert chmods and all(call == (db_path, 0o600) for call in chmods)
     with pytest.raises(ProviderError, match="Unknown user"):
         provider.remove_user("missing")
+
+
+def test_sqlite_provider_table_exists_requires_key_table_for_schema_v2(tmp_path: Path) -> None:
+    """SQLite schema v2 storage is incomplete without the keys table."""
+    db_path = tmp_path / "users.sqlite"
+    provider = SQLiteProvider(
+        config=ProviderConfig(
+            type=ProviderType.SQLITE,
+            path="/etc/sftpwarden/users.sqlite",
+            user_schema=2,
+        ),
+        path=db_path,
+    )
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("create table sftp_users (username text primary key)")
+
+    assert not provider.table_exists()
+
+    provider.create_table()
+
+    assert provider.table_exists()
+
+
+def test_sqlite_provider_schema_v2_mutations_manage_key_table(tmp_path: Path) -> None:
+    """SQLite schema v2 writes, detects, and removes named key rows."""
+    db_path = tmp_path / "users.sqlite"
+    provider = SQLiteProvider(
+        config=ProviderConfig(
+            type=ProviderType.SQLITE,
+            path="/etc/sftpwarden/users.sqlite",
+            user_schema=2,
+        ),
+        path=db_path,
+    )
+    user = SFTPUser(
+        username="alice",
+        keys=[
+            SFTPUserKey(
+                name="prod",
+                public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests",
+            )
+        ],
+    )
+
+    assert not provider.table_exists()
+    provider.ensure_schema_storage(2)
+    assert provider.table_exists()
+    provider.write(ProviderUsers(schema_version=2, users=[user]))
+
+    with sqlite3.connect(db_path) as connection:
+        count = connection.execute("select count(*) from sftp_user_keys").fetchone()[0]
+
+    assert count == 1
+
+    provider.remove_user("alice")
+
+    with sqlite3.connect(db_path) as connection:
+        count = connection.execute("select count(*) from sftp_user_keys").fetchone()[0]
+
+    assert count == 0
+
+
+def test_sqlite_provider_table_exists_false_when_file_has_no_user_table(tmp_path: Path) -> None:
+    db_path = tmp_path / "users.sqlite"
+    db_path.touch()
+    provider = SQLiteProvider(
+        config=ProviderConfig(type=ProviderType.SQLITE, path="/etc/sftpwarden/users.sqlite"),
+        path=db_path,
+    )
+
+    assert not provider.table_exists()
 
 
 def test_mongodb_provider_round_trip_and_delete_all(

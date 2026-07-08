@@ -12,9 +12,10 @@ import yaml
 from sftpwarden.config import DeployTarget, ProviderType, RemoteStorage, load_config
 from sftpwarden.contexts import ContextEntry, ContextType, resolve_context
 from sftpwarden.providers import provider_from_config
-from sftpwarden.providers.csv_provider import CSV_FIELDNAMES
 from sftpwarden.refresh import refresh_context
-from sftpwarden.users import ProviderUsers, SFTPUser, users_fingerprint
+from sftpwarden.users import ProviderUsers, users_fingerprint
+from sftpwarden.users.schemas import detect_csv_schema, users_from_mapping
+from sftpwarden.users.schemas import user_schema as user_schema_for
 from sftpwarden.users.service import upsert_user
 from sftpwarden.utils.errors import ProviderError
 from sftpwarden.utils.files import write_private_text
@@ -102,18 +103,18 @@ def serialize_users(users: ProviderUsers, fmt: ProviderFormat) -> str:
     str
         Serialized users.
     """
-    data = {"users": [user.model_dump(mode="json", exclude_none=True) for user in users.users]}
+    schema = user_schema_for(users.schema_version)
+    data = schema.users_to_mapping(users)
     if fmt == "json":
         return json.dumps(data, indent=2, sort_keys=True) + "\n"
     if fmt == "yaml":
         return yaml.safe_dump(data, sort_keys=False)
     output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=CSV_FIELDNAMES)
+    fieldnames = schema.csv_fieldnames()
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
     writer.writeheader()
     for user in users.users:
-        row = user.model_dump(mode="json", exclude_none=True)
-        row["public_keys"] = "\n".join(user.public_keys)
-        writer.writerow(row)
+        writer.writerow(schema.csv_row_from_user(user))
     return output.getvalue()
 
 
@@ -133,28 +134,15 @@ def deserialize_users(text: str, fmt: ProviderFormat) -> ProviderUsers:
         Parsed users.
     """
     if fmt == "json":
-        return ProviderUsers.model_validate(json.loads(text))
+        return users_from_mapping(json.loads(text), fallback_schema=1)
     if fmt == "yaml":
-        return ProviderUsers.model_validate(yaml.safe_load(text) or {"users": []})
+        return users_from_mapping(yaml.safe_load(text) or {"users": []}, fallback_schema=1)
     rows = []
-    for row in csv.DictReader(io.StringIO(text)):
-        rows.append(
-            SFTPUser(
-                username=row["username"],
-                public_keys=[
-                    key.strip()
-                    for key in (row.get("public_keys") or "").splitlines()
-                    if key.strip()
-                ],
-                password_hash=row.get("password_hash") or None,
-                uid=int(row["uid"]) if row.get("uid") else None,
-                gid=int(row["gid"]) if row.get("gid") else None,
-                upload_dir=row.get("upload_dir") or "upload",
-                comment=row.get("comment") or None,
-                disabled=(row.get("disabled") or "").lower() in {"1", "true", "yes"},
-            )
-        )
-    return ProviderUsers(users=rows)
+    reader = csv.DictReader(io.StringIO(text))
+    schema = detect_csv_schema(list(reader.fieldnames or []), fallback_schema=1)
+    for row in reader:
+        rows.append(schema.user_from_csv_row(row))
+    return ProviderUsers(schema_version=schema.version, users=rows)
 
 
 def infer_format(path: str | Path | None, explicit: str | None = None) -> ProviderFormat:

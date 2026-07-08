@@ -2,7 +2,7 @@
 
 This chart deploys one SFTPWarden OpenSSH runtime as a Kubernetes StatefulSet.
 
-`runtime.replicas` is intentionally limited to `1` in v1.2. Values greater than
+`runtime.replicas` is intentionally limited to `1` in v1.3. Values greater than
 `1` are reserved for future multi-node work and are rejected by the chart schema.
 
 By default, resources are installed into the `sftpwarden` namespace. Install the
@@ -10,9 +10,11 @@ release with `--namespace sftpwarden --create-namespace` so the Helm release
 namespace and rendered resource namespace match.
 
 The chart persists SFTP data, runtime state, host keys, and file-backed provider
-data. For YAML/CSV providers, the init container creates an empty provider file
-in the provider PVC when it does not already exist. Existing provider data is not
-overwritten.
+data. The default values use provider schema v2 with an empty YAML provider:
+`schema_version: 2` and `users: []`. For YAML/CSV providers, the init container
+copies `provider.bootstrapContent` into the provider PVC on each rollout. Leave
+`provider.bootstrapContent` empty when existing provider data should be left
+untouched by Helm upgrades.
 
 The SFTP user data PVC defaults to `10Gi`. Increase it with
 `persistence.data.size`:

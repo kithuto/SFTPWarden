@@ -9,7 +9,7 @@ Create a new SQLite-backed project:
 mkdir -p ~/sftpwarden-sqlite
 cd ~/sftpwarden-sqlite
 sftpwarden init sqlite-example --provider sqlite --yes
-sftpwarden user add alice --no-refresh
+sftpwarden user create alice --no-refresh
 sftpwarden deploy --dry-run
 sftpwarden deploy
 ```
@@ -23,6 +23,7 @@ sftpwarden validate --config sftpwarden.yaml
 
 Do not copy a generated SQLite database between unrelated projects unless you
 intend to copy its users too. For a deployable SQLite project, use
-`sftpwarden init --provider sqlite` so SFTPWarden creates `users.sqlite`.
+`sftpwarden init --provider sqlite` so SFTPWarden creates a schema v2
+`users.sqlite` with the named-key table.
 
 Avoid SQLite for NFS, high concurrency, or multi-writer deployments.
