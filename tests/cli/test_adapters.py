@@ -153,6 +153,8 @@ def test_config_commands_cover_errors_and_global_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner, _root = init_project(tmp_path, monkeypatch)
+    (tmp_path / "remoteish").mkdir()
+    (tmp_path / "existing").mkdir()
     no_config = local_context("remoteish", tmp_path / "remoteish", ProviderType.YAML)
     no_config.config = ""
     save_registry(

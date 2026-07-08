@@ -11,6 +11,7 @@ import pytest
 
 from sftpwarden.config import ProviderType, default_project_config, write_config
 from sftpwarden.contexts import ContextEntry, ContextRegistry, local_context, save_registry
+from sftpwarden.providers import empty_provider_text
 from sftpwarden.render.compose import write_compose
 from sftpwarden.users import ProviderUsers, SFTPUser
 
@@ -143,11 +144,12 @@ def local_project_factory(
         project_root.mkdir(parents=True, exist_ok=True)
         config = default_project_config(name, provider)
         write_config(project_root / "sftpwarden.yaml", config)
-        if provider == ProviderType.YAML:
-            (project_root / "users.yaml").write_text("users: []\n", encoding="utf-8")
-        elif provider == ProviderType.CSV:
-            (project_root / "users.csv").write_text(
-                "username,public_keys,password_hash,uid,gid,upload_dir,comment,disabled\n",
+        if provider in {ProviderType.YAML, ProviderType.CSV}:
+            provider_path = project_root / (
+                "users.csv" if provider == ProviderType.CSV else "users.yaml"
+            )
+            provider_path.write_text(
+                empty_provider_text(provider, user_schema=config.provider.user_schema),
                 encoding="utf-8",
             )
         write_compose(config, project_root)

@@ -53,6 +53,7 @@ CONFIG_MUTATION_VALUES: dict[str, tuple[str, Any]] = {
     ),
     "provider.table": ("release_users", "release_users"),
     "provider.collection": ("release_users", "release_users"),
+    "provider.user_schema": ("1", 1),
     "logging.level": ("debug", "debug"),
     "logging.format": ("text", "text"),
     "healthcheck.interval_seconds": ("7", 7),

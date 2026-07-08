@@ -49,6 +49,7 @@ PROJECT_CONFIG_PATHS = [
     "provider.query",
     "provider.table",
     "provider.collection",
+    "provider.user_schema",
     "logging.level",
     "logging.format",
     "healthcheck.interval_seconds",

@@ -4,14 +4,16 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
-from sftpwarden.config import FILE_PROVIDER_TYPES, load_config, provider_local_path
+from sftpwarden.config import FILE_PROVIDER_TYPES, RemoteStorage, load_config, provider_local_path
 from sftpwarden.contexts import ContextEntry, ContextType, resolve_context
-from sftpwarden.providers import provider_from_config
 from sftpwarden.refresh import docker_compose_command
 from sftpwarden.remote.ssh import ssh_base_command
 from sftpwarden.render.compose import compose_text
+from sftpwarden.services.context_cleanup import ensure_remote_only_root_available
+from sftpwarden.services.provider_schema import plan_provider_schema_reconciliation
 from sftpwarden.system.commands import command_text, run
 from sftpwarden.utils.constants import CONTAINER_CONFIG_PATH
+from sftpwarden.utils.errors import ContextError
 
 RUNTIME_AUTHORIZED_KEYS_DIR = Path("/etc/sftpwarden/authorized_keys")
 RUNTIME_SSHD_CONFIG = Path("/etc/ssh/sshd_config")
@@ -83,6 +85,15 @@ def project_health(context_name: str | None = None) -> HealthReport:
     """
     checks: list[HealthCheck] = []
     entry = resolve_context(context_name=context_name)
+    if entry.type == ContextType.REMOTE and entry.storage == RemoteStorage.REMOTE_ONLY:
+        try:
+            ensure_remote_only_root_available(entry)
+        except ContextError as exc:
+            return HealthReport(
+                context=entry.name,
+                checks=[HealthCheck("remote", "fail", exc.message, exc.suggestion)],
+            )
+        return HealthReport(context=entry.name, checks=runtime_health_from_context(entry))
     if not entry.root or not entry.config:
         return HealthReport(
             context=entry.name,
@@ -108,8 +119,21 @@ def project_health(context_name: str | None = None) -> HealthReport:
         )
 
     try:
-        provider_from_config(root, config).read()
-        checks.append(HealthCheck("provider", "pass", f"Read {config.provider.type.value}."))
+        schema_result = plan_provider_schema_reconciliation(entry, config)
+        if schema_result.changed:
+            checks.append(
+                HealthCheck(
+                    "provider",
+                    "warn",
+                    (
+                        f"Provider data schema v{schema_result.from_schema} will be migrated "
+                        f"to configured schema v{schema_result.to_schema}."
+                    ),
+                    "Run `sftpwarden deploy` to apply the provider schema migration.",
+                )
+            )
+        else:
+            checks.append(HealthCheck("provider", "pass", f"Read {config.provider.type.value}."))
     except Exception as exc:  # noqa: BLE001
         checks.append(HealthCheck("provider", "fail", str(exc), "Verify provider configuration."))
 

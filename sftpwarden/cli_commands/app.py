@@ -41,6 +41,11 @@ app.add_typer(kube_app, name="kube")
 app.add_typer(helm_app, name="helm")
 
 
+def print_version() -> None:
+    """Print the installed SFTPWarden version."""
+    console.print(f"SFTPWarden {get_version()}")
+
+
 def version_callback(value: bool) -> None:
     """Handle the eager ``--version`` option.
 
@@ -50,8 +55,14 @@ def version_callback(value: bool) -> None:
         Whether the version flag was provided.
     """
     if value:
-        console.print(f"SFTPWarden {get_version()}")
+        print_version()
         raise typer.Exit()
+
+
+@app.command("version")
+def version_command() -> None:
+    """Show version and exit."""
+    print_version()
 
 
 @app.callback()

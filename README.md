@@ -554,6 +554,8 @@ sftpwarden provider export --format json > users.json
 - Configuration, Docker Compose, Kubernetes, and Helm changes require
   `sftpwarden deploy`; Kubernetes YAML/CSV provider files are also copied to the
   provider PVC by deploy/apply/upgrade.
+- `sftpwarden.yaml` is desired state. Changes made with `sftpwarden config` and
+  manual edits are applied by the next deploy/apply/upgrade step.
 - `sftpwarden health` validates config, provider readability, Compose drift, and
   runtime health where available.
 - `sftpwarden backup` stores config, a provider user snapshot, host keys, and
@@ -660,7 +662,9 @@ public or customer-facing network.
 
 The README is the adoption path. Detailed guides live in:
 
+- [Getting Started](docs/getting-started.md)
 - [Configuration](docs/configuration.md)
+- [Providers](docs/providers.md)
 - [Named Keys](docs/named-keys.md)
 - [Operations](docs/operations.md)
 - [Security](docs/security.md)

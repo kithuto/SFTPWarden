@@ -316,6 +316,37 @@ def test_refresh_context_executes_local_and_remote_commands(
     assert calls[1][0][0] == "ssh"
 
 
+def test_refresh_remote_only_checks_remote_root_before_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = remote_context(
+        name="archive",
+        provider=ProviderType.YAML,
+        remote_url="deploy@example.com:/opt/sftpwarden",
+        local_root=None,
+        remote_root="~/sftpwarden",
+        remote_only=True,
+        ssh_key=None,
+        critical=True,
+    )
+    checked: list[str] = []
+
+    class Result:
+        stdout = ""
+
+    monkeypatch.setattr(
+        refresh_module,
+        "ensure_remote_only_root_available",
+        lambda context: checked.append(context.name),
+    )
+    monkeypatch.setattr(refresh_module, "run_checked", lambda *_args, **_kwargs: Result())
+
+    assert "docker compose" in refresh_context(entry, dry_run=True)
+    assert checked == []
+    assert refresh_context(entry) == "Refreshed archive."
+    assert checked == ["archive"]
+
+
 def test_refresh_context_executes_kubernetes_runtime_refresh(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

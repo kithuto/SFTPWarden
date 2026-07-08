@@ -11,7 +11,7 @@ from pydantic import ValidationError
 import sftpwarden.utils.files as file_utils
 from sftpwarden.config import ProviderConfig, ProviderType, default_project_config
 from sftpwarden.providers import MariaDBProvider, MongoDBProvider, SQLiteProvider, provider_class
-from sftpwarden.providers.mongodb_provider import mongodb_database_name
+from sftpwarden.providers.mongodb_provider import mongodb_database_name, user_from_mongodb_document
 from sftpwarden.users import ProviderUsers, SFTPUser, SFTPUserKey
 from sftpwarden.utils.errors import ProviderError
 
@@ -203,6 +203,20 @@ def test_mongodb_provider_preserves_document_schema_version_for_password_only_v2
 
     assert loaded_with_key.schema_version == 2
     assert loaded_with_key.users[0].keys[0].name == "prod"
+
+
+def test_mongodb_document_to_user_validates_provider_document(test_password_hash: str) -> None:
+    user = user_from_mongodb_document(
+        {
+            "_id": "alice",
+            "schema_version": 2,
+            "username": "alice",
+            "password_hash": test_password_hash,
+        }
+    )
+
+    assert user.username == "alice"
+    assert user.password_hash == test_password_hash
 
 
 def test_mongodb_dsn_and_dependency_errors(

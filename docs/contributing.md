@@ -132,19 +132,45 @@ python -m pytest tests/test_cli.py
 
 ## Documentation
 
+The Sphinx source lives in `docs/`. `docs/index.md` owns the main navigation,
+and static assets live under `docs/_static/`.
+
 Build the Sphinx site locally:
 
 ```bash
+python -m pip install -e ".[docs]"
 sphinx-build -b html docs docs/_build/html
+```
+
+The CI-friendly validation command is:
+
+```bash
+tox -e docs
 ```
 
 Keep the README focused on adoption. Put deeper explanations in the specific docs
 pages:
 
+- [Getting Started](getting-started.md)
 - [Configuration](configuration.md)
+- [Providers](providers.md)
+- [Named Keys](named-keys.md)
 - [Operations](operations.md)
 - [Security](security.md)
 - [CLI Reference](cli-reference.md)
+
+The public documentation site is published by `.github/workflows/docs.yml`.
+Pushes to `main` that touch `README.md`, `CONTRIBUTING.md`, `SECURITY.md`,
+`CODE_OF_CONDUCT.md`, or `docs/**` build the HTML site on Python 3.14 with:
+
+```bash
+sphinx-build -b html docs docs/_build/html
+```
+
+The workflow uploads `docs/_build/html` as a GitHub Pages artifact and deploys it
+with `actions/deploy-pages`. Documentation-only pull requests should still run
+`tox -e docs` before review so broken links, invalid MyST, and Sphinx warnings
+are caught before the workflow publishes from `main`.
 
 ## Adding or Changing Features
 

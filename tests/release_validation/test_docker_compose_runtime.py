@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from .conftest import (
     TEST_HASH,
@@ -117,6 +118,42 @@ def test_docker_compose_deploy_refresh_health_and_sftp_round_trip(
         timeout_seconds=180,
         interval_seconds=3,
         description=f"Docker container {container_name} to become healthy",
+    )
+
+    updated_port = free_tcp_port()
+    config_path = root / "sftpwarden.yaml"
+    config_data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config_data["server"]["port"] = updated_port
+    config_data["healthcheck"]["timeout_seconds"] = 4
+    config_data["docker"]["restart"] = "always"
+    config_path.write_text(yaml.safe_dump(config_data, sort_keys=False), encoding="utf-8")
+
+    assert_ok(cli.run("deploy", "--context", "compose", "--yes", timeout=900))
+    compose_data = yaml.safe_load((root / "docker-compose.yml").read_text(encoding="utf-8"))
+    service = compose_data["services"]["sftpwarden"]
+    assert service["ports"] == [f"{updated_port}:22"]
+    assert service["healthcheck"]["timeout"] == "4s"
+    assert service["restart"] == "always"
+    restart_policy = run_external(
+        [
+            "docker",
+            "inspect",
+            container_name,
+            "--format",
+            "{{.HostConfig.RestartPolicy.Name}}",
+        ],
+        timeout=30,
+    )
+    published_port = run_external(["docker", "port", container_name, "22/tcp"], timeout=30)
+    assert restart_policy.stdout.strip() == "always"
+    assert f":{updated_port}" in published_port.stdout
+    port = updated_port
+
+    eventually(
+        container_is_healthy,
+        timeout_seconds=180,
+        interval_seconds=3,
+        description=f"Docker container {container_name} to become healthy after config deploy",
     )
 
     health = cli.run("health", "--context", "compose", "--json", timeout=120)

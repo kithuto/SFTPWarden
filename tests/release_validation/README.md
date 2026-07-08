@@ -9,6 +9,14 @@ provider content, context registry state, watcher metadata and rendered files,
 sync targets, deploy plans, Kubernetes/Helm resources, runtime health, and
 actual SFTP behavior where applicable.
 
+Normal unit/integration tests cover the fast contract on every run. This suite is
+for manual release confidence: it is allowed to use Docker, databases, clusters,
+real subprocesses, and real network ports when the behavior only proves itself
+end to end. For example, the Docker Compose runtime test edits several values in
+`sftpwarden.yaml` by hand, runs `sftpwarden deploy`, and then verifies that the
+generated Compose file and live container reflect the new port, healthcheck, and
+restart policy.
+
 `test_mutation_effects_matrix.py` is intentionally data-driven from the
 code-registered config and context command lists. When a new project config path
 or context field command is added, release validation must define a real value

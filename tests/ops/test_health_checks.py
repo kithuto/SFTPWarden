@@ -13,14 +13,16 @@ import sftpwarden.cli_commands.runtime as runtime_commands
 import sftpwarden.render.compose as compose_module
 import sftpwarden.services.health as health_services
 from sftpwarden.cli import app
-from sftpwarden.config import ProviderType, default_project_config, write_config
+from sftpwarden.config import ProviderType, default_project_config, load_config, write_config
 from sftpwarden.contexts import (
     ContextEntry,
     ContextRegistry,
+    ContextType,
     local_context,
     remote_context,
     save_registry,
 )
+from sftpwarden.providers import empty_provider_text
 from sftpwarden.render.compose import compose_text
 from sftpwarden.services.health import (
     HealthCheck,
@@ -29,7 +31,7 @@ from sftpwarden.services.health import (
     runtime_health,
 )
 from sftpwarden.system.commands import CommandResult
-from sftpwarden.utils.errors import ConfigError, RuntimeError
+from sftpwarden.utils.errors import ConfigError, ContextError, RuntimeError
 
 
 def test_project_health_report_and_compose_healthcheck(
@@ -45,7 +47,11 @@ def test_project_health_report_and_compose_healthcheck(
     config.healthcheck.retries = 5
     config.healthcheck.start_period_seconds = 30
     write_config(root / "sftpwarden.yaml", config)
-    (root / "users.yaml").write_text("users: []\n", encoding="utf-8")
+    ok_config = load_config(root / "sftpwarden.yaml")
+    (root / "users.yaml").write_text(
+        empty_provider_text(ok_config.provider.type, user_schema=ok_config.provider.user_schema),
+        encoding="utf-8",
+    )
     compose = (
         yaml.safe_load((root / "docker-compose.yml").read_text(encoding="utf-8"))
         if (root / "docker-compose.yml").exists()
@@ -81,6 +87,80 @@ def test_project_health_report_and_compose_healthcheck(
     assert rendered["services"]["sftpwarden"]["healthcheck"]["timeout"] == "7s"
     assert rendered["services"]["sftpwarden"]["healthcheck"]["retries"] == 5
     assert rendered["services"]["sftpwarden"]["healthcheck"]["start_period"] == "30s"
+
+
+def test_project_health_warns_about_pending_provider_schema_migration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "project"
+    root.mkdir()
+    config = default_project_config("dev", ProviderType.YAML, user_schema=1)
+    write_config(root / "sftpwarden.yaml", config)
+    (root / "users.yaml").write_text(
+        empty_provider_text(config.provider.type, user_schema=config.provider.user_schema),
+        encoding="utf-8",
+    )
+    target_config = config.model_copy(
+        update={"provider": config.provider.model_copy(update={"user_schema": 2})}
+    )
+    write_config(root / "sftpwarden.yaml", target_config)
+    save_registry(
+        ContextRegistry(
+            default="dev",
+            contexts={"dev": local_context("dev", root, ProviderType.YAML)},
+        )
+    )
+    monkeypatch.setattr(
+        health_services,
+        "runtime_health_from_context",
+        lambda _entry: [HealthCheck("runtime", "pass", "ok")],
+    )
+
+    report = project_health("dev")
+
+    assert any(
+        check.name == "provider"
+        and check.status == "warn"
+        and "will be migrated to configured schema v2" in check.message
+        for check in report.checks
+    )
+
+
+def test_remote_only_project_health_checks_remote_root_before_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    entry = remote_context(
+        name="archive",
+        provider=ProviderType.YAML,
+        remote_url="deploy@example.com:/opt/sftpwarden",
+        local_root=None,
+        remote_root="/opt/sftpwarden",
+        remote_only=True,
+        ssh_key=None,
+        critical=True,
+    )
+    save_registry(ContextRegistry(default="archive", contexts={"archive": entry}))
+    checked: list[str] = []
+    monkeypatch.setattr(
+        health_services,
+        "ensure_remote_only_root_available",
+        lambda context: checked.append(context.name),
+    )
+    monkeypatch.setattr(
+        health_services,
+        "runtime_health_from_context",
+        lambda _entry: [HealthCheck("runtime", "pass", "ok")],
+    )
+
+    report = project_health("archive")
+
+    assert report.healthy
+    assert checked == ["archive"]
+    assert report.checks == [HealthCheck("runtime", "pass", "ok")]
 
 
 def test_compose_runtime_image_resolves_local_pip_and_custom_modes(
@@ -129,7 +209,29 @@ def test_project_health_edges_and_runtime_context_commands(
         critical=True,
     )
     save_registry(ContextRegistry(default="archive", contexts={"archive": remote}))
-    assert health_services.project_health("archive").checks[0].status == "fail"
+    monkeypatch.setattr(
+        health_services,
+        "ensure_remote_only_root_available",
+        lambda _entry: (_ for _ in ()).throw(
+            ContextError(
+                "Remote server for context archive is not responding.",
+                suggestion="Check SSH connectivity to deploy@example.com:22.",
+            )
+        ),
+    )
+    remote_report = health_services.project_health("archive")
+    assert remote_report.checks[0].status == "fail"
+    assert "not responding" in remote_report.checks[0].message
+
+    save_registry(
+        ContextRegistry(
+            default="plain",
+            contexts={"plain": ContextEntry(name="plain", type=ContextType.LOCAL)},
+        )
+    )
+    plain_report = health_services.project_health("plain")
+    assert plain_report.checks[0].name == "context"
+    assert plain_report.checks[0].status == "fail"
 
     root = tmp_path / "bad-config"
     root.mkdir()
@@ -149,7 +251,11 @@ def test_project_health_edges_and_runtime_context_commands(
     assert any(check.name == "provider" and check.status == "fail" for check in report.checks)
     assert any(check.name == "provider-file" and check.status == "fail" for check in report.checks)
 
-    (root / "users.yaml").write_text("users: []\n", encoding="utf-8")
+    ok_config = load_config(root / "sftpwarden.yaml")
+    (root / "users.yaml").write_text(
+        empty_provider_text(ok_config.provider.type, user_schema=ok_config.provider.user_schema),
+        encoding="utf-8",
+    )
     original_runtime_health = health_services.runtime_health_from_context
     monkeypatch.setattr(
         health_services,
@@ -225,7 +331,10 @@ def test_runtime_health_success_and_failures(
     for path in (config.server.state_dir, config.server.data_dir, config.server.host_keys_dir):
         Path(path).mkdir()
     write_config(root / "sftpwarden.yaml", config)
-    (root / "users.yaml").write_text("users: []\n", encoding="utf-8")
+    (root / "users.yaml").write_text(
+        empty_provider_text(config.provider.type, user_schema=config.provider.user_schema),
+        encoding="utf-8",
+    )
     authorized = root / "authorized"
     authorized.mkdir()
     sshd_config = root / "sshd_config"

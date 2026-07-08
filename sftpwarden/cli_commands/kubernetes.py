@@ -8,6 +8,10 @@ import typer
 from rich.prompt import Confirm
 
 from sftpwarden.cli_commands.app import kube_app
+from sftpwarden.cli_commands.deploy_schema import (
+    apply_provider_schema_before_deploy,
+    provider_schema_deploy_text,
+)
 from sftpwarden.cli_commands.errors import handle_error
 from sftpwarden.cli_commands.output import print_json
 from sftpwarden.config import load_config
@@ -41,6 +45,7 @@ def kube_apply(
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
     json_output: Annotated[bool, typer.Option("--json")] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
 ) -> None:
     """Apply rendered Kubernetes manifests with kubectl."""
     try:
@@ -51,11 +56,23 @@ def kube_apply(
                 f"Context {entry.name} has no local sftpwarden.yaml.",
                 suggestion="Use a local or remote local-sync context.",
             )
+        schema_result = apply_provider_schema_before_deploy(entry, loaded, dry_run=dry_run, yes=yes)
         plan = kubernetes_deployment_plan(entry, loaded)
         if dry_run:
             if json_output:
-                print_json({"dry_run": True, "plan": plan.as_dict()})
+                print_json(
+                    {
+                        "dry_run": True,
+                        "plan": plan.as_dict(),
+                        "provider_schema": (
+                            schema_result.as_dict() if schema_result is not None else None
+                        ),
+                    }
+                )
                 return
+            schema_text = provider_schema_deploy_text(schema_result)
+            if schema_text:
+                console.print(schema_text)
             console.print(plan.text())
             return
         if not entry.root:
@@ -63,6 +80,10 @@ def kube_apply(
                 f"Context {entry.name} has no local root.",
                 suggestion="Use a local or remote local-sync context.",
             )
+        if schema_result and schema_result.changed:
+            print_success(provider_schema_deploy_text(schema_result))
+            if schema_result.backup_path:
+                console.print(f"Backup: {schema_result.backup_path}")
         write_kubernetes_manifests(loaded, entry.root)
         commands = [action.command for action in plan.actions if action.command]
         if not commands:

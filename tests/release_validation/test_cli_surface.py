@@ -108,6 +108,9 @@ def test_version_and_unknown_command_are_controlled(cli: ReleaseCli) -> None:
 def test_cli_reference_mentions_every_primary_command() -> None:
     """User docs should follow primary public commands discovered from code."""
     docs = Path("docs/cli-reference.md").read_text(encoding="utf-8")
+    docs += "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(Path("docs/cli").glob("*.md"))
+    )
     documented_commands = {
         " ".join(["sftpwarden", *command])
         for command in PUBLIC_HELP_COMMANDS
@@ -116,7 +119,7 @@ def test_cli_reference_mentions_every_primary_command() -> None:
 
     missing = sorted(command for command in documented_commands if command not in docs)
 
-    assert not missing, f"docs/cli-reference.md is missing: {missing}"
+    assert not missing, f"CLI docs are missing: {missing}"
 
 
 def should_have_explicit_cli_reference_entry(command: list[str]) -> bool:

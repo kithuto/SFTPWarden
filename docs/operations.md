@@ -31,6 +31,32 @@ the Docker-style one: create a project directory, `cd` into it, initialize it, a
 run commands without repeating `--context`. Use `sftpwarden context use dev` to
 switch later, or pass `--context dev`/`-c dev` for one explicit command.
 
+## Applying Configuration Changes
+
+Changes to `sftpwarden.yaml` are desired-state changes. They can come from
+`sftpwarden config PATH VALUE` or from a manual edit, and they are applied by the
+next deploy step:
+
+```bash
+sftpwarden validate
+sftpwarden plan
+sftpwarden deploy --dry-run
+sftpwarden deploy --yes
+```
+
+For Kubernetes manifest projects, `sftpwarden kube apply` is the direct apply
+command. For Helm projects, use `sftpwarden helm upgrade --install` when you are
+not routing through `sftpwarden deploy`.
+
+Deploy regenerates and applies the artifacts controlled by the config: Compose
+files, Kubernetes manifests, Helm values, runtime container settings, PVC/probe
+settings, provider bootstrap content for Kubernetes YAML/CSV projects, and
+forward provider schema migrations requested by `provider.user_schema`.
+
+`sftpwarden refresh` reloads users already visible to the running runtime. It
+does not apply config changes. `sftpwarden watch` syncs editable user provider
+files for remote `local-sync` contexts and also does not sync `sftpwarden.yaml`.
+
 ## Remote Deploy
 
 Remote local-sync:
@@ -66,6 +92,38 @@ you only need to register it locally:
 ```bash
 sftpwarden context add prod deploy@example.com:/opt/sftpwarden --critical
 sftpwarden context use prod
+```
+
+## Context Cleanup
+
+There are two cleanup paths:
+
+- If a project folder is deleted manually, the next context-aware SFTPWarden
+  command prunes the stale local registry entry. For remote contexts this is
+  local-only cleanup; SFTPWarden does not SSH to the remote host and does not
+  remove remote Docker resources or remote files.
+- Remote-only contexts have no local project folder. If their remote project
+  folder is deleted manually, the next real remote operation such as `deploy`,
+  `refresh`, `health`, or `backup` removes only the stale local registry entry.
+  If the remote server itself does not respond, SFTPWarden keeps the context and
+  reports a controlled connectivity error with an SSH troubleshooting hint.
+- If you run `sftpwarden context remove <name>`, SFTPWarden treats that as an
+  explicit cleanup request. It removes the local registry entry, deletes the
+  project-owned local root when it is not shared with another context, stops the
+  local Compose runtime when possible, and updates or uninstalls the watcher when
+  needed.
+
+Remote context removal keeps remote files by default in non-interactive mode:
+
+```bash
+sftpwarden context remove prod --yes
+```
+
+Interactive removal asks whether to delete remote runtime/project data. For CI or
+scripts, request that explicitly:
+
+```bash
+sftpwarden context remove prod --yes --delete-remote
 ```
 
 ## Kubernetes Deploy
@@ -257,8 +315,10 @@ Python package installations use
 `sftpwarden watcher uninstall` deactivates the scheduler backend, removes the
 generated watcher file, and clears SFTPWarden's watcher metadata. Installing a
 different watcher backend first deactivates the old backend, then writes and
-activates the new one. Removing the last remote `local-sync` context prompts to
-uninstall the watcher; with `--yes`, it is removed automatically.
+activates the new one. Removing or pruning the last remote `local-sync` context
+removes the watcher automatically; if a Docker watcher remains installed because
+other local-sync contexts still exist, SFTPWarden refreshes its generated context
+metadata.
 
 ## Provider Transfer
 
@@ -336,6 +396,15 @@ Advanced key commands such as `disable`, `rename`, `rotate`, `expire`, and
 rewrite provider data. Mutable migrations create a logical YAML backup by
 default unless `--no-backup` is used.
 
+Changing `provider.user_schema` in `sftpwarden.yaml` does not migrate provider
+data immediately. The config command warns and asks before accepting a change
+that requires migration; manual edits are detected later. The next
+`sftpwarden deploy`, `sftpwarden kube apply`, or `sftpwarden helm upgrade`
+performs the forward migration before applying deployment changes, asks for
+confirmation unless `--yes` is used, and reports the backup path. If the config
+asks for an older schema than the provider data already uses, the command fails
+instead of downgrading.
+
 ## Runtime State
 
 Runtime state lives at `/var/lib/sftpwarden/state.json` inside the container and
@@ -377,7 +446,9 @@ ssh deploy@example.com 'docker compose version'
 ```
 
 If `docker compose version` fails locally or remotely, install Docker Compose v2
-before running `sftpwarden deploy` again.
+before running `sftpwarden deploy` again. For remote-only contexts, also verify
+that the registered remote root still exists. If it was removed intentionally,
+recreate the remote project or register a new context.
 
 Provider data changed but users did not update:
 

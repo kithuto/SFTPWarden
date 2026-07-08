@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -10,6 +8,10 @@ from sftpwarden.cli_commands.app import provider_app, provider_keys_app, provide
 from sftpwarden.cli_commands.errors import handle_error
 from sftpwarden.cli_commands.output import print_json
 from sftpwarden.config import write_config
+from sftpwarden.services.provider_schema import (
+    plan_provider_schema_reconciliation,
+    reconcile_provider_schema,
+)
 from sftpwarden.services.provider_transfer import (
     ProviderMutationResult,
     copy_provider_users,
@@ -17,12 +19,10 @@ from sftpwarden.services.provider_transfer import (
     import_provider_users,
     infer_format,
     resolve_provider_context,
-    serialize_users,
 )
-from sftpwarden.users.schemas import migrate_provider_users, user_schema
+from sftpwarden.users.schemas import user_schema
 from sftpwarden.utils.console import console, print_success
 from sftpwarden.utils.errors import ProviderError, SFTPWardenError
-from sftpwarden.utils.files import write_private_text
 
 
 @provider_app.command("export")
@@ -162,21 +162,27 @@ def provider_schema_show(
             context_name=context,
             config_path=config,
         )
-        users = provider.read()
+        schema_result = plan_provider_schema_reconciliation(_entry, project_config)
         data = {
             "configured_user_schema": project_config.provider.user_schema,
-            "provider_user_schema": users.schema_version,
-            "user_count": len(users.users),
+            "provider_user_schema": schema_result.from_schema,
+            "user_count": schema_result.users,
             "provider_type": project_config.provider.type.value,
+            "migration_required": schema_result.changed,
         }
         if json_output:
             print_json(data)
             return
         console.print(
-            f"Provider schema v[bold]{users.schema_version}[/bold] "
-            f"({len(users.users)} user(s), "
+            f"Provider schema v[bold]{schema_result.from_schema}[/bold] "
+            f"({schema_result.users} user(s), "
             f"configured default v{project_config.provider.user_schema})."
         )
+        if schema_result.changed:
+            console.print(
+                f"[yellow]Run `sftpwarden deploy` to migrate provider data to "
+                f"schema v{schema_result.to_schema}.[/yellow]"
+            )
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -273,62 +279,50 @@ def migrate_provider_schema(
         context_name=context,
         config_path=config,
     )
-    users = provider.read()
-    if users.schema_version == target_schema.version:
-        return {
-            "changed": False,
-            "from_schema": users.schema_version,
-            "to_schema": target_schema.version,
-            "backup_path": None,
-            "dry_run": dry_run,
+    target_config = project_config.model_copy(
+        update={
+            "provider": project_config.provider.model_copy(
+                update={"user_schema": target_schema.version}
+            )
         }
-    migrated = migrate_provider_users(users, to_version=target_schema.version)
-    backup_path = None
-    if backup and not dry_run:
-        backup_path = write_provider_backup(entry.root, users)
+    )
+    planned = plan_provider_schema_reconciliation(
+        entry, target_config, dry_run=dry_run, provider=provider
+    )
     if dry_run:
         return {
-            "changed": True,
-            "from_schema": users.schema_version,
+            "changed": planned.changed,
+            "from_schema": planned.from_schema,
             "to_schema": target_schema.version,
             "backup_path": None,
             "dry_run": True,
-            "users": len(migrated.users),
+            "users": planned.users,
         }
-    if not yes and not typer.confirm(
-        f"Migrate provider users to schema v{target_schema.version}?",
-        default=False,
+    config_changed = entry.config and project_config.provider.user_schema != target_schema.version
+    if (
+        planned.changed
+        and not yes
+        and not typer.confirm(
+            f"Migrate provider users to schema v{target_schema.version}?", default=False
+        )
     ):
         raise typer.Exit(1)
-    provider.write(migrated)
-    if entry.config and project_config.provider.user_schema != target_schema.version:
+    result = reconcile_provider_schema(
+        entry, target_config, dry_run=False, backup=backup, provider=provider
+    )
+    if config_changed:
         write_config(
             entry.config,
-            project_config.model_copy(
-                update={
-                    "provider": project_config.provider.model_copy(
-                        update={"user_schema": target_schema.version}
-                    )
-                }
-            ),
+            target_config,
         )
     return {
-        "changed": True,
-        "from_schema": users.schema_version,
+        "changed": result.changed or bool(config_changed),
+        "from_schema": result.from_schema,
         "to_schema": target_schema.version,
-        "backup_path": str(backup_path) if backup_path else None,
+        "backup_path": result.backup_path,
         "dry_run": False,
-        "users": len(migrated.users),
+        "users": result.users,
     }
-
-
-def write_provider_backup(project_root: Path | None, users) -> Path:
-    """Write a logical YAML backup for provider migration."""
-    root = Path(project_root) if project_root is not None else Path.cwd()
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    backup_path = root / ".sftpwarden" / "backups" / f"provider-users-{timestamp}.yaml"
-    write_private_text(backup_path, serialize_users(users, "yaml"))
-    return backup_path
 
 
 def print_provider_mutation_result(

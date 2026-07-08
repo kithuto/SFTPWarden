@@ -14,6 +14,7 @@ from sftpwarden.contexts import (
 )
 from sftpwarden.remote.ssh import ssh_base_command
 from sftpwarden.render.kubernetes import kubernetes_resource_name
+from sftpwarden.services.context_cleanup import ensure_remote_only_root_available
 from sftpwarden.services.deploy import kubectl_command
 from sftpwarden.system.commands import command_text, run_checked
 from sftpwarden.utils.constants import CONTAINER_CONFIG_PATH
@@ -132,6 +133,8 @@ def refresh_context(context: ContextEntry, *, dry_run: bool = False) -> str:
 
     if not context.remote:
         raise ContextError(f"Remote context {context.name} is missing remote settings.")
+    if not dry_run:
+        ensure_remote_only_root_available(context)
 
     command = " ".join(shlex.quote(part) for part in docker_compose_command(context))
     remote_command = f"cd {shlex.quote(context.remote.remote_root)} && {command}"

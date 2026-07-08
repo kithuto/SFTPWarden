@@ -228,6 +228,12 @@ def test_remote_backup_restore_and_dry_run(
         critical=True,
     )
     save_registry(ContextRegistry(default="archive", contexts={"archive": remote}))
+    checked_remote_roots: list[str] = []
+    monkeypatch.setattr(
+        backup_services,
+        "ensure_remote_only_root_available",
+        lambda entry: checked_remote_roots.append(entry.name),
+    )
 
     backup_result = create_backup(
         context_name="archive",
@@ -236,6 +242,7 @@ def test_remote_backup_restore_and_dry_run(
         dry_run=True,
     )
     assert backup_result.entries[0].startswith("remote:")
+    assert checked_remote_roots == []
 
     remote_config = default_project_config("archive")
     remote_tar = tar_bytes(
@@ -260,6 +267,7 @@ def test_remote_backup_restore_and_dry_run(
         dry_run=False,
     )
     assert "sftpwarden.yaml" in remote_result.entries
+    assert checked_remote_roots == ["archive"]
 
     class Failed:
         returncode = 2
@@ -271,6 +279,7 @@ def test_remote_backup_restore_and_dry_run(
         create_remote_backup(
             entry=remote, output=str(tmp_path / "bad.tar.gz"), include_data=False, dry_run=False
         )
+    assert checked_remote_roots == ["archive", "archive"]
 
     remote_restore_archive = tmp_path / "remote-restore.tar.gz"
     with tarfile.open(remote_restore_archive, "w:gz") as archive:

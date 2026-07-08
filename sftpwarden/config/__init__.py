@@ -11,6 +11,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from sftpwarden.users.schemas import validate_user_schema_version
 from sftpwarden.utils.constants import (
     CONFIG_FILENAME,
     CONTAINER_PROVIDER_DIR,
@@ -288,6 +289,15 @@ class ProviderConfig(BaseModel):
     table: str = "sftp_users"
     collection: str = "sftp_users"
     user_schema: int = Field(default=1, ge=1)
+
+    @field_validator("user_schema")
+    @classmethod
+    def validate_user_schema(cls, value: int) -> int:
+        """Validate the configured provider user schema version."""
+        try:
+            return validate_user_schema_version(value)
+        except ProviderError as exc:
+            raise ValueError(exc.message) from exc
 
     @field_validator("path")
     @classmethod

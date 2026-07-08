@@ -20,6 +20,7 @@ from sftpwarden.config.global_config import (
     save_global_config,
 )
 from sftpwarden.contexts import load_registry, resolve_context, save_registry
+from sftpwarden.services.provider_schema import plan_provider_schema_reconciliation
 from sftpwarden.utils.console import console, print_success
 from sftpwarden.utils.constants import PROJECT_CONFIG_PATHS
 from sftpwarden.utils.dotted import format_value, get_dotted, parse_cli_value, set_dotted
@@ -31,6 +32,7 @@ def config_value(
     ctx: typer.Context,
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
     config: Annotated[str | None, typer.Option("--config")] = None,
+    yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
 ) -> None:
     """Read or update one value in the active project config.
 
@@ -64,13 +66,14 @@ def config_value(
         if value is None:
             console.print(format_value(get_dotted(data, path)))
             raise typer.Exit()
-        old_name = loaded.project.name
-        set_dotted(data, path, parse_project_config_cli_value(data, path, value))
-        updated = SFTPWardenConfig.model_validate(data)
-        write_config(entry.config, updated)
-        if path == "project.name" and updated.project.name != old_name and not config:
-            rename_context_for_project_name(entry.name, updated.project.name)
-        print_success(f"Updated [bold]{path}[/bold].")
+        update_project_config_data(
+            entry=entry,
+            data=data,
+            path=path,
+            value=value,
+            context_config_path=config,
+            yes=yes,
+        )
         raise typer.Exit()
     except SFTPWardenError as exc:
         handle_error(exc)
@@ -107,6 +110,7 @@ def update_project_config_value(
     *,
     context: str | None,
     config: str | None,
+    yes: bool = False,
 ) -> None:
     """Read or update one project config value.
 
@@ -132,13 +136,52 @@ def update_project_config_value(
     if value is None:
         console.print(format_value(get_dotted(data, path)))
         return
+    update_project_config_data(
+        entry=entry,
+        data=data,
+        path=path,
+        value=value,
+        context_config_path=config,
+        yes=yes,
+    )
+
+
+def update_project_config_data(
+    *,
+    entry,
+    data: dict[str, Any],
+    path: str,
+    value: str,
+    context_config_path: str | None,
+    yes: bool,
+) -> None:
+    """Validate and persist one project config mutation."""
+    loaded = SFTPWardenConfig.model_validate(data)
     old_name = loaded.project.name
     set_dotted(data, path, parse_project_config_cli_value(data, path, value))
     updated = SFTPWardenConfig.model_validate(data)
+    confirm_provider_schema_config_change(entry, updated, yes=yes, path=path)
     write_config(entry.config, updated)
-    if path == "project.name" and updated.project.name != old_name and not config:
+    if path == "project.name" and updated.project.name != old_name and not context_config_path:
         rename_context_for_project_name(entry.name, updated.project.name)
     print_success(f"Updated [bold]{path}[/bold].")
+
+
+def confirm_provider_schema_config_change(
+    entry, config: SFTPWardenConfig, *, yes: bool, path: str
+) -> None:
+    """Ask before accepting a config change that will require provider migration."""
+    if path != "provider.user_schema":
+        return
+    result = plan_provider_schema_reconciliation(entry, config)
+    if not result.changed:
+        return
+    console.print(
+        "[yellow]Changing provider.user_schema will require a provider data migration "
+        f"from v{result.from_schema} to v{result.to_schema} during the next deploy.[/yellow]"
+    )
+    if not yes and not typer.confirm("Accept this config change?", default=False):
+        raise typer.Exit(1)
 
 
 def parse_project_config_cli_value(data: dict[str, Any], path: str, value: str) -> Any:
@@ -163,9 +206,10 @@ def register_project_config_path(path: str) -> None:
         value: Annotated[str | None, typer.Argument(help="Optional new value.")] = None,
         context: Annotated[str | None, typer.Option("--context", "-c")] = None,
         config: Annotated[str | None, typer.Option("--config")] = None,
+        yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
     ) -> None:
         try:
-            update_project_config_value(path, value, context=context, config=config)
+            update_project_config_value(path, value, context=context, config=config, yes=yes)
         except SFTPWardenError as exc:
             handle_error(exc)
         except ValueError as exc:
