@@ -53,7 +53,7 @@ CONFIG_MUTATION_VALUES: dict[str, tuple[str, Any]] = {
     ),
     "provider.table": ("release_users", "release_users"),
     "provider.collection": ("release_users", "release_users"),
-    "provider.user_schema": ("1", 1),
+    "provider.user_schema": ("2", 2),
     "logging.level": ("debug", "debug"),
     "logging.format": ("text", "text"),
     "healthcheck.interval_seconds": ("7", 7),
@@ -122,12 +122,18 @@ def test_config_dynamic_commands_persist_real_file_changes(
 ) -> None:
     """Each dynamic config command should persist the promised value in YAML."""
     root = tmp_path / path.replace(".", "_")
-    assert_ok(cli.run("init", f"cfg-{path.replace('.', '-')}", "--root", root, "--yes"))
+    init_args: list[str | Path] = ["init", f"cfg-{path.replace('.', '-')}", "--root", root, "--yes"]
+    if path == "provider.user_schema":
+        init_args.extend(["--user-schema", "1"])
+    assert_ok(cli.run(*init_args))
     config_path = root / "sftpwarden.yaml"
     raw_value, expected = CONFIG_MUTATION_VALUES[path]
     _prepare_config_for_path(config_path, path)
 
-    update = cli.run("config", path, raw_value, "--config", config_path)
+    update_args: list[str | Path] = ["config", path, raw_value, "--config", config_path]
+    if path == "provider.user_schema":
+        update_args.append("--yes")
+    update = cli.run(*update_args)
     read_back = cli.run("config", path, "--config", config_path)
 
     assert_ok(update)
@@ -151,6 +157,7 @@ def test_context_registry_mutations_persist_and_remove_real_entries(
     assert_ok(cli.run("init", "beta", "--root", beta_root, "--yes"))
     assert_ok(cli.run("init", "gamma-seed", "--root", gamma_root, "--yes"))
     assert_ok(cli.run("context", "remove", "gamma-seed", "--yes"))
+    assert not gamma_root.exists()
     assert_ok(cli.run("context", "default", "alpha"))
     assert json.loads(cli.run("context", "ls", "--json").stdout)["default"] == "alpha"
     assert "alpha" in cli.run("context", "current").output
@@ -160,6 +167,23 @@ def test_context_registry_mutations_persist_and_remove_real_entries(
     assert_ok(cli.run("context", "clear"))
     assert json.loads(cli.run("context", "ls", "--json").stdout)["default"] is None
 
+    gamma_root.mkdir()
+    (gamma_root / "sftpwarden.yaml").write_text(
+        "\n".join(
+            [
+                "version: 1",
+                "project:",
+                "  name: gamma",
+                "provider:",
+                "  type: yaml",
+                "  path: users.yaml",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (gamma_root / "users.yaml").write_text("schema_version: 2\nusers: []\n", encoding="utf-8")
+    assert gamma_root.exists()
     assert_ok(cli.run("context", "add", "gamma", "--root", gamma_root, "--yes"))
     registry = json.loads(cli.run("context", "ls", "--json").stdout)
     assert registry["contexts"]["gamma"]["root"] == str(gamma_root)
