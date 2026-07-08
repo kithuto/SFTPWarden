@@ -5,3 +5,4 @@ provider:
   type: postgresql
   dsn: "${SFTPWARDEN_POSTGRES_DSN}"
   table: sftp_users
+  user_schema: 2

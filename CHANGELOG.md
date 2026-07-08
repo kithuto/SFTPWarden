@@ -11,15 +11,6 @@ The format follows Keep a Changelog, and this project uses Semantic Versioning.
 This roadmap is directional and may change as SFTPWarden receives operational
 feedback. It summarizes the main public roadmap through v2.0.
 
-#### v1.3 - Named Public Keys, Provider Schema v2, and CLI UX
-
-- Add named SSH keys with fingerprints, comments, expiry, disabled state, and
-  rotation workflows.
-- Add provider schema v2 with safe migrations for file, SQL, SQLite, and MongoDB
-  providers.
-- Move user/key commands toward resource-first CLI grammar.
-- Keep legacy anonymous `public_keys` provider data readable during upgrades.
-
 #### v1.4 - Audit and Transfer Visibility
 
 - Add local JSONL audit logging for user, key, provider, deploy, refresh,
@@ -70,6 +61,29 @@ feedback. It summarizes the main public roadmap through v2.0.
 - Publish OpenAPI documentation and stable API schemas.
 - Reuse existing CLI service-layer behavior for API operations.
 - Add token-based authentication and audit API mutations.
+
+## [1.3.0] - 2026-07-07
+
+### Added
+
+- Added schema v2 named SSH keys with name, fingerprint, comment, disabled
+  state, timestamps, expiry, source, metadata, rotation, rename, import, and
+  per-key enable/disable workflows.
+- Added `sftpwarden init --user-schema 1|2`; new projects default to schema v2,
+  while quick-start/simple deployments can choose schema v1 explicitly.
+- Added command-first user/key commands under `sftpwarden user ...` and
+  `sftpwarden user key ...`.
+- Added provider schema inspection and explicit migration commands:
+  `provider schema show`, `provider schema migrate`, and `provider keys migrate`.
+
+### Changed
+
+- Schema v1 `public_keys` remains a supported simple user format, not a
+  deprecated legacy mode.
+- Runtime refresh writes only active keys to `authorized_keys`; disabled and
+  expired named keys are excluded.
+- YAML, CSV, SQLite, MySQL, MariaDB, PostgreSQL, and MongoDB providers can read
+  and write schema v1 or schema v2 data.
 
 ## [1.2.1] - 2026-06-29
 

@@ -5,3 +5,4 @@ provider:
   type: mariadb
   dsn: "${SFTPWARDEN_MARIADB_DSN}"
   table: sftp_users
+  user_schema: 2

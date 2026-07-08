@@ -8,6 +8,7 @@ from sftpwarden.config import ProviderType
 from sftpwarden.providers.base import BaseProvider
 from sftpwarden.providers.registry import register_provider
 from sftpwarden.users.models import ProviderUsers, SFTPUser
+from sftpwarden.users.schemas import detect_mapping_schema, user_schema
 from sftpwarden.utils.errors import ProviderError
 
 
@@ -38,7 +39,30 @@ class MongoDBProvider(BaseProvider):
         """
         collection = self._collection()
         documents = list(collection.find({}, {"_id": False}).sort("username", 1))
-        return ProviderUsers(users=[user_from_mongodb_document(document) for document in documents])
+        user_documents = [
+            document
+            for document in documents
+            if document.get("username") != "__sftpwarden_schema__"
+        ]
+        document_versions = [
+            int(document["schema_version"])
+            for document in user_documents
+            if document.get("schema_version") is not None
+        ]
+        normalized_documents = [
+            mongodb_document_to_user_mapping(document) for document in user_documents
+        ]
+        if document_versions:
+            schema_version = max(document_versions)
+        elif normalized_documents:
+            schema_version = detect_mapping_schema(
+                {"users": normalized_documents}, fallback_schema=1
+            ).version
+        else:
+            schema_version = self.config.user_schema
+        return user_schema(schema_version).users_from_mapping(
+            {"schema_version": schema_version, "users": normalized_documents}
+        )
 
     def write(self, users: ProviderUsers) -> None:
         """Replace MongoDB users with a desired user set.
@@ -52,7 +76,7 @@ class MongoDBProvider(BaseProvider):
         self.ensure_collection()
         usernames = [user.username for user in users.users]
         for user in users.users:
-            document = mongodb_document_from_user(user)
+            document = mongodb_document_from_user(user, schema_version=users.schema_version)
             collection.replace_one({"_id": user.username}, document, upsert=True)
         if usernames:
             collection.delete_many({"_id": {"$nin": usernames}})
@@ -71,7 +95,7 @@ class MongoDBProvider(BaseProvider):
         self.ensure_collection()
         collection.replace_one(
             {"_id": user.username},
-            mongodb_document_from_user(user),
+            mongodb_document_from_user(user, schema_version=self.config.user_schema),
             upsert=True,
         )
 
@@ -149,7 +173,7 @@ def mongodb_database_name(dsn: str) -> str:
     return database
 
 
-def mongodb_document_from_user(user: SFTPUser) -> dict[str, Any]:
+def mongodb_document_from_user(user: SFTPUser, *, schema_version: int = 1) -> dict[str, Any]:
     """Convert a user to a MongoDB document.
 
     Parameters
@@ -162,7 +186,10 @@ def mongodb_document_from_user(user: SFTPUser) -> dict[str, Any]:
     dict[str, Any]
         MongoDB document.
     """
-    document = user.model_dump(mode="json", exclude_none=True)
+    schema = user_schema(schema_version)
+    document = schema.user_to_mapping(user)
+    if schema.include_schema_version:
+        document["schema_version"] = schema.version
     document["_id"] = user.username
     document["username"] = user.username
     return document
@@ -181,6 +208,12 @@ def user_from_mongodb_document(document: dict[str, Any]) -> SFTPUser:
     SFTPUser
         Validated SFTP user.
     """
+    return SFTPUser.model_validate(mongodb_document_to_user_mapping(document))
+
+
+def mongodb_document_to_user_mapping(document: dict[str, Any]) -> dict[str, Any]:
+    """Return a provider user mapping from one MongoDB document."""
     data = dict(document)
     data.pop("_id", None)
-    return SFTPUser.model_validate(data)
+    data.pop("schema_version", None)
+    return data

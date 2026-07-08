@@ -203,7 +203,7 @@ def has_initialized_context(*, cwd: Path | None = None) -> bool:
         ``True`` when the registry has contexts or the working directory contains
         ``sftpwarden.yaml``.
     """
-    registry = load_registry()
+    registry = _registry_after_pruning_missing_contexts()
     if registry.contexts:
         return True
     working_dir = cwd or Path.cwd()
@@ -438,7 +438,7 @@ def resolve_context(
             provider=config.provider.type,
         )
     requested = context_name or os.environ.get("SFTPWARDEN_CONTEXT")
-    registry = load_registry()
+    registry = _registry_after_pruning_missing_contexts()
     if requested:
         try:
             if reconcile_config:
@@ -467,6 +467,12 @@ def resolve_context(
         "No active SFTPWarden context could be resolved.",
         suggestion="Run `sftpwarden context use <name>` or pass --context.",
     )
+
+
+def _registry_after_pruning_missing_contexts() -> ContextRegistry:
+    from sftpwarden.services.context_cleanup import prune_missing_contexts
+
+    return prune_missing_contexts().registry
 
 
 def local_context(

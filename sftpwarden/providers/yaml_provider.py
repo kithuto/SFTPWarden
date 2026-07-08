@@ -7,6 +7,12 @@ from sftpwarden.config import ProviderType
 from sftpwarden.providers.base import FileProvider
 from sftpwarden.providers.registry import register_provider
 from sftpwarden.users.models import ProviderUsers
+from sftpwarden.users.schemas import (
+    UserSchemaVersion,
+    user_schema,
+    users_from_mapping,
+    users_to_mapping,
+)
 from sftpwarden.utils.errors import ProviderError
 from sftpwarden.utils.files import write_private_text
 
@@ -28,6 +34,11 @@ class YAMLProvider(FileProvider):
         """
         return yaml.safe_dump({"users": []}, sort_keys=False)
 
+    @classmethod
+    def empty_text_for_schema(cls, schema_version: UserSchemaVersion) -> str:
+        """Return an empty YAML provider document for a schema version."""
+        return yaml.safe_dump(user_schema(schema_version).empty_mapping(), sort_keys=False)
+
     def read(self) -> ProviderUsers:
         """Read users from a YAML provider file.
 
@@ -44,7 +55,7 @@ class YAMLProvider(FileProvider):
         path = self.ensure_exists()
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {"users": []}
         try:
-            return ProviderUsers.model_validate(data)
+            return users_from_mapping(data, fallback_schema=1)
         except ValidationError as exc:
             raise ProviderError(f"Invalid YAML provider file: {path}: {exc}") from exc
 
@@ -57,5 +68,5 @@ class YAMLProvider(FileProvider):
             Users to persist.
         """
         path = self.ensure_parent_dir()
-        data = {"users": [user.model_dump(mode="json", exclude_none=True) for user in users.users]}
+        data = users_to_mapping(users)
         write_private_text(path, yaml.safe_dump(data, sort_keys=False))

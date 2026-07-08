@@ -4,4 +4,4 @@ project:
 provider:
   type: csv
   path: /etc/sftpwarden/users.csv
-
+  user_schema: 2

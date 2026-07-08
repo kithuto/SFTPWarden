@@ -458,7 +458,7 @@ def _provider_bootstrap_text(
         if provider_path.exists():
             provider_from_config(project_root, config).read()
             return provider_path.read_text(encoding="utf-8")
-    return empty_provider_text(config.provider.type)
+    return empty_provider_text(config.provider.type, user_schema=config.provider.user_schema)
 
 
 def _provider_bootstrap_command(

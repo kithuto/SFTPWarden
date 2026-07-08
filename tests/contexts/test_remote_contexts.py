@@ -322,6 +322,8 @@ def test_refresh_all_resolves_registered_contexts(
 ) -> None:
     home = tmp_path / "home"
     monkeypatch.setenv("SFTPWARDEN_HOME", str(home))
+    (tmp_path / "one").mkdir()
+    (tmp_path / "two").mkdir()
     one = local_context("one", tmp_path / "one", ProviderType.YAML)
     two = local_context("two", tmp_path / "two", ProviderType.YAML)
     save_registry(ContextRegistry(default="one", contexts={"one": one, "two": two}))
@@ -336,6 +338,7 @@ def test_refresh_json_reports_dry_run_results(
 ) -> None:
     home = tmp_path / "home"
     monkeypatch.setenv("SFTPWARDEN_HOME", str(home))
+    (tmp_path / "dev-project").mkdir()
     context = local_context("dev", tmp_path / "dev-project", ProviderType.YAML)
     save_registry(ContextRegistry(default="dev", contexts={"dev": context}))
 

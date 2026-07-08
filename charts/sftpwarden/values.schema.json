@@ -9,7 +9,7 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 1,
-          "description": "Reserved for future multi-node support. SFTPWarden v1.2 supports replicas: 1 only."
+          "description": "Reserved for future multi-node support. SFTPWarden v1.3 supports replicas: 1 only."
         }
       }
     },

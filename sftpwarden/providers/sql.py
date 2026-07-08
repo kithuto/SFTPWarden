@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
-from sftpwarden.users.models import ProviderUsers, SFTPUser
+from sftpwarden.users.models import ProviderUsers, SFTPUser, SFTPUserKey
+from sftpwarden.users.schemas import NAMED_KEYS, user_schema
 from sftpwarden.utils.errors import ProviderError
 
 DEFAULT_SQL_USERS_TABLE = "sftp_users"
@@ -31,6 +33,34 @@ SQL_CREATE_USER_COLUMNS = (
     "upload_dir varchar(255) not null default 'upload'",
     "comment text",
     "disabled boolean not null default false",
+)
+SQL_USER_KEY_COLUMNS = (
+    "username",
+    "name",
+    "public_key",
+    "fingerprint",
+    "comment",
+    "disabled",
+    "created_at",
+    "updated_at",
+    "expires_at",
+    "source",
+    "metadata",
+)
+SQL_CREATE_USER_KEY_COLUMNS = (
+    "username varchar(32) not null",
+    "name varchar(64) not null",
+    "public_key text not null",
+    "fingerprint varchar(128) not null",
+    "comment text",
+    "disabled boolean not null default false",
+    "created_at text",
+    "updated_at text",
+    "expires_at text",
+    "source text",
+    "metadata text",
+    "primary key (username, name)",
+    "unique (fingerprint)",
 )
 
 
@@ -93,6 +123,30 @@ def sql_select_users_query(table: str = DEFAULT_SQL_USERS_TABLE) -> str:
     return f"select {', '.join(SQL_USER_COLUMNS)} from {table} order by username"  # noqa: S608
 
 
+def sql_user_keys_table(table: str = DEFAULT_SQL_USERS_TABLE) -> str:
+    """Return the schema v2 key table name for a users table."""
+    validate_sql_table(table)
+    if "." in table:
+        schema_name, table_name = table.rsplit(".", 1)
+        keys_name = (
+            "sftp_user_keys" if table_name == DEFAULT_SQL_USERS_TABLE else f"{table_name}_keys"
+        )
+        key_table = f"{schema_name}.{keys_name}"
+    else:
+        key_table = "sftp_user_keys" if table == DEFAULT_SQL_USERS_TABLE else f"{table}_keys"
+    validate_sql_table(key_table)
+    return key_table
+
+
+def sql_select_user_keys_query(table: str = DEFAULT_SQL_USERS_TABLE) -> str:
+    """Build the default schema v2 SQL user keys query."""
+    key_table = sql_user_keys_table(table)
+    return (
+        f"select {', '.join(SQL_USER_KEY_COLUMNS)} from {key_table} "  # noqa: S608
+        "order by username, name"
+    )
+
+
 def sql_check_table_query(table: str = DEFAULT_SQL_USERS_TABLE) -> str:
     """Build a lightweight SQL users table existence query.
 
@@ -128,7 +182,35 @@ def create_sql_users_table_statement(table: str = DEFAULT_SQL_USERS_TABLE) -> st
     return f"create table {table} ({columns})"  # noqa: S608
 
 
-def users_from_sql_rows(rows: list[dict[str, Any]]) -> ProviderUsers:
+def create_sql_user_keys_table_statement(table: str = DEFAULT_SQL_USERS_TABLE) -> str:
+    """Build the SQL key table creation statement for schema v2."""
+    key_table = sql_user_keys_table(table)
+    columns = ", ".join(SQL_CREATE_USER_KEY_COLUMNS)
+    return f"create table {key_table} ({columns})"  # noqa: S608
+
+
+def create_sql_user_keys_table_if_missing_statement(
+    table: str = DEFAULT_SQL_USERS_TABLE,
+) -> str:
+    """Build an idempotent SQL key table creation statement for schema migrations."""
+    return create_sql_user_keys_table_statement(table).replace(
+        "create table ",
+        "create table if not exists ",
+        1,
+    )
+
+
+def schema_uses_key_table(schema_version: int) -> bool:
+    """Return whether a user schema stores named keys in a key table."""
+    return user_schema(schema_version).supports(NAMED_KEYS)
+
+
+def users_from_sql_rows(
+    rows: list[dict[str, Any]],
+    *,
+    key_rows: list[dict[str, Any]] | None = None,
+    schema_version: int = 1,
+) -> ProviderUsers:
     """Convert SQL result rows into provider users.
 
     Parameters
@@ -141,6 +223,34 @@ def users_from_sql_rows(rows: list[dict[str, Any]]) -> ProviderUsers:
     ProviderUsers
         Validated provider users.
     """
+    keys_by_username: dict[str, list[SFTPUserKey]] = {}
+    uses_key_table = schema_uses_key_table(schema_version)
+    if uses_key_table:
+        for row in key_rows or []:
+            if "name" not in row or "public_key" not in row:
+                continue
+            metadata_value = row.get("metadata") or "{}"
+            try:
+                metadata = (
+                    json.loads(metadata_value)
+                    if isinstance(metadata_value, str)
+                    else metadata_value
+                )
+            except json.JSONDecodeError:
+                metadata = {}
+            key = SFTPUserKey(
+                name=str(row["name"]),
+                public_key=str(row["public_key"]),
+                fingerprint=row.get("fingerprint") or None,
+                comment=row.get("comment") or None,
+                disabled=parse_sql_bool(row.get("disabled", False)),
+                created_at=row.get("created_at") or None,
+                updated_at=row.get("updated_at") or None,
+                expires_at=row.get("expires_at") or None,
+                source=row.get("source") or None,
+                metadata=metadata if isinstance(metadata, dict) else {},
+            )
+            keys_by_username.setdefault(str(row["username"]), []).append(key)
     users: list[SFTPUser] = []
     for row in rows:
         public_keys_value = row.get("public_keys") or ""
@@ -151,7 +261,8 @@ def users_from_sql_rows(rows: list[dict[str, Any]]) -> ProviderUsers:
         users.append(
             SFTPUser(
                 username=str(row["username"]),
-                public_keys=public_keys,
+                public_keys=[] if uses_key_table else public_keys,
+                keys=keys_by_username.get(str(row["username"]), []),
                 password_hash=row.get("password_hash") or None,
                 uid=int(row["uid"]) if row.get("uid") is not None else None,
                 gid=int(row["gid"]) if row.get("gid") is not None else None,
@@ -160,7 +271,7 @@ def users_from_sql_rows(rows: list[dict[str, Any]]) -> ProviderUsers:
                 disabled=parse_sql_bool(row.get("disabled", False)),
             )
         )
-    return ProviderUsers(users=users)
+    return ProviderUsers(schema_version=user_schema(schema_version).version, users=users)
 
 
 def parse_sql_bool(value: Any) -> bool:
@@ -206,6 +317,23 @@ def sql_user_row(user: SFTPUser) -> tuple[Any, ...]:
     )
 
 
+def sql_user_key_row(username: str, key: SFTPUserKey) -> tuple[Any, ...]:
+    """Convert a key to SQL parameter values."""
+    return (
+        username,
+        key.name,
+        key.public_key,
+        key.fingerprint,
+        key.comment,
+        key.disabled,
+        key.created_at.isoformat() if key.created_at else None,
+        key.updated_at.isoformat() if key.updated_at else None,
+        key.expires_at.isoformat() if key.expires_at else None,
+        key.source,
+        json.dumps(key.metadata, sort_keys=True) if key.metadata else None,
+    )
+
+
 def execute_validated_sql(cursor: Any, statement: str, params: Any | None = None) -> Any:
     """Execute a SQL statement that has already passed local validation.
 
@@ -229,7 +357,14 @@ def execute_validated_sql(cursor: Any, statement: str, params: Any | None = None
     return cursor.execute(statement, params)
 
 
-def upsert_sql_users(cursor: Any, table: str, users: ProviderUsers, *, dialect: str) -> None:
+def upsert_sql_users(
+    cursor: Any,
+    table: str,
+    users: ProviderUsers,
+    *,
+    dialect: str,
+    schema_version: int = 1,
+) -> None:
     """Upsert users with a SQL dialect-specific statement.
 
     Parameters
@@ -244,7 +379,10 @@ def upsert_sql_users(cursor: Any, table: str, users: ProviderUsers, *, dialect: 
         SQL dialect, either ``mysql`` or ``postgres``.
     """
     validate_sql_table(table)
+    uses_key_table = schema_uses_key_table(schema_version)
     if not users.users:
+        if uses_key_table:
+            replace_sql_user_keys(cursor, table, users, dialect=dialect)
         return
     columns = ", ".join(SQL_USER_COLUMNS)
     placeholders = ", ".join(["%s"] * len(SQL_USER_COLUMNS))
@@ -267,9 +405,56 @@ def upsert_sql_users(cursor: Any, table: str, users: ProviderUsers, *, dialect: 
     else:
         raise ProviderError(f"Unsupported SQL dialect: {dialect}")
     cursor.executemany(statement, [sql_user_row(user) for user in users.users])
+    if uses_key_table:
+        replace_sql_user_keys(cursor, table, users, dialect=dialect)
 
 
-def upsert_sql_user(cursor: Any, table: str, user: SFTPUser, *, dialect: str) -> None:
+def replace_sql_user_keys(cursor: Any, table: str, users: ProviderUsers, *, dialect: str) -> None:
+    """Replace schema v2 key rows for a complete desired user set."""
+    key_table = sql_user_keys_table(table)
+    execute_validated_sql(cursor, f"delete from {key_table}")  # noqa: S608
+    key_rows = [
+        sql_user_key_row(user.username, key) for user in users.users for key in user.key_objects()
+    ]
+    if not key_rows:
+        return
+    columns = ", ".join(SQL_USER_KEY_COLUMNS)
+    placeholders = ", ".join(["%s"] * len(SQL_USER_KEY_COLUMNS))
+    statement = f"insert into {key_table} ({columns}) values ({placeholders})"  # noqa: S608
+    cursor.executemany(statement, key_rows)
+
+
+def replace_sql_user_keys_for_user(
+    cursor: Any,
+    table: str,
+    user: SFTPUser,
+    *,
+    dialect: str,
+) -> None:
+    """Replace schema v2 key rows for one user."""
+    key_table = sql_user_keys_table(table)
+    execute_validated_sql(
+        cursor,
+        f"delete from {key_table} where username = %s",  # noqa: S608
+        [user.username],
+    )
+    key_rows = [sql_user_key_row(user.username, key) for key in user.key_objects()]
+    if not key_rows:
+        return
+    columns = ", ".join(SQL_USER_KEY_COLUMNS)
+    placeholders = ", ".join(["%s"] * len(SQL_USER_KEY_COLUMNS))
+    statement = f"insert into {key_table} ({columns}) values ({placeholders})"  # noqa: S608
+    cursor.executemany(statement, key_rows)
+
+
+def upsert_sql_user(
+    cursor: Any,
+    table: str,
+    user: SFTPUser,
+    *,
+    dialect: str,
+    schema_version: int = 1,
+) -> None:
     """Upsert a single user.
 
     Parameters
@@ -283,10 +468,22 @@ def upsert_sql_user(cursor: Any, table: str, user: SFTPUser, *, dialect: str) ->
     dialect
         SQL dialect, either ``mysql`` or ``postgres``.
     """
-    upsert_sql_users(cursor, table, ProviderUsers(users=[user]), dialect=dialect)
+    upsert_sql_users(
+        cursor,
+        table,
+        ProviderUsers(schema_version=schema_version, users=[user]),
+        dialect=dialect,
+        schema_version=schema_version,
+    )
 
 
-def delete_sql_user(cursor: Any, table: str, username: str) -> None:
+def delete_sql_user(
+    cursor: Any,
+    table: str,
+    username: str,
+    *,
+    schema_version: int = 1,
+) -> None:
     """Delete a single user from a SQL provider table.
 
     Parameters
@@ -299,6 +496,13 @@ def delete_sql_user(cursor: Any, table: str, username: str) -> None:
         Username to delete.
     """
     validate_sql_table(table)
+    if schema_uses_key_table(schema_version):
+        key_table = sql_user_keys_table(table)
+        execute_validated_sql(
+            cursor,
+            f"delete from {key_table} where username = %s",  # noqa: S608
+            [username],
+        )
     execute_validated_sql(cursor, f"delete from {table} where username = %s", [username])  # noqa: S608
     if getattr(cursor, "rowcount", 1) == 0:
         raise ProviderError(f"Unknown user: {username}", suggestion="Run `sftpwarden users`.")

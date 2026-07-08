@@ -71,5 +71,9 @@ runtime reads those providers directly and can reconcile them through its sync
 loop or an explicit refresh. YAML/CSV are best for GitOps-style deployments, and
 SQLite is only for single-pod lab use.
 
-SFTPWarden v1.2 supports `replicas: 1` only. Higher replica counts are reserved
+The checked-out PostgreSQL values example sets `provider.user_schema: 2` in the
+embedded `sftpwardenConfig`. If you create SQL tables manually, include the
+`sftp_user_keys` table from the provider examples.
+
+SFTPWarden v1.3 supports `replicas: 1` only. Higher replica counts are reserved
 for future multi-node work and are rejected by the CLI and Helm chart schema.

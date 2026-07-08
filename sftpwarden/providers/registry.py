@@ -62,6 +62,7 @@ def build_provider(
     query: str | None = None,
     table: str = "sftp_users",
     collection: str = "sftp_users",
+    user_schema: int = 2,
 ) -> BaseProvider:
     """Build a provider instance from explicit provider settings.
 
@@ -79,6 +80,8 @@ def build_provider(
         SQL table name.
     collection
         MongoDB collection name.
+    user_schema
+        Preferred provider user schema.
 
     Returns
     -------
@@ -92,6 +95,7 @@ def build_provider(
         query=query,
         table=table,
         collection=collection,
+        user_schema=user_schema,  # type: ignore[arg-type]
     )
     provider_path = Path(path) if path is not None else None
     return provider_class(normalized)(provider_config, path=provider_path)

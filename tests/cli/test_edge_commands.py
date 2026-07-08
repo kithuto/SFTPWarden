@@ -60,6 +60,11 @@ def test_helm_upgrade_reports_missing_upgrade_command(monkeypatch: pytest.Monkey
     entry = local_context("dev", Path("project"), ProviderType.YAML)
     config = default_project_config("dev", deploy_target=DeployTarget.KUBERNETES)
     monkeypatch.setattr(helm_commands, "_load_context_config", lambda *_args: (entry, config))
+    monkeypatch.setattr(
+        helm_commands,
+        "apply_provider_schema_before_deploy",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(helm_commands, "helm_deployment_plan", lambda *_args: EmptyPlan())
 
     result = CliRunner().invoke(app, ["helm", "upgrade"])

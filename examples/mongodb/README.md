@@ -1,7 +1,8 @@
 # MongoDB Example
 
 This example shows the MongoDB provider. MongoDB stores one document per user in
-the configured collection. The document identity is `_id = username`.
+the configured collection. The document identity is `_id = username`, and schema
+v2 documents embed named keys in a `keys` array.
 
 Create a new MongoDB-backed project:
 
@@ -15,7 +16,7 @@ sftpwarden init mongodb-example \
   --collection sftp_users \
   --create-table \
   --yes
-sftpwarden user add alice --no-refresh
+sftpwarden user create alice --no-refresh
 sftpwarden deploy --dry-run
 sftpwarden deploy
 ```

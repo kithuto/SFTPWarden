@@ -31,7 +31,6 @@ from sftpwarden.contexts import (
     local_context,
     register_context,
     remote_context,
-    remove_context,
     require_initialized_context,
     resolve_context,
     save_registry,
@@ -39,7 +38,8 @@ from sftpwarden.contexts import (
 )
 from sftpwarden.remote.checks import verify_remote_runtime_requirements
 from sftpwarden.services.cli_workflows import install_context_watcher
-from sftpwarden.utils.console import console, print_success
+from sftpwarden.services.context_cleanup import remove_context_with_cleanup
+from sftpwarden.utils.console import console, print_info, print_success
 from sftpwarden.utils.constants import CONFIG_FILENAME
 from sftpwarden.utils.dotted import format_value, get_dotted, parse_cli_value, set_dotted
 from sftpwarden.utils.errors import SFTPWardenError
@@ -96,7 +96,7 @@ def context_value(
     value = args[1] if len(args) == 2 else None
     try:
         entry = resolve_context(context_name=context)
-        data = entry.model_dump(mode="json", exclude_none=True)
+        data = entry.model_dump(mode="json")
         normalized_field = normalize_context_field(field)
         if value is None:
             console.print(format_value(get_dotted(data, normalized_field)))
@@ -215,7 +215,7 @@ def update_context_field(
     elif field == "remote.remote_root":
         entry = update_remote_root(entry, value, yes=yes)
     else:
-        data = entry.model_dump(mode="json", exclude_none=True)
+        data = entry.model_dump(mode="json")
         set_dotted(data, field, parse_cli_value(value))
         entry = type(entry).model_validate(data)
     registry.contexts[entry.name] = entry
@@ -419,7 +419,7 @@ def register_context_field_command(command_name: str, field: str) -> None:
     ) -> None:
         try:
             entry = resolve_context(context_name=context)
-            data = entry.model_dump(mode="json", exclude_none=True)
+            data = entry.model_dump(mode="json")
             if value is None:
                 console.print(format_value(get_dotted(data, field)))
                 return
@@ -556,8 +556,18 @@ def context_show(name: str | None = None) -> None:
 
 
 @context_app.command("remove")
-def context_remove(name: str, yes: Annotated[bool, typer.Option("--yes", "-y")] = False) -> None:
-    """Remove a context from the registry.
+def context_remove(
+    name: str,
+    yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
+    delete_remote: Annotated[
+        bool,
+        typer.Option(
+            "--delete-remote",
+            help="Also remove remote runtime and project files for remote contexts.",
+        ),
+    ] = False,
+) -> None:
+    """Remove a context and clean project-owned local resources.
 
     Parameters
     ----------
@@ -565,13 +575,42 @@ def context_remove(name: str, yes: Annotated[bool, typer.Option("--yes", "-y")] 
         Context name to remove.
     yes
         Whether to skip the confirmation prompt.
+    delete_remote
+        Whether remote runtime and project files should also be removed.
     """
     try:
-        if not yes and not Confirm.ask(f"Remove context {name} from registry?", default=False):
+        registry = load_registry()
+        if name not in registry.contexts:
+            raise SFTPWardenError(
+                f"Unknown context: {name}", suggestion="Run `sftpwarden context ls`."
+            )
+        entry = registry.contexts[name]
+        if not yes and not Confirm.ask(
+            f"Remove context {name} and clean local project resources?",
+            default=False,
+        ):
             raise typer.Exit(1)
-        registry = remove_context(name)
-        handle_watcher_without_local_sync_targets(registry, yes=yes)
+        remote_cleanup = delete_remote
+        if entry.remote and not delete_remote and not yes:
+            remote_cleanup = Confirm.ask(
+                (
+                    "Remove remote runtime and project files at "
+                    f"{entry.remote.user}@{entry.remote.host}:{entry.remote.remote_root}?"
+                ),
+                default=False,
+            )
+        result = remove_context_with_cleanup(name, delete_remote=remote_cleanup)
         print_success(f"Removed context [bold]{name}[/bold].")
+        if result.removed_local_root:
+            print_info(f"Removed local project root [bold]{result.removed_local_root}[/bold].")
+        for message in [
+            *result.local_runtime_messages,
+            *result.remote_messages,
+            *([result.watcher_message] if result.watcher_message else []),
+        ]:
+            print_info(message)
+        if entry.remote and not remote_cleanup:
+            print_info("Remote project files were left untouched.")
     except SFTPWardenError as exc:
         handle_error(exc)
 

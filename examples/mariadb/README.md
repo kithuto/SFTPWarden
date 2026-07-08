@@ -1,8 +1,8 @@
 # MariaDB Example
 
 This example shows the MariaDB provider. MariaDB uses the same PyMySQL
-dependency as the MySQL provider. The included `schema.sql` mirrors the default
-table expected by SFTPWarden.
+dependency as the MySQL provider. The included `schema.sql` mirrors the schema
+v2 tables expected by SFTPWarden, including `sftp_user_keys`.
 
 Create a new MariaDB-backed project:
 
@@ -15,7 +15,7 @@ sftpwarden init mariadb-example \
   --dsn '${SFTPWARDEN_MARIADB_DSN}' \
   --create-table \
   --yes
-sftpwarden user add alice --no-refresh
+sftpwarden user create alice --no-refresh
 sftpwarden deploy --dry-run
 sftpwarden deploy
 ```

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -10,8 +11,8 @@ from pydantic import ValidationError
 import sftpwarden.utils.files as file_utils
 from sftpwarden.config import ProviderConfig, ProviderType, default_project_config
 from sftpwarden.providers import MariaDBProvider, MongoDBProvider, SQLiteProvider, provider_class
-from sftpwarden.providers.mongodb_provider import mongodb_database_name
-from sftpwarden.users import ProviderUsers, SFTPUser
+from sftpwarden.providers.mongodb_provider import mongodb_database_name, user_from_mongodb_document
+from sftpwarden.users import ProviderUsers, SFTPUser, SFTPUserKey
 from sftpwarden.utils.errors import ProviderError
 
 
@@ -57,6 +58,78 @@ def test_sqlite_provider_round_trip_and_mutations(
         provider.remove_user("missing")
 
 
+def test_sqlite_provider_table_exists_requires_key_table_for_schema_v2(tmp_path: Path) -> None:
+    """SQLite schema v2 storage is incomplete without the keys table."""
+    db_path = tmp_path / "users.sqlite"
+    provider = SQLiteProvider(
+        config=ProviderConfig(
+            type=ProviderType.SQLITE,
+            path="/etc/sftpwarden/users.sqlite",
+            user_schema=2,
+        ),
+        path=db_path,
+    )
+
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("create table sftp_users (username text primary key)")
+
+    assert not provider.table_exists()
+
+    provider.create_table()
+
+    assert provider.table_exists()
+
+
+def test_sqlite_provider_schema_v2_mutations_manage_key_table(tmp_path: Path) -> None:
+    """SQLite schema v2 writes, detects, and removes named key rows."""
+    db_path = tmp_path / "users.sqlite"
+    provider = SQLiteProvider(
+        config=ProviderConfig(
+            type=ProviderType.SQLITE,
+            path="/etc/sftpwarden/users.sqlite",
+            user_schema=2,
+        ),
+        path=db_path,
+    )
+    user = SFTPUser(
+        username="alice",
+        keys=[
+            SFTPUserKey(
+                name="prod",
+                public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests",
+            )
+        ],
+    )
+
+    assert not provider.table_exists()
+    provider.ensure_schema_storage(2)
+    assert provider.table_exists()
+    provider.write(ProviderUsers(schema_version=2, users=[user]))
+
+    with sqlite3.connect(db_path) as connection:
+        count = connection.execute("select count(*) from sftp_user_keys").fetchone()[0]
+
+    assert count == 1
+
+    provider.remove_user("alice")
+
+    with sqlite3.connect(db_path) as connection:
+        count = connection.execute("select count(*) from sftp_user_keys").fetchone()[0]
+
+    assert count == 0
+
+
+def test_sqlite_provider_table_exists_false_when_file_has_no_user_table(tmp_path: Path) -> None:
+    db_path = tmp_path / "users.sqlite"
+    db_path.touch()
+    provider = SQLiteProvider(
+        config=ProviderConfig(type=ProviderType.SQLITE, path="/etc/sftpwarden/users.sqlite"),
+        path=db_path,
+    )
+
+    assert not provider.table_exists()
+
+
 def test_mongodb_provider_round_trip_and_delete_all(
     install_fake_pymongo: Callable,
     user_factory: Callable[..., SFTPUser],
@@ -88,6 +161,62 @@ def test_mongodb_provider_round_trip_and_delete_all(
 
     provider.write(ProviderUsers(users=[]))
     assert provider.read().users == []
+
+
+def test_mongodb_provider_preserves_document_schema_version_for_password_only_v2(
+    install_fake_pymongo: Callable,
+    test_password_hash: str,
+) -> None:
+    """MongoDB keeps schema v2 even before a user has named keys."""
+    install_fake_pymongo()
+    provider = MongoDBProvider(
+        config=ProviderConfig(
+            type=ProviderType.MONGODB,
+            dsn="mongodb://localhost:27017/sftpwarden",
+            collection="sftp_users",
+            user_schema=2,
+        )
+    )
+    user = SFTPUser(username="alice", password_hash=test_password_hash)
+
+    provider.create_table()
+    provider.upsert_user(user)
+    loaded = provider.read()
+
+    assert loaded.schema_version == 2
+    assert loaded.users[0].username == "alice"
+    assert loaded.users[0].keys == []
+
+    provider.upsert_user(
+        SFTPUser(
+            username="alice",
+            keys=[
+                SFTPUserKey(
+                    name="prod",
+                    public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests",
+                )
+            ],
+        )
+    )
+
+    loaded_with_key = provider.read()
+
+    assert loaded_with_key.schema_version == 2
+    assert loaded_with_key.users[0].keys[0].name == "prod"
+
+
+def test_mongodb_document_to_user_validates_provider_document(test_password_hash: str) -> None:
+    user = user_from_mongodb_document(
+        {
+            "_id": "alice",
+            "schema_version": 2,
+            "username": "alice",
+            "password_hash": test_password_hash,
+        }
+    )
+
+    assert user.username == "alice"
+    assert user.password_hash == test_password_hash
 
 
 def test_mongodb_dsn_and_dependency_errors(

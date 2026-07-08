@@ -38,10 +38,6 @@
   width: 100%;
 }
 
-.rst-content .toctree-wrapper.compound {
-  display: none;
-}
-
 .doc-search-button {
   width: 100%;
   min-height: 38px;

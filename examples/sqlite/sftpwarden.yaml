@@ -4,3 +4,4 @@ project:
 provider:
   type: sqlite
   path: /etc/sftpwarden/users.sqlite
+  user_schema: 2

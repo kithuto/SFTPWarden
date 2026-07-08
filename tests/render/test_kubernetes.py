@@ -34,7 +34,9 @@ from sftpwarden.contexts import (
     ContextEntry,
     ContextRegistry,
     ContextType,
+    load_registry,
     local_context,
+    remote_context,
     save_registry,
 )
 from sftpwarden.remote.deploy import DeployPlan
@@ -102,7 +104,7 @@ def test_kubernetes_replicas_are_reserved_for_future_multi_node() -> None:
 
 
 def test_kubernetes_manifest_rendering_includes_core_resources() -> None:
-    """Render the Kubernetes resources required by the v1.2 operating model."""
+    """Render the Kubernetes resources required by the v1.3 operating model."""
     config = default_project_config("prod")
     config.deploy.target = DeployTarget.KUBERNETES
     config.kubernetes.mode = KubernetesMode.MANIFESTS
@@ -234,7 +236,7 @@ def test_helm_values_model_reserves_runtime_replicas() -> None:
     assert values["persistence"]["data"]["size"] == "50Gi"
     assert values["probes"]["startup"]["failureThreshold"] == 30
     assert values["probes"]["liveness"]["periodSeconds"] == 45
-    assert values["provider"]["bootstrapContent"] == "users: []\n"
+    assert values["provider"]["bootstrapContent"] == "schema_version: 2\nusers: []\n"
     assert "sftpwardenConfig" in values
 
     external = default_project_config(
@@ -747,7 +749,7 @@ def test_chart_schema_limits_runtime_replicas() -> None:
 
 
 def test_example_values_are_valid_yaml() -> None:
-    """Keep Kubernetes example values valid and aligned with v1.2 defaults."""
+    """Keep Kubernetes example values valid and aligned with v1.3 defaults."""
     values = yaml.safe_load(Path("examples/kubernetes/values-postgresql.yaml").read_text())
 
     assert values["runtime"]["replicas"] == 1
@@ -957,6 +959,39 @@ def test_deploy_services_cover_remaining_edges(
         deploy_module._context_config(ContextEntry(name="empty", type=ContextType.LOCAL))
 
 
+def test_apply_deployment_plan_checks_remote_only_root_before_running_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    entry = remote_context(
+        name="archive",
+        provider=ProviderType.YAML,
+        remote_url="deploy@example.com:/opt/sftpwarden",
+        local_root=None,
+        remote_root="~/sftpwarden",
+        remote_only=True,
+        ssh_key=None,
+        critical=True,
+    )
+    save_registry(ContextRegistry(default="archive", contexts={"archive": entry}))
+    calls: list[list[str]] = []
+
+    def runner(command: list[str], *, cwd: str | None = None) -> CommandResult:
+        calls.append(command)
+        return CommandResult(command, 0, "ok", "")
+
+    assert apply_deployment_plan(entry, runner=runner) == "Deployed archive with Docker Compose."
+    assert "if [ -d /opt/sftpwarden ]" in calls[0][-1]
+    assert any("docker compose -f docker-compose.yml up -d" in command[-1] for command in calls)
+
+    def missing_runner(command: list[str], *, cwd: str | None = None) -> CommandResult:
+        return CommandResult(command, 42, "", "")
+
+    with pytest.raises(ContextError, match="no longer exists"):
+        apply_deployment_plan(entry, runner=missing_runner)
+    assert load_registry().contexts == {}
+
+
 def test_core_deploy_wrapper_and_kubernetes_change_reasons(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -984,6 +1019,7 @@ def test_core_deploy_wrapper_and_kubernetes_change_reasons(
 
     monkeypatch.setattr(core_commands, "deployment_plan", lambda *_args: plan)
     monkeypatch.setattr(core_commands, "apply_deployment_plan", lambda *_args: "applied")
+    assert core_commands.deploy_context(entry, dry_run=True) == plan.text()
     assert core_commands.deploy_context(entry) == "applied"
 
     helm_reasons = core_commands.deploy_config_change_reasons(entry, config)
@@ -992,11 +1028,17 @@ def test_core_deploy_wrapper_and_kubernetes_change_reasons(
     assert "values.yaml is missing" in helm_reasons
 
     config.kubernetes.mode = KubernetesMode.MANIFESTS
+    write_config(root / "sftpwarden.yaml", config)
     manifest_reasons = core_commands.deploy_config_change_reasons(entry, config)
     assert "kubernetes mode is manifests" in manifest_reasons
     assert "kubernetes.yml is missing" in manifest_reasons
 
     monkeypatch.setattr(core_commands, "resolve_context", lambda **_kwargs: entry)
+    monkeypatch.setattr(
+        core_commands,
+        "apply_provider_schema_before_deploy",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(core_commands, "deployment_plan", lambda *_args: plan)
     monkeypatch.setattr(core_commands, "deploy_context", lambda *_args: "deployed")
     result = CliRunner().invoke(app, ["deploy", "--json"])

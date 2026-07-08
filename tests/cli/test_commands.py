@@ -2,22 +2,61 @@ from __future__ import annotations
 
 import json
 import platform
+import shutil
 from pathlib import Path
 
+import pytest
 import yaml
 from typer.testing import CliRunner
 
+import sftpwarden.cli_commands.context as context_commands
 import sftpwarden.cli_commands.core as core_commands
+import sftpwarden.cli_commands.helm as helm_commands
 import sftpwarden.cli_commands.init as init_commands
+import sftpwarden.cli_commands.kubernetes as kube_commands
+import sftpwarden.cli_commands.provider as provider_commands
 import sftpwarden.cli_commands.runtime as runtime_commands
+import sftpwarden.cli_commands.users as user_commands
 import sftpwarden.services.cli_workflows as cli_workflows
 import sftpwarden.utils.files as file_utils
 from sftpwarden.cli import app
-from sftpwarden.config import load_config, write_config
-from sftpwarden.contexts import load_registry
+from sftpwarden.config import (
+    DeployTarget,
+    KubernetesMode,
+    ProviderType,
+    default_project_config,
+    load_config,
+    write_config,
+)
+from sftpwarden.contexts import (
+    ContextRegistry,
+    load_registry,
+    local_context,
+    remote_context,
+    save_registry,
+)
 from sftpwarden.runtime import ResolvedUser, RuntimeAction, RuntimePlan, RuntimeState
+from sftpwarden.system.commands import CommandResult
 from sftpwarden.users import ProviderUsers, SFTPUser
 from sftpwarden.watcher import WatchTarget
+
+TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests"
+SECOND_TEST_KEY = "ssh-ed25519 ZmFrZS1rZXktMg=="
+THIRD_TEST_KEY = "ssh-ed25519 ZmFrZS1rZXktMw=="
+FOURTH_TEST_KEY = "ssh-ed25519 ZmFrZS1rZXktNA=="
+
+
+def test_version_command_matches_version_flag() -> None:
+    """The friendly version command should match the historical flag."""
+    runner = CliRunner()
+
+    flag_result = runner.invoke(app, ["--version"])
+    command_result = runner.invoke(app, ["version"])
+
+    assert flag_result.exit_code == 0, flag_result.output
+    assert command_result.exit_code == 0, command_result.output
+    assert command_result.output == flag_result.output
+    assert "SFTPWarden" in command_result.output
 
 
 def test_init_named_context_creates_project_name(tmp_path: Path, monkeypatch) -> None:
@@ -40,6 +79,272 @@ def test_init_named_context_creates_project_name(tmp_path: Path, monkeypatch) ->
     assert (root / "docker-compose.yml").exists()
     assert (root / "sftpwarden.yaml", 0o600) in chmods
     assert (root / "users.yaml", 0o600) in chmods
+
+
+def test_init_user_schema_option_and_command_first_key_flow(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    v1_root = tmp_path / "v1-project"
+    v2_root = tmp_path / "v2-project"
+    runner = CliRunner()
+
+    v1_result = runner.invoke(
+        app,
+        ["init", "simple", "--root", str(v1_root), "--user-schema", "1", "--yes"],
+    )
+    v2_result = runner.invoke(app, ["init", "dev", "--root", str(v2_root), "--yes"])
+    create_result = runner.invoke(
+        app,
+        [
+            "user",
+            "create",
+            "alice",
+            "--password-hash",
+            "$6$rounds=500000$saltstring$hashvalue",
+            "--context",
+            "dev",
+            "--no-refresh",
+        ],
+    )
+    key_add_result = runner.invoke(
+        app,
+        [
+            "user",
+            "key",
+            "add",
+            "alice",
+            "prod-ci",
+            "--public-key",
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests",
+            "--context",
+            "dev",
+            "--no-refresh",
+        ],
+    )
+    key_list_result = runner.invoke(
+        app,
+        ["user", "key", "list", "alice", "--context", "dev"],
+    )
+
+    assert v1_result.exit_code == 0, v1_result.output
+    assert v2_result.exit_code == 0, v2_result.output
+    assert load_config(v1_root / "sftpwarden.yaml").provider.user_schema == 1
+    assert load_config(v2_root / "sftpwarden.yaml").provider.user_schema == 2
+    assert "schema_version: 2" in (v2_root / "users.yaml").read_text(encoding="utf-8")
+    assert create_result.exit_code == 0, create_result.output
+    assert key_add_result.exit_code == 0, key_add_result.output
+    assert key_list_result.exit_code == 0, key_list_result.output
+    assert "prod-ci" in key_list_result.output
+
+
+def test_user_and_named_key_cli_lifecycle(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "dev-project"
+    imported_dir = tmp_path / "keys"
+    imported_dir.mkdir()
+    (imported_dir / "laptop.pub").write_text(FOURTH_TEST_KEY, encoding="utf-8")
+    refreshes: list[str] = []
+    monkeypatch.setattr(
+        user_commands,
+        "print_refresh_after_user_change",
+        lambda context: refreshes.append(context.name),
+    )
+    runner = CliRunner()
+
+    init = runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
+    create = runner.invoke(
+        app,
+        [
+            "user",
+            "create",
+            "alice",
+            "--password-hash",
+            "$6$rounds=500000$saltstring$hashvalue",
+            "--context",
+            "dev",
+        ],
+    )
+    disable_user = runner.invoke(app, ["user", "disable", "alice", "--context", "dev"])
+    enable_user = runner.invoke(app, ["user", "enable", "alice", "--context", "dev"])
+    add = runner.invoke(
+        app,
+        [
+            "user",
+            "key",
+            "add",
+            "alice",
+            "prod-ci",
+            "--public-key",
+            TEST_KEY,
+            "--context",
+            "dev",
+        ],
+    )
+    show = runner.invoke(app, ["user", "key", "show", "alice", "prod-ci", "--context", "dev"])
+    disable_key = runner.invoke(
+        app, ["user", "key", "disable", "alice", "prod-ci", "--context", "dev"]
+    )
+    enable_key = runner.invoke(
+        app, ["user", "key", "enable", "alice", "prod-ci", "--context", "dev"]
+    )
+    rename = runner.invoke(
+        app,
+        ["user", "key", "rename", "alice", "prod-ci", "prod-renamed", "--context", "dev"],
+    )
+    rotate = runner.invoke(
+        app,
+        [
+            "user",
+            "key",
+            "rotate",
+            "alice",
+            "prod-renamed",
+            "--public-key",
+            SECOND_TEST_KEY,
+            "--context",
+            "dev",
+        ],
+    )
+    expire = runner.invoke(
+        app,
+        [
+            "user",
+            "key",
+            "expire",
+            "alice",
+            "prod-renamed",
+            "--at",
+            "2027-01-01",
+            "--context",
+            "dev",
+        ],
+    )
+    imported = runner.invoke(
+        app,
+        [
+            "user",
+            "key",
+            "import",
+            "alice",
+            "--from-dir",
+            str(imported_dir),
+            "--context",
+            "dev",
+        ],
+    )
+    removed = runner.invoke(
+        app,
+        ["user", "key", "remove", "alice", "laptop", "--yes", "--context", "dev"],
+    )
+
+    results = [
+        init,
+        create,
+        disable_user,
+        enable_user,
+        add,
+        show,
+        disable_key,
+        enable_key,
+        rename,
+        rotate,
+        expire,
+        imported,
+        removed,
+    ]
+    assert all(result.exit_code == 0 for result in results), "\n".join(
+        result.output for result in results
+    )
+    assert '"name": "prod-ci"' in show.output
+    assert "prod-renamed" in (root / "users.yaml").read_text(encoding="utf-8")
+    assert "laptop" not in (root / "users.yaml").read_text(encoding="utf-8")
+    assert len(refreshes) == 11
+
+
+def test_user_and_key_cli_error_paths_are_reported(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "dev-project"
+    empty_import_dir = tmp_path / "empty-keys"
+    empty_import_dir.mkdir()
+    runner = CliRunner()
+
+    init = runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
+    create = runner.invoke(
+        app,
+        [
+            "user",
+            "create",
+            "alice",
+            "--password-hash",
+            "$6$rounds=500000$saltstring$hashvalue",
+            "--context",
+            "dev",
+            "--no-refresh",
+        ],
+    )
+    add = runner.invoke(
+        app,
+        [
+            "user",
+            "key",
+            "add",
+            "alice",
+            "prod-ci",
+            "--public-key",
+            TEST_KEY,
+            "--context",
+            "dev",
+            "--no-refresh",
+        ],
+    )
+    failures = [
+        runner.invoke(app, ["user", "disable", "missing", "--context", "dev"]),
+        runner.invoke(app, ["user", "enable", "missing", "--context", "dev"]),
+        runner.invoke(app, ["user", "key", "list", "missing", "--context", "dev"]),
+        runner.invoke(app, ["user", "key", "show", "alice", "missing", "--context", "dev"]),
+        runner.invoke(
+            app,
+            [
+                "user",
+                "key",
+                "add",
+                "missing",
+                "new-key",
+                "--public-key",
+                SECOND_TEST_KEY,
+                "--context",
+                "dev",
+            ],
+        ),
+        runner.invoke(
+            app,
+            ["user", "key", "remove", "alice", "missing", "--yes", "--context", "dev"],
+        ),
+        runner.invoke(
+            app,
+            [
+                "user",
+                "key",
+                "import",
+                "alice",
+                "--from-dir",
+                str(empty_import_dir),
+                "--context",
+                "dev",
+            ],
+        ),
+        runner.invoke(app, ["user", "key", "disable", "alice", "missing", "--context", "dev"]),
+    ]
+    cancelled_remove = runner.invoke(
+        app,
+        ["user", "key", "remove", "alice", "prod-ci", "--context", "dev"],
+        input="n\n",
+    )
+
+    assert init.exit_code == 0, init.output
+    assert create.exit_code == 0, create.output
+    assert add.exit_code == 0, add.output
+    assert all(result.exit_code != 0 for result in failures)
+    assert cancelled_remove.exit_code == 1
 
 
 def test_init_without_root_uses_current_directory_and_sets_active_context(
@@ -185,6 +490,24 @@ def test_config_command_reads_and_updates_project_config(tmp_path: Path, monkeyp
     assert config.kubernetes.liveness_probe.period_seconds == 45
 
 
+def test_config_string_fields_keep_numeric_cli_values_as_strings(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "dev-project"
+    runner = CliRunner()
+    runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
+
+    root_update = runner.invoke(app, ["config", "isolation.root_permissions", "755"])
+    upload_update = runner.invoke(app, ["config", "isolation.upload_permissions", "750"])
+
+    config = load_config(root / "sftpwarden.yaml")
+    assert root_update.exit_code == 0, root_update.output
+    assert upload_update.exit_code == 0, upload_update.output
+    assert config.isolation.root_permissions == "755"
+    assert config.isolation.upload_permissions == "750"
+
+
 def test_config_project_name_renames_active_context(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     root = tmp_path / "dev-project"
@@ -327,6 +650,7 @@ def test_init_sql_provider_can_create_missing_table(tmp_path: Path, monkeypatch)
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     root = tmp_path / "sql-project"
     created: list[bool] = []
+    seen_user_schemas: list[int] = []
 
     class FakeSQLProvider:
         def table_exists(self) -> bool:
@@ -335,7 +659,11 @@ def test_init_sql_provider_can_create_missing_table(tmp_path: Path, monkeypatch)
         def create_table(self) -> None:
             created.append(True)
 
-    monkeypatch.setattr(init_commands, "provider_from_config", lambda *_args: FakeSQLProvider())
+    def fake_provider_from_config(_project_root: Path, config) -> FakeSQLProvider:
+        seen_user_schemas.append(config.provider.user_schema)
+        return FakeSQLProvider()
+
+    monkeypatch.setattr(init_commands, "provider_from_config", fake_provider_from_config)
     runner = CliRunner()
 
     result = runner.invoke(
@@ -358,6 +686,7 @@ def test_init_sql_provider_can_create_missing_table(tmp_path: Path, monkeypatch)
 
     assert result.exit_code == 0, result.output
     assert created == [True]
+    assert seen_user_schemas == [2]
     assert config.provider.type == "mysql"
     assert config.provider.dsn == "mysql://user:pass@localhost/sftp"
     assert not (root / "users.yaml").exists()
@@ -396,6 +725,509 @@ def test_init_sql_provider_can_abort_when_table_is_missing(tmp_path: Path, monke
     assert result.exit_code == 1
     assert "SQL users table does not exist" in result.output
     assert not (root / "sftpwarden.yaml").exists()
+
+
+def test_provider_schema_migration_writes_v2_and_updates_config(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "sql-project"
+    root.mkdir()
+    config = default_project_config(
+        "dev",
+        ProviderType.MYSQL,
+        dsn="mysql://user:pass@localhost/sftp",
+        user_schema=1,
+    )
+    write_config(root / "sftpwarden.yaml", config)
+    entry = local_context("dev", root, ProviderType.MYSQL)
+    written: list[ProviderUsers] = []
+
+    class FakeProvider:
+        def read(self) -> ProviderUsers:
+            return ProviderUsers(
+                schema_version=1,
+                users=[
+                    SFTPUser(
+                        username="alice",
+                        public_keys=["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests"],
+                    )
+                ],
+            )
+
+        def write(self, users: ProviderUsers) -> None:
+            written.append(users)
+
+    monkeypatch.setattr(
+        provider_commands,
+        "resolve_provider_context",
+        lambda **_kwargs: (entry, config, FakeProvider()),
+    )
+
+    result = provider_commands.migrate_provider_schema(
+        to_schema=2,
+        context=None,
+        config=None,
+        backup=False,
+        yes=True,
+        dry_run=False,
+    )
+
+    assert result["changed"]
+    assert written[0].schema_version == 2
+    assert written[0].users[0].keys[0].name.startswith("legacy-")
+    assert load_config(root / "sftpwarden.yaml").provider.user_schema == 2
+
+
+def test_provider_schema_migration_can_be_cancelled(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "sql-project"
+    root.mkdir()
+    config = default_project_config(
+        "dev",
+        ProviderType.MYSQL,
+        dsn="mysql://user:pass@localhost/sftp",
+        user_schema=1,
+    )
+    entry = local_context("dev", root, ProviderType.MYSQL)
+    wrote: list[ProviderUsers] = []
+
+    class FakeProvider:
+        def read(self) -> ProviderUsers:
+            return ProviderUsers(
+                schema_version=1,
+                users=[SFTPUser(username="alice", public_keys=[TEST_KEY])],
+            )
+
+        def write(self, users: ProviderUsers) -> None:
+            wrote.append(users)
+
+    monkeypatch.setattr(
+        provider_commands,
+        "resolve_provider_context",
+        lambda **_kwargs: (entry, config, FakeProvider()),
+    )
+    monkeypatch.setattr(provider_commands.typer, "confirm", lambda *_args, **_kwargs: False)
+
+    with pytest.raises(provider_commands.typer.Exit):
+        provider_commands.migrate_provider_schema(
+            to_schema=2,
+            context=None,
+            config=None,
+            backup=False,
+            yes=False,
+            dry_run=False,
+        )
+
+    assert wrote == []
+
+
+def test_provider_schema_cli_show_migrate_keys_alias_and_errors(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "v1-project"
+    runner = CliRunner()
+
+    init = runner.invoke(
+        app,
+        ["init", "simple", "--root", str(root), "--user-schema", "1", "--yes"],
+    )
+    create = runner.invoke(
+        app,
+        [
+            "user",
+            "create",
+            "alice",
+            "--public-key",
+            TEST_KEY,
+            "--password-hash",
+            "$6$rounds=500000$saltstring$hashvalue",
+            "--context",
+            "simple",
+            "--no-refresh",
+        ],
+    )
+    show = runner.invoke(app, ["provider", "schema", "show", "--context", "simple", "--json"])
+    dry_run = runner.invoke(
+        app,
+        [
+            "provider",
+            "schema",
+            "migrate",
+            "--to",
+            "2",
+            "--context",
+            "simple",
+            "--dry-run",
+            "--json",
+        ],
+    )
+    migrated = runner.invoke(
+        app,
+        ["provider", "schema", "migrate", "--to", "2", "--context", "simple", "--yes"],
+    )
+    already = runner.invoke(
+        app,
+        ["provider", "keys", "migrate", "--context", "simple", "--yes"],
+    )
+    show_text = runner.invoke(app, ["provider", "schema", "show", "--context", "simple"])
+    bad_show = runner.invoke(app, ["provider", "schema", "show", "--context", "missing"])
+    bad_migrate = runner.invoke(
+        app,
+        ["provider", "schema", "migrate", "--to", "99", "--context", "simple"],
+    )
+
+    assert init.exit_code == 0, init.output
+    assert create.exit_code == 0, create.output
+    assert json.loads(show.output)["provider_user_schema"] == 1
+    assert json.loads(dry_run.output)["dry_run"]
+    assert migrated.exit_code == 0, migrated.output
+    assert "Migrated provider schema v1 -> v2" in migrated.output
+    assert "Backup:" in migrated.output
+    assert already.exit_code == 0, already.output
+    assert "already uses schema v2" in already.output
+    assert "Provider schema v2" in show_text.output
+    assert bad_show.exit_code != 0
+    assert bad_migrate.exit_code != 0
+    assert load_config(root / "sftpwarden.yaml").provider.user_schema == 2
+
+
+def test_config_user_schema_change_requires_confirmation_and_defers_migration(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "v1-project"
+    runner = CliRunner()
+
+    init = runner.invoke(
+        app,
+        ["init", "simple", "--root", str(root), "--user-schema", "1", "--yes"],
+    )
+    create = runner.invoke(
+        app,
+        [
+            "user",
+            "create",
+            "alice",
+            "--public-key",
+            TEST_KEY,
+            "--context",
+            "simple",
+            "--no-refresh",
+        ],
+    )
+    cancelled = runner.invoke(
+        app,
+        ["config", "provider.user_schema", "2", "--context", "simple"],
+        input="n\n",
+    )
+    accepted = runner.invoke(
+        app,
+        ["config", "provider.user_schema", "2", "--context", "simple"],
+        input="y\n",
+    )
+
+    assert init.exit_code == 0, init.output
+    assert create.exit_code == 0, create.output
+    assert cancelled.exit_code == 1
+    assert "requires" in cancelled.output or "require" in cancelled.output
+    assert accepted.exit_code == 0, accepted.output
+    assert load_config(root / "sftpwarden.yaml").provider.user_schema == 2
+    assert "schema_version: 2" not in (root / "users.yaml").read_text(encoding="utf-8")
+
+
+def test_config_user_schema_change_without_migration_does_not_prompt(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "v2-project"
+    runner = CliRunner()
+
+    init = runner.invoke(app, ["init", "advanced", "--root", str(root), "--yes"])
+    update = runner.invoke(app, ["config", "provider.user_schema", "2", "--context", "advanced"])
+
+    assert init.exit_code == 0, init.output
+    assert update.exit_code == 0, update.output
+    assert "require a provider data migration" not in update.output
+
+
+def test_deploy_applies_manual_user_schema_change_before_deployment(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "v1-project"
+    runner = CliRunner()
+    monkeypatch.setattr(
+        core_commands,
+        "apply_deployment_plan",
+        lambda *_args, **_kwargs: "Deployed simple.",
+    )
+
+    init = runner.invoke(
+        app,
+        ["init", "simple", "--root", str(root), "--user-schema", "1", "--yes"],
+    )
+    create = runner.invoke(
+        app,
+        [
+            "user",
+            "create",
+            "alice",
+            "--public-key",
+            TEST_KEY,
+            "--context",
+            "simple",
+            "--no-refresh",
+        ],
+    )
+    config = load_config(root / "sftpwarden.yaml")
+    write_config(
+        root / "sftpwarden.yaml",
+        config.model_copy(
+            update={"provider": config.provider.model_copy(update={"user_schema": 2})}
+        ),
+    )
+
+    deployed = runner.invoke(app, ["deploy", "--context", "simple", "--yes"])
+
+    assert init.exit_code == 0, init.output
+    assert create.exit_code == 0, create.output
+    assert deployed.exit_code == 0, deployed.output
+    assert "Migrated provider schema v1 -> v2" in deployed.output
+    assert "schema_version: 2" in (root / "users.yaml").read_text(encoding="utf-8")
+
+
+def test_deploy_can_cancel_pending_user_schema_migration(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "v1-project"
+    runner = CliRunner()
+    monkeypatch.setattr(
+        core_commands,
+        "apply_deployment_plan",
+        lambda *_args, **_kwargs: pytest.fail("deploy should not run"),
+    )
+
+    runner.invoke(app, ["init", "simple", "--root", str(root), "--user-schema", "1", "--yes"])
+    runner.invoke(
+        app,
+        [
+            "user",
+            "create",
+            "alice",
+            "--public-key",
+            TEST_KEY,
+            "--context",
+            "simple",
+            "--no-refresh",
+        ],
+    )
+    config = load_config(root / "sftpwarden.yaml")
+    write_config(
+        root / "sftpwarden.yaml",
+        config.model_copy(
+            update={"provider": config.provider.model_copy(update={"user_schema": 2})}
+        ),
+    )
+
+    dry_run = runner.invoke(app, ["deploy", "--context", "simple", "--dry-run"])
+    show_schema = runner.invoke(app, ["provider", "schema", "show", "--context", "simple"])
+    cancelled = runner.invoke(app, ["deploy", "--context", "simple"], input="n\n")
+
+    assert dry_run.exit_code == 0, dry_run.output
+    assert "Would migrate provider schema v1 -> v2" in dry_run.output
+    assert show_schema.exit_code == 0, show_schema.output
+    assert "Run `sftpwarden deploy` to migrate provider data" in show_schema.output
+    assert cancelled.exit_code == 1
+    assert "schema_version: 2" not in (root / "users.yaml").read_text(encoding="utf-8")
+
+
+def test_deploy_equivalent_dry_runs_report_pending_user_schema_migration(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "v1-project"
+    runner = CliRunner()
+
+    runner.invoke(app, ["init", "simple", "--root", str(root), "--user-schema", "1", "--yes"])
+    runner.invoke(
+        app,
+        [
+            "user",
+            "create",
+            "alice",
+            "--public-key",
+            TEST_KEY,
+            "--context",
+            "simple",
+            "--no-refresh",
+        ],
+    )
+    config = load_config(root / "sftpwarden.yaml")
+    kube_config = config.model_copy(
+        update={
+            "deploy": config.deploy.model_copy(update={"target": DeployTarget.KUBERNETES}),
+            "kubernetes": config.kubernetes.model_copy(update={"mode": KubernetesMode.MANIFESTS}),
+            "provider": config.provider.model_copy(update={"user_schema": 2}),
+        }
+    )
+    write_config(root / "sftpwarden.yaml", kube_config)
+
+    kube_text = runner.invoke(
+        app,
+        ["kube", "apply", "--context", "simple", "--dry-run"],
+    )
+    kube_dry_run = runner.invoke(
+        app,
+        ["kube", "apply", "--context", "simple", "--dry-run", "--json"],
+    )
+    helm_config = kube_config.model_copy(
+        update={
+            "kubernetes": kube_config.kubernetes.model_copy(update={"mode": KubernetesMode.HELM})
+        }
+    )
+    write_config(root / "sftpwarden.yaml", helm_config)
+    helm_text = runner.invoke(
+        app,
+        ["helm", "upgrade", "--context", "simple", "--dry-run"],
+    )
+    helm_dry_run = runner.invoke(
+        app,
+        ["helm", "upgrade", "--context", "simple", "--dry-run", "--json"],
+    )
+
+    assert kube_text.exit_code == 0, kube_text.output
+    assert "Would migrate provider schema v1 -> v2" in kube_text.output
+    assert kube_dry_run.exit_code == 0, kube_dry_run.output
+    assert json.loads(kube_dry_run.output)["provider_schema"]["changed"]
+    assert helm_text.exit_code == 0, helm_text.output
+    assert "Would migrate provider schema v1 -> v2" in helm_text.output
+    assert helm_dry_run.exit_code == 0, helm_dry_run.output
+    assert json.loads(helm_dry_run.output)["provider_schema"]["changed"]
+    assert "schema_version: 2" not in (root / "users.yaml").read_text(encoding="utf-8")
+
+
+def test_deploy_equivalents_apply_pending_user_schema_migration_with_backup(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    runner = CliRunner()
+    run_calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs) -> CommandResult:
+        run_calls.append(command)
+        return CommandResult(command, 0, "ok\n", "")
+
+    monkeypatch.setattr(kube_commands, "run", fake_run)
+    monkeypatch.setattr(helm_commands, "run", fake_run)
+
+    kube_root = tmp_path / "kube-project"
+    runner.invoke(
+        app, ["init", "kube-schema", "--root", str(kube_root), "--user-schema", "1", "--yes"]
+    )
+    kube_config = load_config(kube_root / "sftpwarden.yaml")
+    write_config(
+        kube_root / "sftpwarden.yaml",
+        kube_config.model_copy(
+            update={
+                "deploy": kube_config.deploy.model_copy(update={"target": DeployTarget.KUBERNETES}),
+                "kubernetes": kube_config.kubernetes.model_copy(
+                    update={"mode": KubernetesMode.MANIFESTS}
+                ),
+                "provider": kube_config.provider.model_copy(update={"user_schema": 2}),
+            }
+        ),
+    )
+
+    kube_apply = runner.invoke(app, ["kube", "apply", "--context", "kube-schema", "--yes"])
+
+    helm_root = tmp_path / "helm-project"
+    runner.invoke(
+        app, ["init", "helm-schema", "--root", str(helm_root), "--user-schema", "1", "--yes"]
+    )
+    helm_config = load_config(helm_root / "sftpwarden.yaml")
+    write_config(
+        helm_root / "sftpwarden.yaml",
+        helm_config.model_copy(
+            update={
+                "deploy": helm_config.deploy.model_copy(update={"target": DeployTarget.KUBERNETES}),
+                "kubernetes": helm_config.kubernetes.model_copy(
+                    update={"mode": KubernetesMode.HELM}
+                ),
+                "provider": helm_config.provider.model_copy(update={"user_schema": 2}),
+            }
+        ),
+    )
+
+    helm_upgrade = runner.invoke(app, ["helm", "upgrade", "--context", "helm-schema", "--yes"])
+
+    assert kube_apply.exit_code == 0, kube_apply.output
+    assert "Migrated provider schema v1 -> v2" in kube_apply.output
+    assert "Backup:" in kube_apply.output
+    assert "schema_version: 2" in (kube_root / "users.yaml").read_text(encoding="utf-8")
+    assert helm_upgrade.exit_code == 0, helm_upgrade.output
+    assert "Migrated provider schema v1 -> v2" in helm_upgrade.output
+    assert "Backup:" in helm_upgrade.output
+    assert "schema_version: 2" in (helm_root / "users.yaml").read_text(encoding="utf-8")
+    assert any(command[0] == "kubectl" for command in run_calls)
+    assert any(command[0] == "helm" for command in run_calls)
+
+
+def test_key_schema_migration_confirmation_and_import_entry_errors(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeService:
+        def list_users(self) -> ProviderUsers:
+            return ProviderUsers(
+                schema_version=1,
+                users=[SFTPUser(username="alice", public_keys=[TEST_KEY])],
+            )
+
+    user_commands.confirm_key_schema_migration(
+        FakeService(),  # type: ignore[arg-type]
+        "key rotate",
+        yes=False,
+        dry_run=True,
+    )
+    user_commands.confirm_key_schema_migration(
+        FakeService(),  # type: ignore[arg-type]
+        "key rotate",
+        yes=True,
+        dry_run=False,
+    )
+    monkeypatch.setattr(user_commands.Confirm, "ask", lambda *_args, **_kwargs: False)
+
+    with pytest.raises(user_commands.typer.Exit):
+        user_commands.confirm_key_schema_migration(
+            FakeService(),  # type: ignore[arg-type]
+            "key rotate",
+            yes=False,
+            dry_run=False,
+        )
+
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+    multi_dir = tmp_path / "multi"
+    multi_dir.mkdir()
+    (multi_dir / "one.pub").write_text(TEST_KEY, encoding="utf-8")
+    (multi_dir / "two.pub").write_text(SECOND_TEST_KEY, encoding="utf-8")
+
+    with pytest.raises(Exception, match="No .pub files"):
+        user_commands.key_import_entries(empty_dir, explicit_name=None)
+    with pytest.raises(Exception, match="--name can only be used"):
+        user_commands.key_import_entries(multi_dir, explicit_name="prod")
 
 
 def test_validate_json_reports_config_and_provider(tmp_path: Path, monkeypatch) -> None:
@@ -474,6 +1306,82 @@ def test_context_registry_commands_cover_show_list_default_clear_and_remove(
     assert remove_result.exit_code == 0, remove_result.output
     assert registry.default is None
     assert "qa" not in registry.contexts
+
+
+def test_context_ls_prunes_manually_deleted_context_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr("sftpwarden.services.context_cleanup.shutil.which", lambda _name: None)
+    stale_root = tmp_path / "stale-project"
+    live_root = tmp_path / "live-project"
+    runner = CliRunner()
+    assert runner.invoke(app, ["init", "stale", "--root", str(stale_root), "--yes"]).exit_code == 0
+    assert runner.invoke(app, ["init", "live", "--root", str(live_root), "--yes"]).exit_code == 0
+    shutil.rmtree(stale_root)
+
+    result = runner.invoke(app, ["context", "ls", "--json"])
+    data = json.loads(result.output)
+
+    assert result.exit_code == 0, result.output
+    assert set(data["contexts"]) == {"live"}
+    assert load_registry().default == "live"
+
+
+def test_context_remove_remote_keeps_remote_unless_requested(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    project = tmp_path / "prod"
+    project.mkdir()
+    write_config(project / "sftpwarden.yaml", default_project_config("prod"))
+    entry = remote_context(
+        name="prod",
+        provider=ProviderType.YAML,
+        remote_url="deploy@example.com:/opt/sftpwarden",
+        local_root=project,
+        remote_root="~/sftpwarden",
+        remote_only=False,
+        ssh_key=None,
+        critical=True,
+    )
+    save_registry(ContextRegistry(default="prod", contexts={"prod": entry}))
+    calls: list[bool] = []
+
+    def fake_remove_context_with_cleanup(name: str, *, delete_remote: bool = False):
+        calls.append(delete_remote)
+        registry = load_registry()
+        registry.contexts.pop(name)
+        registry.default = None
+        return type(
+            "Report",
+            (),
+            {
+                "removed_local_root": project,
+                "local_runtime_messages": [],
+                "remote_messages": [],
+                "watcher_message": None,
+            },
+        )()
+
+    monkeypatch.setattr(
+        context_commands,
+        "remove_context_with_cleanup",
+        fake_remove_context_with_cleanup,
+    )
+    runner = CliRunner()
+
+    keep_remote = runner.invoke(app, ["context", "remove", "prod", "--yes"])
+    save_registry(ContextRegistry(default="prod", contexts={"prod": entry}))
+    delete_remote = runner.invoke(app, ["context", "remove", "prod", "--yes", "--delete-remote"])
+    save_registry(ContextRegistry(default="prod", contexts={"prod": entry}))
+    interactive_remote = runner.invoke(app, ["context", "remove", "prod"], input="y\ny\n")
+
+    assert keep_remote.exit_code == 0, keep_remote.output
+    assert delete_remote.exit_code == 0, delete_remote.output
+    assert interactive_remote.exit_code == 0, interactive_remote.output
+    assert calls == [False, True, True]
+    assert "Remote project files were left untouched" in keep_remote.output
 
 
 def test_info_compose_refresh_and_sync_json_commands(tmp_path: Path, monkeypatch) -> None:
@@ -583,6 +1491,34 @@ def test_user_add_hashes_plaintext_password(tmp_path: Path, monkeypatch) -> None
     assert bob["username"] == "bob"
     assert bob["password_hash"].startswith("$6$")
     assert "correct horse battery staple" not in (root / "users.yaml").read_text(encoding="utf-8")
+
+
+def test_user_add_public_key_does_not_prompt_for_password(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "dev-project"
+    runner = CliRunner()
+    runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
+
+    result = runner.invoke(
+        app,
+        [
+            "user",
+            "add",
+            "keyonly",
+            "--public-key",
+            TEST_KEY,
+            "--context",
+            "dev",
+            "--no-refresh",
+        ],
+    )
+
+    provider = yaml.safe_load((root / "users.yaml").read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0, result.output
+    assert provider["users"][0]["username"] == "keyonly"
+    assert provider["users"][0]["keys"][0]["public_key"] == TEST_KEY
+    assert "Password" not in result.output
 
 
 def test_user_add_accepts_existing_password_hash(tmp_path: Path, monkeypatch) -> None:

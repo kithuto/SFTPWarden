@@ -5,3 +5,4 @@ provider:
   type: mongodb
   dsn: "${SFTPWARDEN_MONGODB_DSN}"
   collection: sftp_users
+  user_schema: 2

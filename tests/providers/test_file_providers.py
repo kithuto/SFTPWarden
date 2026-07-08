@@ -24,7 +24,7 @@ from sftpwarden.providers.sql import (
     upsert_sql_users,
     validate_sql_read_query,
 )
-from sftpwarden.users import SFTPUser
+from sftpwarden.users import SFTPUser, SFTPUserKey
 from sftpwarden.utils.errors import ProviderError
 
 
@@ -97,6 +97,54 @@ def test_csv_provider_round_trip(tmp_path, monkeypatch: pytest.MonkeyPatch) -> N
     assert loaded.users[0].upload_dir == "dropbox"
     assert loaded.users[0].comment == "Finance dropbox"
     assert chmods == [(path, 0o600)]
+
+
+def test_yaml_and_csv_providers_round_trip_schema_v2_named_keys(tmp_path: Path) -> None:
+    key = SFTPUserKey(
+        name="prod-ci",
+        public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests",
+        comment="CI deploy",
+    )
+    users = ProviderUsers(
+        schema_version=2,
+        users=[SFTPUser(username="alice", keys=[key])],
+    )
+    yaml_path = tmp_path / "users.yaml"
+    csv_path = tmp_path / "users.csv"
+
+    YAMLProvider(
+        config=ProviderConfig(type=ProviderType.YAML, user_schema=2),
+        path=yaml_path,
+    ).write(users)
+    CSVProvider(
+        config=ProviderConfig(type=ProviderType.CSV, user_schema=2),
+        path=csv_path,
+    ).write(users)
+
+    assert "schema_version: 2" in yaml_path.read_text(encoding="utf-8")
+    assert csv_path.read_text(encoding="utf-8").startswith("username,keys,")
+    assert (
+        YAMLProvider(
+            config=ProviderConfig(type=ProviderType.YAML, user_schema=2),
+            path=yaml_path,
+        )
+        .read()
+        .users[0]
+        .keys[0]
+        .name
+        == "prod-ci"
+    )
+    assert (
+        CSVProvider(
+            config=ProviderConfig(type=ProviderType.CSV, user_schema=2),
+            path=csv_path,
+        )
+        .read()
+        .users[0]
+        .keys[0]
+        .comment
+        == "CI deploy"
+    )
 
 
 def test_file_provider_reports_missing_file(tmp_path) -> None:

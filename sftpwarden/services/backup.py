@@ -15,6 +15,7 @@ from sftpwarden.config import FILE_PROVIDER_TYPES, load_config, provider_local_p
 from sftpwarden.contexts import ContextEntry, resolve_context
 from sftpwarden.providers import provider_from_config
 from sftpwarden.remote.ssh import rsync_ssh_transport, ssh_base_command
+from sftpwarden.services.context_cleanup import ensure_remote_only_root_available
 from sftpwarden.services.provider_transfer import deserialize_users, serialize_users
 from sftpwarden.system.commands import run_checked
 from sftpwarden.utils._version import get_version
@@ -204,6 +205,7 @@ def create_remote_backup(
             path=output_path,
             entries=[f"remote:{candidate}" for candidate in candidates],
         )
+    ensure_remote_only_root_available(entry)
 
     with tempfile.TemporaryDirectory(prefix="sftpwarden-remote-backup-") as tmp:
         tmp_path = Path(tmp)

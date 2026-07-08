@@ -10,6 +10,10 @@ import typer
 from rich.prompt import Confirm
 
 from sftpwarden.cli_commands.app import helm_app
+from sftpwarden.cli_commands.deploy_schema import (
+    apply_provider_schema_before_deploy,
+    provider_schema_deploy_text,
+)
 from sftpwarden.cli_commands.errors import handle_error
 from sftpwarden.cli_commands.output import print_json
 from sftpwarden.config import SFTPWardenConfig, load_config
@@ -113,10 +117,12 @@ def helm_upgrade(
     install: Annotated[bool, typer.Option("--install")] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
     json_output: Annotated[bool, typer.Option("--json")] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
 ) -> None:
     """Install or upgrade the Helm release."""
     try:
         entry, loaded = _load_context_config(context, None)
+        schema_result = apply_provider_schema_before_deploy(entry, loaded, dry_run=dry_run, yes=yes)
         plan = helm_deployment_plan(entry, loaded)
         commands = _helm_upgrade_commands(plan, install=install)
         if not commands:
@@ -129,12 +135,22 @@ def helm_upgrade(
                         "plan": plan.as_dict(),
                         "command": commands[0],
                         "commands": commands,
+                        "provider_schema": (
+                            schema_result.as_dict() if schema_result is not None else None
+                        ),
                     }
                 )
                 return
+            schema_text = provider_schema_deploy_text(schema_result)
+            if schema_text:
+                console.print(schema_text)
             console.print("\n".join(" ".join(command) for command in commands))
             return
         if entry.root:
+            if schema_result and schema_result.changed:
+                print_success(provider_schema_deploy_text(schema_result))
+                if schema_result.backup_path:
+                    console.print(f"Backup: {schema_result.backup_path}")
             write_helm_values(loaded, entry.root)
         results = []
         with terminal_status("Applying Helm release"):

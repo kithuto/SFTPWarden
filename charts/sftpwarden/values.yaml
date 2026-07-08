@@ -14,6 +14,7 @@ sftpwardenConfig: |
   provider:
     type: yaml
     path: /etc/sftpwarden/provider-data/users.yaml
+    user_schema: 2
 
 service:
   type: ClusterIP
@@ -32,6 +33,7 @@ provider:
   type: yaml
   path: /etc/sftpwarden/provider-data/users.yaml
   bootstrapContent: |
+    schema_version: 2
     users: []
   table: sftp_users
   collection: sftp_users

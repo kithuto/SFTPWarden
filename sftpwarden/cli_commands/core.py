@@ -13,6 +13,10 @@ from rich.prompt import Confirm
 from rich.table import Table
 
 from sftpwarden.cli_commands.app import app
+from sftpwarden.cli_commands.deploy_schema import (
+    apply_provider_schema_before_deploy,
+    provider_schema_deploy_text,
+)
 from sftpwarden.cli_commands.errors import handle_error
 from sftpwarden.cli_commands.output import (
     print_deploy_config_plan,
@@ -378,23 +382,54 @@ def deploy(
     """
     try:
         entry = resolve_context(context_name=context, reconcile_config=True)
-        plan_data = deployment_plan(entry)
-        if dry_run:
-            if json_output:
-                print_json({"dry_run": True, "plan": plan_data.as_dict()})
-                return
-            console.print(deploy_context(entry, dry_run=True))
-            return
         if (
-            entry.critical
+            not dry_run
+            and entry.critical
             and not yes
             and not Confirm.ask(f"Deploy critical context {entry.name}?", default=False)
         ):
             raise typer.Exit(1)
+        deploy_config = load_config(entry.config) if entry.config else None
+        schema_result = (
+            apply_provider_schema_before_deploy(entry, deploy_config, dry_run=dry_run, yes=yes)
+            if deploy_config is not None
+            else None
+        )
+        plan_data = deployment_plan(entry)
+        if dry_run:
+            if json_output:
+                print_json(
+                    {
+                        "dry_run": True,
+                        "plan": plan_data.as_dict(),
+                        "provider_schema": (
+                            schema_result.as_dict() if schema_result is not None else None
+                        ),
+                    }
+                )
+                return
+            schema_text = provider_schema_deploy_text(schema_result)
+            if schema_text:
+                console.print(schema_text)
+            console.print(plan_data.text())
+            return
+        if schema_result and schema_result.changed:
+            print_success(provider_schema_deploy_text(schema_result))
+            if schema_result.backup_path:
+                console.print(f"Backup: {schema_result.backup_path}")
         with terminal_status(f"Deploying context {entry.name}"):
             output = deploy_context(entry)
         if json_output:
-            print_json({"dry_run": False, "result": output, "plan": plan_data.as_dict()})
+            print_json(
+                {
+                    "dry_run": False,
+                    "result": output,
+                    "plan": plan_data.as_dict(),
+                    "provider_schema": (
+                        schema_result.as_dict() if schema_result is not None else None
+                    ),
+                }
+            )
             return
         print_success(output)
     except SFTPWardenError as exc:

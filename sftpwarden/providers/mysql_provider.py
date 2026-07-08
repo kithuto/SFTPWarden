@@ -8,12 +8,17 @@ from sftpwarden.config import ProviderType
 from sftpwarden.providers.base import BaseProvider
 from sftpwarden.providers.registry import register_provider
 from sftpwarden.providers.sql import (
+    create_sql_user_keys_table_if_missing_statement,
+    create_sql_user_keys_table_statement,
     create_sql_users_table_statement,
     delete_missing_sql_users,
     delete_sql_user,
     execute_validated_sql,
+    schema_uses_key_table,
     sql_check_table_query,
+    sql_select_user_keys_query,
     sql_select_users_query,
+    sql_user_keys_table,
     upsert_sql_user,
     upsert_sql_users,
     users_from_sql_rows,
@@ -57,7 +62,16 @@ class PyMySQLProvider(BaseProvider):
                 if self.config.query:
                     validate_sql_read_query(query)
                 execute_validated_sql(cursor, query)
-                return users_from_sql_rows(list(cursor.fetchall()))
+                rows = list(cursor.fetchall())
+                key_rows = None
+                if schema_uses_key_table(self.config.user_schema):
+                    execute_validated_sql(cursor, sql_select_user_keys_query(self.config.table))
+                    key_rows = list(cursor.fetchall())
+                return users_from_sql_rows(
+                    rows,
+                    key_rows=key_rows,
+                    schema_version=self.config.user_schema,
+                )
         finally:
             connection.close()
 
@@ -69,11 +83,18 @@ class PyMySQLProvider(BaseProvider):
         users
             Desired provider users.
         """
+        self.ensure_schema_storage(users.schema_version)
         validate_sql_table(self.config.table)
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
-                upsert_sql_users(cursor, self.config.table, users, dialect="mysql")
+                upsert_sql_users(
+                    cursor,
+                    self.config.table,
+                    users,
+                    dialect="mysql",
+                    schema_version=users.schema_version,
+                )
                 delete_missing_sql_users(cursor, self.config.table, users)
             connection.commit()
         except Exception:
@@ -90,11 +111,18 @@ class PyMySQLProvider(BaseProvider):
         user
             User to persist.
         """
+        self.ensure_schema_storage(self.config.user_schema)
         validate_sql_table(self.config.table)
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
-                upsert_sql_user(cursor, self.config.table, user, dialect="mysql")
+                upsert_sql_user(
+                    cursor,
+                    self.config.table,
+                    user,
+                    dialect="mysql",
+                    schema_version=self.config.user_schema,
+                )
             connection.commit()
         except Exception:
             connection.rollback()
@@ -110,11 +138,17 @@ class PyMySQLProvider(BaseProvider):
         username
             Username to remove.
         """
+        self.ensure_schema_storage(self.config.user_schema)
         validate_sql_table(self.config.table)
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
-                delete_sql_user(cursor, self.config.table, username)
+                delete_sql_user(
+                    cursor,
+                    self.config.table,
+                    username,
+                    schema_version=self.config.user_schema,
+                )
             connection.commit()
         except Exception:
             connection.rollback()
@@ -123,18 +157,23 @@ class PyMySQLProvider(BaseProvider):
             connection.close()
 
     def table_exists(self) -> bool:
-        """Return whether the configured users table exists.
+        """Return whether the configured provider storage exists.
 
         Returns
         -------
         bool
-            ``True`` when the table can be queried.
+            ``True`` when all tables required by the active schema can be queried.
         """
         validate_sql_table(self.config.table)
         connection = self._connect()
         try:
             with connection.cursor() as cursor:
                 execute_validated_sql(cursor, sql_check_table_query(self.config.table))
+                if schema_uses_key_table(self.config.user_schema):
+                    execute_validated_sql(
+                        cursor,
+                        sql_check_table_query(sql_user_keys_table(self.config.table)),
+                    )
                 return True
         except Exception as exc:
             if getattr(exc, "args", [None])[0] == 1146:
@@ -150,6 +189,30 @@ class PyMySQLProvider(BaseProvider):
         try:
             with connection.cursor() as cursor:
                 execute_validated_sql(cursor, create_sql_users_table_statement(self.config.table))
+                if schema_uses_key_table(self.config.user_schema):
+                    execute_validated_sql(
+                        cursor,
+                        create_sql_user_keys_table_statement(self.config.table),
+                    )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def ensure_schema_storage(self, schema_version: int) -> None:
+        """Ensure tables required by a user schema exist."""
+        validate_sql_table(self.config.table)
+        if not schema_uses_key_table(schema_version):
+            return
+        connection = self._connect()
+        try:
+            with connection.cursor() as cursor:
+                execute_validated_sql(
+                    cursor,
+                    create_sql_user_keys_table_if_missing_statement(self.config.table),
+                )
             connection.commit()
         except Exception:
             connection.rollback()

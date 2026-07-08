@@ -202,13 +202,21 @@ def test_readme_uses_pypi_safe_logo_url() -> None:
 
 def test_installed_console_script_reports_version() -> None:
     """Verify the packaged console entrypoint can report the version."""
-    result = subprocess.run(
+    flag_result = subprocess.run(
         [sys.executable, "-m", "sftpwarden", "--version"],
         check=False,
         capture_output=True,
         text=True,
     )
+    command_result = subprocess.run(
+        [sys.executable, "-m", "sftpwarden", "version"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
 
-    assert result.returncode == 0
-    assert "SFTPWarden" in result.stdout
-    assert sftpwarden.__version__ in result.stdout
+    assert flag_result.returncode == 0
+    assert command_result.returncode == 0
+    assert command_result.stdout == flag_result.stdout
+    assert "SFTPWarden" in command_result.stdout
+    assert sftpwarden.__version__ in command_result.stdout

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import types
 from collections.abc import Callable
@@ -10,10 +11,64 @@ import pytest
 
 from sftpwarden.config import ProviderType, default_project_config, write_config
 from sftpwarden.contexts import ContextEntry, ContextRegistry, local_context, save_registry
+from sftpwarden.providers import empty_provider_text
 from sftpwarden.render.compose import write_compose
 from sftpwarden.users import ProviderUsers, SFTPUser
 
 TEST_HASH = "$6$rounds=500000$saltstring$hashvalue"
+
+RELEASE_VALIDATION_DIR = Path(__file__).parent / "release_validation"
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Register opt-in release validation controls."""
+    parser.addoption(
+        "--run-release-validation",
+        action="store_true",
+        default=False,
+        help="Run the explicit SFTPWarden release validation suite.",
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Document release validation markers for explicit runs."""
+    config.addinivalue_line(
+        "markers",
+        "release_validation: opt-in end-to-end release validation tests",
+    )
+    config.addinivalue_line(
+        "markers",
+        "release_external: release validation tests that require external tools/services",
+    )
+    config.addinivalue_line(
+        "markers",
+        "release_docker: release validation tests that require Docker and Docker Compose",
+    )
+    config.addinivalue_line(
+        "markers",
+        "release_kubernetes: release validation tests that require kubectl and a cluster",
+    )
+    config.addinivalue_line(
+        "markers",
+        "release_helm: release validation tests that require Helm and a cluster",
+    )
+    config.addinivalue_line(
+        "markers",
+        "release_databases: release validation tests that start provider databases in Docker",
+    )
+
+
+def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool:
+    """Keep release validation out of tox and normal pytest runs."""
+    release_requested = config.getoption("--run-release-validation") or (
+        os.environ.get("SFTPWARDEN_RUN_RELEASE_VALIDATION") == "1"
+    )
+    path = Path(str(collection_path))
+    try:
+        path.relative_to(RELEASE_VALIDATION_DIR)
+    except ValueError:
+        return False
+    return not release_requested
 
 
 @pytest.fixture
@@ -89,11 +144,12 @@ def local_project_factory(
         project_root.mkdir(parents=True, exist_ok=True)
         config = default_project_config(name, provider)
         write_config(project_root / "sftpwarden.yaml", config)
-        if provider == ProviderType.YAML:
-            (project_root / "users.yaml").write_text("users: []\n", encoding="utf-8")
-        elif provider == ProviderType.CSV:
-            (project_root / "users.csv").write_text(
-                "username,public_keys,password_hash,uid,gid,upload_dir,comment,disabled\n",
+        if provider in {ProviderType.YAML, ProviderType.CSV}:
+            provider_path = project_root / (
+                "users.csv" if provider == ProviderType.CSV else "users.yaml"
+            )
+            provider_path.write_text(
+                empty_provider_text(provider, user_schema=config.provider.user_schema),
                 encoding="utf-8",
             )
         write_compose(config, project_root)

@@ -140,7 +140,7 @@ Open a new terminal, then use `<TAB>` to complete commands and options:
 
 ```bash
 sftpwarden con<TAB>
-sftpwarden user add --<TAB>
+sftpwarden user create --<TAB>
 ```
 
 To inspect the generated completion script without installing it:
@@ -157,15 +157,20 @@ Create a local SFTP project:
 sftpwarden config default-provider yaml
 mkdir -p ~/sftpwarden-dev
 cd ~/sftpwarden-dev
-sftpwarden init dev --yes
+sftpwarden init dev --user-schema 1 --yes
 sftpwarden validate
 sftpwarden deploy
 ```
 
+The quick start uses **user schema v1**, the simplest provider format:
+users store anonymous `public_keys` directly on each user. New projects default
+to schema v2 when `--user-schema` is omitted; v2 adds named keys, metadata,
+expiry, disable/enable, rotation, and migrations.
+
 Add a user:
 
 ```bash
-sftpwarden user add alice \
+sftpwarden user create alice \
   --password "correct horse battery staple" \
   --comment "Main upload account"
 ```
@@ -352,9 +357,9 @@ sftpwarden user show alice
 Add users:
 
 ```bash
-sftpwarden user add alice --password "correct horse battery staple"
-sftpwarden user add bob --password-hash '$6$rounds=500000$...'
-sftpwarden user add carol --public-key "ssh-ed25519 AAAA..."
+sftpwarden user create alice --password "correct horse battery staple"
+sftpwarden user create bob --password-hash '$6$rounds=500000$...'
+sftpwarden user create carol --public-key "ssh-ed25519 AAAA..."
 ```
 
 Update users:
@@ -363,7 +368,8 @@ Update users:
 sftpwarden user update alice --upload-dir inbound
 sftpwarden user update alice --uid 12001 --gid 12001
 sftpwarden user update alice --comment "Finance inbox"
-sftpwarden user update alice --disabled
+sftpwarden user disable alice
+sftpwarden user enable alice
 ```
 
 Removing a user disables access but does not delete user data:
@@ -379,6 +385,49 @@ sftpwarden user remove alice --delete-files --yes
 ```
 
 Updating only `comment` does not refresh the runtime because comments are metadata.
+
+### User Schemas and Named Keys
+
+SFTPWarden supports two user schemas:
+
+- **Schema v1** keeps simple `public_keys` on each user. It is supported for
+  small setups and quick starts.
+- **Schema v2** stores named `keys` with fingerprint, comment, disabled state,
+  timestamps, expiry, source, and metadata. It is the default for new projects.
+
+Choose explicitly during init:
+
+```bash
+sftpwarden init demo --user-schema 1 --yes
+sftpwarden init prod --user-schema 2 --yes
+```
+
+Named key lifecycle commands:
+
+```bash
+sftpwarden user key list alice
+sftpwarden user key show alice prod-ci
+sftpwarden user key add alice prod-ci --public-key ./prod-ci.pub
+sftpwarden user key rotate alice prod-ci --public-key ./prod-ci-new.pub
+sftpwarden user key expire alice prod-ci --at 2027-01-01
+sftpwarden user key disable alice prod-ci
+sftpwarden user key enable alice prod-ci
+sftpwarden user key rename alice prod-ci ci-prod
+sftpwarden user key remove alice ci-prod --yes
+sftpwarden user key import alice --from-dir ./keys
+```
+
+Schema v1 can still list, show, add, and remove anonymous keys using
+deterministic names/fingerprints. Advanced key operations prompt to migrate that
+provider to schema v2; non-interactive use requires `--yes`.
+
+Inspect or migrate provider data explicitly:
+
+```bash
+sftpwarden provider schema show
+sftpwarden provider keys migrate --dry-run
+sftpwarden provider schema migrate --to 2 --backup --yes
+```
 
 ## Providers
 
@@ -399,14 +448,18 @@ YAML/CSV remain useful for GitOps-style Kubernetes deployments where deploy is
 the synchronization point. If you use YAML/CSV in Kubernetes, keep the provider
 file in the same review and secret-handling process as the generated manifests.
 
-SQL providers read from `sftp_users` by default. The table should include:
+SQL providers read from `sftp_users` by default. Schema v1 uses only the users
+table:
 
 ```text
 username, public_keys, password_hash, uid, gid, upload_dir, comment, disabled
 ```
 
+Schema v2 keeps the users table and adds `sftp_user_keys` for named key rows.
+CSV v2 uses a `keys` JSON column; MongoDB v2 embeds `keys` in each document.
+
 See `examples/mysql/schema.sql`, `examples/mariadb/schema.sql`, and
-`examples/postgres/schema.sql`.
+`examples/postgres/schema.sql` for schema v2 SQL tables.
 
 SQLite is built in:
 
@@ -501,6 +554,8 @@ sftpwarden provider export --format json > users.json
 - Configuration, Docker Compose, Kubernetes, and Helm changes require
   `sftpwarden deploy`; Kubernetes YAML/CSV provider files are also copied to the
   provider PVC by deploy/apply/upgrade.
+- `sftpwarden.yaml` is desired state. Changes made with `sftpwarden config` and
+  manual edits are applied by the next deploy/apply/upgrade step.
 - `sftpwarden health` validates config, provider readability, Compose drift, and
   runtime health where available.
 - `sftpwarden backup` stores config, a provider user snapshot, host keys, and
@@ -582,7 +637,7 @@ SFTPWarden follows conservative defaults:
 
 - users and secrets are not baked into images;
 - plaintext passwords are rejected in provider data;
-- `sftpwarden user add --password` stores only a system password hash;
+- `sftpwarden user create --password` stores only a system password hash;
 - SFTP users are forced into `internal-sftp`;
 - root login, empty passwords, forwarding, tunneling, X11, and user environments
   are disabled;
@@ -607,7 +662,10 @@ public or customer-facing network.
 
 The README is the adoption path. Detailed guides live in:
 
+- [Getting Started](docs/getting-started.md)
 - [Configuration](docs/configuration.md)
+- [Providers](docs/providers.md)
+- [Named Keys](docs/named-keys.md)
 - [Operations](docs/operations.md)
 - [Security](docs/security.md)
 - [CLI Reference](docs/cli-reference.md)
@@ -627,18 +685,17 @@ sphinx-build -b html docs docs/_build/html
 See the [changelog](https://github.com/kithuto/sftpwarden/blob/main/CHANGELOG.md)
 for released versions and the longer future roadmap.
 
-### v1.3 - Named Public Keys, Provider Schema v2, and CLI UX
-
-- Add named SSH keys with fingerprints, expiry, disabled state, and rotation
-  workflows.
-- Add provider schema v2 with safe migrations.
-- Move user/key commands toward resource-first CLI grammar.
-
 ### v1.4 - Audit and Transfer Visibility
 
 - Add audit logging for CLI and runtime operations.
 - Add commands for listing, tailing, filtering, and exporting audit events.
 - Add transfer visibility and richer runtime status.
+
+### v1.5 - Security Hardening
+
+- Add production-oriented security check profiles and strict mode.
+- Add secret-file support for DSNs and sensitive provider settings.
+- Add assisted host key rotation workflows.
 
 ## Contributing
 

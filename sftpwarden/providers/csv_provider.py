@@ -8,19 +8,16 @@ from sftpwarden.config import ProviderType
 from sftpwarden.providers.base import FileProvider
 from sftpwarden.providers.registry import register_provider
 from sftpwarden.users.models import ProviderUsers, SFTPUser
+from sftpwarden.users.schemas import (
+    UserSchemaVersion,
+    detect_csv_schema,
+    user_schema,
+)
+from sftpwarden.users.schemas.v1 import CSV_V1_FIELDNAMES
 from sftpwarden.utils.errors import ProviderError
 from sftpwarden.utils.files import chmod_private
 
-CSV_FIELDNAMES = [
-    "username",
-    "public_keys",
-    "password_hash",
-    "uid",
-    "gid",
-    "upload_dir",
-    "comment",
-    "disabled",
-]
+CSV_FIELDNAMES = CSV_V1_FIELDNAMES
 
 
 @register_provider
@@ -38,7 +35,12 @@ class CSVProvider(FileProvider):
         str
             CSV header row.
         """
-        return ",".join(CSV_FIELDNAMES) + "\n"
+        return ",".join(CSV_V1_FIELDNAMES) + "\n"
+
+    @classmethod
+    def empty_text_for_schema(cls, schema_version: UserSchemaVersion) -> str:
+        """Return an empty CSV provider document for a schema version."""
+        return ",".join(user_schema(schema_version).csv_fieldnames()) + "\n"
 
     def read(self) -> ProviderUsers:
         """Read users from a CSV provider file.
@@ -55,27 +57,13 @@ class CSVProvider(FileProvider):
         """
         path = self.ensure_exists()
         users: list[SFTPUser] = []
-        with path.open(newline="", encoding="utf-8") as handle:
-            for row in csv.DictReader(handle):
-                public_keys = [
-                    key.strip()
-                    for key in (row.get("public_keys") or "").splitlines()
-                    if key.strip()
-                ]
-                users.append(
-                    SFTPUser(
-                        username=row["username"],
-                        public_keys=public_keys,
-                        password_hash=row.get("password_hash") or None,
-                        uid=int(row["uid"]) if row.get("uid") else None,
-                        gid=int(row["gid"]) if row.get("gid") else None,
-                        upload_dir=row.get("upload_dir") or "upload",
-                        comment=row.get("comment") or None,
-                        disabled=(row.get("disabled") or "").lower() in {"1", "true", "yes"},
-                    )
-                )
         try:
-            return ProviderUsers(users=users)
+            with path.open(newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                schema = detect_csv_schema(list(reader.fieldnames or []), fallback_schema=1)
+                for row in reader:
+                    users.append(schema.user_from_csv_row(row))
+            return ProviderUsers(schema_version=schema.version, users=users)
         except ValidationError as exc:
             raise ProviderError(f"Invalid CSV provider file: {path}: {exc}") from exc
 
@@ -88,11 +76,11 @@ class CSVProvider(FileProvider):
             Users to persist.
         """
         path = self.ensure_parent_dir()
+        schema = user_schema(users.schema_version)
+        fieldnames = schema.csv_fieldnames()
         with path.open("w", newline="", encoding="utf-8") as handle:
-            writer = csv.DictWriter(handle, fieldnames=CSV_FIELDNAMES)
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
             for user in users.users:
-                row = user.model_dump(mode="json", exclude_none=True)
-                row["public_keys"] = "\n".join(user.public_keys)
-                writer.writerow(row)
+                writer.writerow(schema.csv_row_from_user(user))
         chmod_private(path)

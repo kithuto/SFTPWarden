@@ -48,6 +48,7 @@ from sftpwarden.services.cli_workflows import install_context_watcher
 from sftpwarden.services.deploy import kubectl_command, translate_command_failure
 from sftpwarden.system.commands import CommandResult, run
 from sftpwarden.users import ProviderUsers
+from sftpwarden.users.schemas import validate_user_schema_version
 from sftpwarden.utils.console import print_info, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
 from sftpwarden.utils.files import write_private_text
@@ -80,6 +81,10 @@ def init(
     collection: Annotated[
         str, typer.Option("--collection", help="MongoDB users collection name.")
     ] = "sftp_users",
+    user_schema: Annotated[
+        int,
+        typer.Option("--user-schema", help="User provider schema version: 1 or 2."),
+    ] = 2,
     deploy_method: Annotated[
         str,
         typer.Option(
@@ -146,6 +151,8 @@ def init(
         SQL users table name.
     collection
         MongoDB users collection name.
+    user_schema
+        User provider schema version to initialize.
     deploy_method
         Deployment target to store in the generated project config.
     namespace
@@ -189,6 +196,7 @@ def init(
                 query=query,
                 table=table,
                 collection=collection,
+                user_schema=user_schema,
                 deploy_method=deploy_method,
                 namespace=namespace,
                 create_namespace=create_namespace,
@@ -238,6 +246,7 @@ def init(
             query=query,
             table=table,
             collection=collection,
+            user_schema=user_schema,
             deploy_method=deploy_method,
             namespace=namespace,
             yes=yes,
@@ -264,9 +273,17 @@ def init(
         )
         write_config(config_path, config)
         if config.provider.type == ProviderType.SQLITE and not provider_path.exists():
-            provider_from_config(selected_root, config).write(ProviderUsers(users=[]))
+            provider_from_config(selected_root, config).write(
+                ProviderUsers(schema_version=config.provider.user_schema, users=[])
+            )
         elif config.provider.type in FILE_PROVIDER_TYPES and not provider_path.exists():
-            write_private_text(provider_path, empty_provider_text(config.provider.type))
+            write_private_text(
+                provider_path,
+                empty_provider_text(
+                    config.provider.type,
+                    user_schema=config.provider.user_schema,
+                ),
+            )
         if config.deploy.target == DeployTarget.COMPOSE:
             write_compose(config, selected_root)
         entry = local_context(name, selected_root, selected_provider, critical)
@@ -287,6 +304,7 @@ def init_remote_context(
     query: str | None,
     table: str,
     collection: str = "sftp_users",
+    user_schema: int = 2,
     deploy_method: str = "compose",
     namespace: str | None = None,
     create_namespace: bool | None,
@@ -322,6 +340,8 @@ def init_remote_context(
         SQL users table name.
     collection
         MongoDB users collection name.
+    user_schema
+        User provider schema version to initialize.
     deploy_method
         Deployment target to store in the generated project config.
     namespace
@@ -396,6 +416,7 @@ def init_remote_context(
             query=query,
             table=table,
             collection=collection,
+            user_schema=user_schema,
             deploy_method=deploy_method,
             namespace=namespace,
             yes=yes,
@@ -415,9 +436,17 @@ def init_remote_context(
         write_config(selected_root / "sftpwarden.yaml", config)
         provider_path = provider_local_path(selected_root, config)
         if config.provider.type == ProviderType.SQLITE and not provider_path.exists():
-            provider_from_config(selected_root, config).write(ProviderUsers(users=[]))
+            provider_from_config(selected_root, config).write(
+                ProviderUsers(schema_version=config.provider.user_schema, users=[])
+            )
         elif config.provider.type in FILE_PROVIDER_TYPES and not provider_path.exists():
-            write_private_text(provider_path, empty_provider_text(config.provider.type))
+            write_private_text(
+                provider_path,
+                empty_provider_text(
+                    config.provider.type,
+                    user_schema=config.provider.user_schema,
+                ),
+            )
         if config.deploy.target == DeployTarget.COMPOSE:
             write_compose(config, selected_root)
     entry = remote_context(
@@ -450,6 +479,7 @@ def init_project_config(
     query: str | None,
     table: str,
     collection: str = "sftp_users",
+    user_schema: int = 2,
     deploy_method: str = "compose",
     namespace: str | None = None,
     yes: bool,
@@ -470,6 +500,8 @@ def init_project_config(
         SQL users table name.
     collection
         MongoDB users collection name.
+    user_schema
+        User provider schema version to initialize.
     deploy_method
         Deployment target to store in the generated project config.
     namespace
@@ -507,6 +539,7 @@ def init_project_config(
         query=query,
         table=table,
         collection=collection,
+        user_schema=validate_user_schema_version(user_schema),
         deploy_target=deploy_target,
         kubernetes_mode=kubernetes_mode,
     )

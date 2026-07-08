@@ -25,6 +25,7 @@ source_suffix = {
 master_doc = "index"
 html_theme = "sphinx_rtd_theme"
 html_title = "SFTPWarden"
+html_favicon = "_static/favicon/sftpwarden-favicon.ico"
 html_static_path = ["_static"]
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]

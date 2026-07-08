@@ -6,6 +6,7 @@ import pytest
 
 import sftpwarden.system.commands as command_services
 from sftpwarden.config import ProviderType
+from sftpwarden.config import load_config as load_project_config
 from sftpwarden.config.global_config import load_global_config, resolve_provider, save_global_config
 from sftpwarden.utils.dotted import format_value, get_dotted, parse_cli_value, set_dotted
 from sftpwarden.utils.errors import ConfigError, RuntimeError
@@ -31,6 +32,8 @@ def test_dotted_and_path_utilities(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         get_dotted(data, "missing.value")
     with pytest.raises(ConfigError, match="Unknown configuration path"):
         set_dotted(data, "server.missing", 1)
+    with pytest.raises(ConfigError, match="Unknown configuration path"):
+        set_dotted(data, "missing.value", 1)
 
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     target = tmp_path / "nested" / "file.txt"
@@ -77,3 +80,22 @@ def test_global_config_and_command_edges(tmp_path: Path, monkeypatch: pytest.Mon
             message="failed",
             fallback_suggestion="fallback",
         )
+
+
+def test_project_config_rejects_unknown_user_schema(tmp_path: Path) -> None:
+    config_path = tmp_path / "sftpwarden.yaml"
+    config_path.write_text(
+        """
+version: 1
+project:
+  name: dev
+provider:
+  type: yaml
+  path: /etc/sftpwarden/users.yaml
+  user_schema: 99
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="Unsupported provider user schema version"):
+        load_project_config(config_path)

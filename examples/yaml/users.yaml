@@ -1,5 +1,10 @@
+schema_version: 2
 users:
   - username: alice
     password_hash: "$6$rounds=500000$example$replace-with-real-hash"
+    keys:
+      - name: laptop
+        public_key: "ssh-ed25519 AAAA alice@example"
+        comment: Example key; replace before use
+        source: example
     upload_dir: upload
-

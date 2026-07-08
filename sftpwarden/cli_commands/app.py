@@ -20,7 +20,10 @@ context_app = typer.Typer(
 )
 runtime_app = typer.Typer(help="Runtime-only commands used inside the container.")
 user_app = typer.Typer(help="Manage users in mutable providers.")
+user_key_app = typer.Typer(help="Manage named SSH keys for users.")
 provider_app = typer.Typer(help="Import, export, and copy provider users.")
+provider_schema_app = typer.Typer(help="Inspect and migrate provider schemas.")
+provider_keys_app = typer.Typer(help="Migrate provider key storage.")
 watcher_app = typer.Typer(help="Watcher management.")
 kube_app = typer.Typer(help="Kubernetes deployment operations.")
 helm_app = typer.Typer(help="Helm chart operations.")
@@ -28,11 +31,19 @@ helm_app = typer.Typer(help="Helm chart operations.")
 app.add_typer(config_app, name="config")
 app.add_typer(context_app, name="context")
 app.add_typer(runtime_app, name="runtime")
+user_app.add_typer(user_key_app, name="key")
 app.add_typer(user_app, name="user")
+provider_app.add_typer(provider_schema_app, name="schema")
+provider_app.add_typer(provider_keys_app, name="keys")
 app.add_typer(provider_app, name="provider")
 app.add_typer(watcher_app, name="watcher")
 app.add_typer(kube_app, name="kube")
 app.add_typer(helm_app, name="helm")
+
+
+def print_version() -> None:
+    """Print the installed SFTPWarden version."""
+    console.print(f"SFTPWarden {get_version()}")
 
 
 def version_callback(value: bool) -> None:
@@ -44,8 +55,14 @@ def version_callback(value: bool) -> None:
         Whether the version flag was provided.
     """
     if value:
-        console.print(f"SFTPWarden {get_version()}")
+        print_version()
         raise typer.Exit()
+
+
+@app.command("version")
+def version_command() -> None:
+    """Show version and exit."""
+    print_version()
 
 
 @app.callback()

@@ -81,6 +81,13 @@ class BaseProvider(ABC):
         """
         self.write(service.remove_user(self.read(), username))
 
+    def ensure_schema_storage(self, schema_version: int) -> None:
+        """Ensure provider storage required by a user schema exists.
+
+        Providers without schema-specific storage can leave this as a no-op.
+        """
+        return None
+
 
 class FileProvider(BaseProvider):
     """Base provider for file-backed user stores."""

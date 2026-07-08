@@ -87,6 +87,8 @@ def run(
             cwd=cwd,
             check=False,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=capture_output,
             timeout=timeout,
         )

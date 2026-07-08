@@ -18,6 +18,7 @@ from sftpwarden.render.kubernetes import (
     write_helm_values,
     write_kubernetes_manifests,
 )
+from sftpwarden.services.context_cleanup import ensure_remote_only_root_available
 from sftpwarden.system.commands import CommandResult, command_text, run
 from sftpwarden.utils._version import get_version
 from sftpwarden.utils.errors import ContextError, RuntimeError
@@ -125,6 +126,7 @@ def deployment_plan(context: ContextEntry) -> DeploymentPlan:
 def apply_deployment_plan(context: ContextEntry, *, runner: CommandRunner = run) -> str:
     """Apply the selected context deployment plan."""
     if not context.config:
+        ensure_remote_only_root_available(context, runner=runner)
         plan = compose_deployment_plan(context)
         _run_actions(plan, runner=runner, cwd=context.root)
         return f"Deployed {context.name} with Docker Compose."
