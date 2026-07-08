@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import types
 from collections.abc import Callable
@@ -14,6 +15,59 @@ from sftpwarden.render.compose import write_compose
 from sftpwarden.users import ProviderUsers, SFTPUser
 
 TEST_HASH = "$6$rounds=500000$saltstring$hashvalue"
+
+RELEASE_VALIDATION_DIR = Path(__file__).parent / "release_validation"
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Register opt-in release validation controls."""
+    parser.addoption(
+        "--run-release-validation",
+        action="store_true",
+        default=False,
+        help="Run the explicit SFTPWarden release validation suite.",
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Document release validation markers for explicit runs."""
+    config.addinivalue_line(
+        "markers",
+        "release_validation: opt-in end-to-end release validation tests",
+    )
+    config.addinivalue_line(
+        "markers",
+        "release_external: release validation tests that require external tools/services",
+    )
+    config.addinivalue_line(
+        "markers",
+        "release_docker: release validation tests that require Docker and Docker Compose",
+    )
+    config.addinivalue_line(
+        "markers",
+        "release_kubernetes: release validation tests that require kubectl and a cluster",
+    )
+    config.addinivalue_line(
+        "markers",
+        "release_helm: release validation tests that require Helm and a cluster",
+    )
+    config.addinivalue_line(
+        "markers",
+        "release_databases: release validation tests that start provider databases in Docker",
+    )
+
+
+def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool:
+    """Keep release validation out of tox and normal pytest runs."""
+    release_requested = config.getoption("--run-release-validation") or (
+        os.environ.get("SFTPWARDEN_RUN_RELEASE_VALIDATION") == "1"
+    )
+    path = Path(str(collection_path))
+    try:
+        path.relative_to(RELEASE_VALIDATION_DIR)
+    except ValueError:
+        return False
+    return not release_requested
 
 
 @pytest.fixture

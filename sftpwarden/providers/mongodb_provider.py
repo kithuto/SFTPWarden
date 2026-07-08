@@ -44,10 +44,24 @@ class MongoDBProvider(BaseProvider):
             for document in documents
             if document.get("username") != "__sftpwarden_schema__"
         ]
-        schema = detect_mapping_schema({"users": user_documents}, fallback_schema=1)
-        return ProviderUsers(
-            schema_version=schema.version,
-            users=[user_from_mongodb_document(document) for document in user_documents],
+        document_versions = [
+            int(document["schema_version"])
+            for document in user_documents
+            if document.get("schema_version") is not None
+        ]
+        normalized_documents = [
+            mongodb_document_to_user_mapping(document) for document in user_documents
+        ]
+        if document_versions:
+            schema_version = max(document_versions)
+        elif normalized_documents:
+            schema_version = detect_mapping_schema(
+                {"users": normalized_documents}, fallback_schema=1
+            ).version
+        else:
+            schema_version = self.config.user_schema
+        return user_schema(schema_version).users_from_mapping(
+            {"schema_version": schema_version, "users": normalized_documents}
         )
 
     def write(self, users: ProviderUsers) -> None:
@@ -194,7 +208,12 @@ def user_from_mongodb_document(document: dict[str, Any]) -> SFTPUser:
     SFTPUser
         Validated SFTP user.
     """
+    return SFTPUser.model_validate(mongodb_document_to_user_mapping(document))
+
+
+def mongodb_document_to_user_mapping(document: dict[str, Any]) -> dict[str, Any]:
+    """Return a provider user mapping from one MongoDB document."""
     data = dict(document)
     data.pop("_id", None)
     data.pop("schema_version", None)
-    return SFTPUser.model_validate(data)
+    return data

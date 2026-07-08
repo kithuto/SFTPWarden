@@ -96,7 +96,7 @@ def context_value(
     value = args[1] if len(args) == 2 else None
     try:
         entry = resolve_context(context_name=context)
-        data = entry.model_dump(mode="json", exclude_none=True)
+        data = entry.model_dump(mode="json")
         normalized_field = normalize_context_field(field)
         if value is None:
             console.print(format_value(get_dotted(data, normalized_field)))
@@ -215,7 +215,7 @@ def update_context_field(
     elif field == "remote.remote_root":
         entry = update_remote_root(entry, value, yes=yes)
     else:
-        data = entry.model_dump(mode="json", exclude_none=True)
+        data = entry.model_dump(mode="json")
         set_dotted(data, field, parse_cli_value(value))
         entry = type(entry).model_validate(data)
     registry.contexts[entry.name] = entry
@@ -419,7 +419,7 @@ def register_context_field_command(command_name: str, field: str) -> None:
     ) -> None:
         try:
             entry = resolve_context(context_name=context)
-            data = entry.model_dump(mode="json", exclude_none=True)
+            data = entry.model_dump(mode="json")
             if value is None:
                 console.print(format_value(get_dotted(data, field)))
                 return

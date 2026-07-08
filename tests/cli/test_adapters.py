@@ -379,12 +379,17 @@ def test_context_dynamic_field_commands_read_update_and_report_errors(
     update_result = runner.invoke(
         app, ["context", "host", "sftp-prod.example.com", "--context", "prod"]
     )
+    ssh_key_result = runner.invoke(
+        app, ["context", "ssh-key", "/home/deploy/.ssh/prod", "--context", "prod"]
+    )
     invalid_result = runner.invoke(app, ["context", "port", "not-a-port", "--context", "prod"])
     missing_result = runner.invoke(app, ["context", "host", "--context", "missing"])
 
     assert "example.com" in read_result.output
     assert update_result.exit_code == 0, update_result.output
+    assert ssh_key_result.exit_code == 0, ssh_key_result.output
     assert load_registry().contexts["prod"].remote.host == "sftp-prod.example.com"  # type: ignore[union-attr]
+    assert load_registry().contexts["prod"].remote.ssh_key == "/home/deploy/.ssh/prod"  # type: ignore[union-attr]
     assert invalid_result.exit_code == 1
     assert missing_result.exit_code == 1
 

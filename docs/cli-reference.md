@@ -44,6 +44,7 @@ project. You do not need to know SFTPWarden internals to use these commands.
   - [sftpwarden context ls](#sftpwarden-context-ls)
   - [sftpwarden context current](#sftpwarden-context-current)
   - [sftpwarden context use](#sftpwarden-context-use)
+  - [sftpwarden context default](#sftpwarden-context-default)
   - [sftpwarden context show](#sftpwarden-context-show)
   - [sftpwarden context FIELD](#sftpwarden-context-field)
   - [sftpwarden context add](#sftpwarden-context-add)
@@ -749,6 +750,15 @@ sftpwarden context use dev
 ```
 
 `context default dev` does the same thing.
+
+### `sftpwarden context default`
+
+Sets the default active context. This is the explicit form of
+`sftpwarden context use`.
+
+```bash
+sftpwarden context default dev
+```
 
 ### `sftpwarden context show`
 

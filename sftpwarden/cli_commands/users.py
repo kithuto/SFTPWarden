@@ -142,7 +142,7 @@ def user_add(
         resolved_password_hash = prompt_password_hash(
             password=password,
             password_hash=password_hash,
-            prompt_if_missing=service.config.auth.allow_password,
+            prompt_if_missing=service.config.auth.allow_password and not public_key,
         )
         service.add_user(
             username=username,

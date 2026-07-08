@@ -459,6 +459,24 @@ def test_config_command_reads_and_updates_project_config(tmp_path: Path, monkeyp
     assert config.kubernetes.liveness_probe.period_seconds == 45
 
 
+def test_config_string_fields_keep_numeric_cli_values_as_strings(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "dev-project"
+    runner = CliRunner()
+    runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
+
+    root_update = runner.invoke(app, ["config", "isolation.root_permissions", "755"])
+    upload_update = runner.invoke(app, ["config", "isolation.upload_permissions", "750"])
+
+    config = load_config(root / "sftpwarden.yaml")
+    assert root_update.exit_code == 0, root_update.output
+    assert upload_update.exit_code == 0, upload_update.output
+    assert config.isolation.root_permissions == "755"
+    assert config.isolation.upload_permissions == "750"
+
+
 def test_config_project_name_renames_active_context(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     root = tmp_path / "dev-project"
@@ -1078,6 +1096,34 @@ def test_user_add_hashes_plaintext_password(tmp_path: Path, monkeypatch) -> None
     assert bob["username"] == "bob"
     assert bob["password_hash"].startswith("$6$")
     assert "correct horse battery staple" not in (root / "users.yaml").read_text(encoding="utf-8")
+
+
+def test_user_add_public_key_does_not_prompt_for_password(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "dev-project"
+    runner = CliRunner()
+    runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
+
+    result = runner.invoke(
+        app,
+        [
+            "user",
+            "add",
+            "keyonly",
+            "--public-key",
+            TEST_KEY,
+            "--context",
+            "dev",
+            "--no-refresh",
+        ],
+    )
+
+    provider = yaml.safe_load((root / "users.yaml").read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0, result.output
+    assert provider["users"][0]["username"] == "keyonly"
+    assert provider["users"][0]["keys"][0]["public_key"] == TEST_KEY
+    assert "Password" not in result.output
 
 
 def test_user_add_accepts_existing_password_hash(tmp_path: Path, monkeypatch) -> None:

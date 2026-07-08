@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 import yaml
@@ -65,7 +65,7 @@ def config_value(
             console.print(format_value(get_dotted(data, path)))
             raise typer.Exit()
         old_name = loaded.project.name
-        set_dotted(data, path, parse_cli_value(value))
+        set_dotted(data, path, parse_project_config_cli_value(data, path, value))
         updated = SFTPWardenConfig.model_validate(data)
         write_config(entry.config, updated)
         if path == "project.name" and updated.project.name != old_name and not config:
@@ -133,12 +133,21 @@ def update_project_config_value(
         console.print(format_value(get_dotted(data, path)))
         return
     old_name = loaded.project.name
-    set_dotted(data, path, parse_cli_value(value))
+    set_dotted(data, path, parse_project_config_cli_value(data, path, value))
     updated = SFTPWardenConfig.model_validate(data)
     write_config(entry.config, updated)
     if path == "project.name" and updated.project.name != old_name and not config:
         rename_context_for_project_name(entry.name, updated.project.name)
     print_success(f"Updated [bold]{path}[/bold].")
+
+
+def parse_project_config_cli_value(data: dict[str, Any], path: str, value: str) -> Any:
+    """Parse a CLI scalar while preserving existing string-typed fields."""
+    current = get_dotted(data, path)
+    parsed = parse_cli_value(value)
+    if isinstance(current, str) and not isinstance(parsed, str):
+        return value
+    return parsed
 
 
 def register_project_config_path(path: str) -> None:

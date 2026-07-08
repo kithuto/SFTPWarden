@@ -163,6 +163,48 @@ def test_mongodb_provider_round_trip_and_delete_all(
     assert provider.read().users == []
 
 
+def test_mongodb_provider_preserves_document_schema_version_for_password_only_v2(
+    install_fake_pymongo: Callable,
+    test_password_hash: str,
+) -> None:
+    """MongoDB keeps schema v2 even before a user has named keys."""
+    install_fake_pymongo()
+    provider = MongoDBProvider(
+        config=ProviderConfig(
+            type=ProviderType.MONGODB,
+            dsn="mongodb://localhost:27017/sftpwarden",
+            collection="sftp_users",
+            user_schema=2,
+        )
+    )
+    user = SFTPUser(username="alice", password_hash=test_password_hash)
+
+    provider.create_table()
+    provider.upsert_user(user)
+    loaded = provider.read()
+
+    assert loaded.schema_version == 2
+    assert loaded.users[0].username == "alice"
+    assert loaded.users[0].keys == []
+
+    provider.upsert_user(
+        SFTPUser(
+            username="alice",
+            keys=[
+                SFTPUserKey(
+                    name="prod",
+                    public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests",
+                )
+            ],
+        )
+    )
+
+    loaded_with_key = provider.read()
+
+    assert loaded_with_key.schema_version == 2
+    assert loaded_with_key.users[0].keys[0].name == "prod"
+
+
 def test_mongodb_dsn_and_dependency_errors(
     monkeypatch: pytest.MonkeyPatch,
     install_fake_pymongo: Callable,
