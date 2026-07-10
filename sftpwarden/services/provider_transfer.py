@@ -9,9 +9,15 @@ from typing import Literal, cast
 
 import yaml
 
-from sftpwarden.config import DeployTarget, ProviderType, RemoteStorage, load_config
+from sftpwarden.config import (
+    DeployTarget,
+    ProviderType,
+    RemoteStorage,
+    SFTPWardenConfig,
+    load_config,
+)
 from sftpwarden.contexts import ContextEntry, ContextType, resolve_context
-from sftpwarden.providers import provider_from_config
+from sftpwarden.providers import BaseProvider, provider_from_config
 from sftpwarden.refresh import refresh_context
 from sftpwarden.users import ProviderUsers, users_fingerprint
 from sftpwarden.users.schemas import detect_csv_schema, users_from_mapping
@@ -39,7 +45,9 @@ class ProviderMutationResult:
     manual_action: str | None = None
 
 
-def resolve_provider_context(*, context_name: str | None = None, config_path: str | None = None):
+def resolve_provider_context(
+    *, context_name: str | None = None, config_path: str | None = None
+) -> tuple[ContextEntry, SFTPWardenConfig, BaseProvider]:
     """Resolve a context, config, and provider.
 
     Parameters
@@ -292,8 +300,8 @@ def copy_provider_users(
 def write_provider_users(
     *,
     entry: ContextEntry,
-    config,
-    provider,
+    config: SFTPWardenConfig,
+    provider: BaseProvider,
     source_users: ProviderUsers,
     mode: ImportMode,
     dry_run: bool,
@@ -368,7 +376,7 @@ def write_provider_users(
     )
 
 
-def sync_provider_file_if_needed(entry: ContextEntry, config) -> str | None:
+def sync_provider_file_if_needed(entry: ContextEntry, config: SFTPWardenConfig) -> str | None:
     """Sync a local provider file for remote local-sync contexts.
 
     Parameters

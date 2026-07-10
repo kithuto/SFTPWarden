@@ -182,6 +182,7 @@ def split_image(image: str) -> tuple[str, str | None]:
 
 
 def _helm_probe_values(probe: KubernetesProbeConfig) -> dict[str, int]:
+    """Serialize probe timing settings for Helm values."""
     return {
         "periodSeconds": probe.period_seconds,
         "timeoutSeconds": probe.timeout_seconds,
@@ -200,6 +201,7 @@ def provider_dsn_secret_name(config: SFTPWardenConfig) -> str:
 
 
 def _metadata(name: str, namespace: str, labels: dict[str, str]) -> dict[str, Any]:
+    """Build shared Kubernetes object metadata."""
     return {"name": name, "namespace": namespace, "labels": labels}
 
 
@@ -210,6 +212,7 @@ def _config_map(
     labels: dict[str, str],
     project_root: str | Path | None,
 ) -> dict[str, Any]:
+    """Build the runtime configuration ConfigMap."""
     data = {"sftpwarden.yaml": kubernetes_config_text(config)}
     if _provider_syncs_from_config_map(config):
         data[_provider_runtime_filename(config)] = _provider_bootstrap_text(config, project_root)
@@ -222,6 +225,7 @@ def _config_map(
 
 
 def _host_keys_secret(name: str, namespace: str, labels: dict[str, str]) -> dict[str, Any]:
+    """Build the optional persisted host-keys Secret."""
     return {
         "apiVersion": "v1",
         "kind": "Secret",
@@ -234,6 +238,7 @@ def _host_keys_secret(name: str, namespace: str, labels: dict[str, str]) -> dict
 def _provider_dsn_secret(
     config: SFTPWardenConfig, name: str, namespace: str, labels: dict[str, str]
 ) -> dict[str, Any]:
+    """Build the provider DSN Secret."""
     return {
         "apiVersion": "v1",
         "kind": "Secret",
@@ -246,6 +251,7 @@ def _provider_dsn_secret(
 def _persistent_volume_claims(
     config: SFTPWardenConfig, name: str, namespace: str, labels: dict[str, str]
 ) -> list[dict[str, Any]]:
+    """Build all persistent volume claims required by the runtime."""
     claims = [
         _pvc(
             f"{name}-data",
@@ -270,6 +276,7 @@ def _pvc(
     storage_class: str | None,
     size: str,
 ) -> dict[str, Any]:
+    """Build one Kubernetes persistent volume claim."""
     spec: dict[str, Any] = {
         "accessModes": ["ReadWriteOnce"],
         "resources": {"requests": {"storage": size}},
@@ -287,6 +294,7 @@ def _pvc(
 def _service(
     kubernetes: KubernetesConfig, name: str, namespace: str, labels: dict[str, str]
 ) -> dict[str, Any]:
+    """Build the Kubernetes Service exposing SFTP."""
     return {
         "apiVersion": "v1",
         "kind": "Service",
@@ -300,6 +308,7 @@ def _service(
 
 
 def _kubernetes_probe(health_probe: dict[str, Any], probe: KubernetesProbeConfig) -> dict[str, Any]:
+    """Combine a probe action with configured timing thresholds."""
     return {
         **health_probe,
         "failureThreshold": probe.failure_threshold,
@@ -315,6 +324,7 @@ def _stateful_set(
     labels: dict[str, str],
     project_root: str | Path | None,
 ) -> dict[str, Any]:
+    """Build the complete SFTPWarden runtime StatefulSet."""
     volumes = [
         {"name": "config", "configMap": {"name": f"{name}-config"}},
         {"name": "data", "persistentVolumeClaim": {"claimName": f"{name}-data"}},
@@ -451,6 +461,7 @@ def _stateful_set(
 def _provider_bootstrap_text(
     config: SFTPWardenConfig, project_root: str | Path | None = None
 ) -> str:
+    """Return validated initial content for a file provider."""
     if config.provider.type not in FILE_PROVIDER_TYPES:
         return ""
     if config.provider.type in TEXT_SYNC_PROVIDER_TYPES and project_root is not None:
@@ -464,6 +475,7 @@ def _provider_bootstrap_text(
 def _provider_bootstrap_command(
     config: SFTPWardenConfig, project_root: str | Path | None
 ) -> str | None:
+    """Build the shell command that initializes provider storage."""
     if config.provider.type not in FILE_PROVIDER_TYPES:
         return None
     provider_path = kubernetes_runtime_config(config).provider.path
@@ -486,8 +498,10 @@ def _provider_bootstrap_command(
 
 
 def _provider_syncs_from_config_map(config: SFTPWardenConfig) -> bool:
+    """Return whether the provider content is synced through a ConfigMap."""
     return config.provider.type in TEXT_SYNC_PROVIDER_TYPES
 
 
 def _provider_runtime_filename(config: SFTPWardenConfig) -> str:
+    """Return the provider filename used inside the runtime container."""
     return Path(kubernetes_runtime_config(config).provider.path).name

@@ -189,10 +189,12 @@ def install_cli_error_handlers(typer_app: typer.Typer) -> None:
 
 
 def _debug_enabled() -> bool:
+    """Return whether raw CLI tracebacks are enabled."""
     return os.environ.get("SFTPWARDEN_DEBUG", "").strip().lower() in DEBUG_ENV_VALUES
 
 
 def _validation_error_summary(exc: ValidationError) -> str:
+    """Return a concise summary of the first Pydantic validation error."""
     first = exc.errors()[0]
     location = ".".join(str(part) for part in first.get("loc", ())) or "value"
     message = first.get("msg", str(exc))
@@ -200,6 +202,7 @@ def _validation_error_summary(exc: ValidationError) -> str:
 
 
 def _kubernetes_replicas_error(exc: ValidationError) -> SFTPWardenError | None:
+    """Translate the unsupported Kubernetes replica validation error."""
     for error in exc.errors():
         message = str(error.get("msg", ""))
         if "Kubernetes replicas > 1 are not supported yet." in message:
@@ -211,6 +214,7 @@ def _kubernetes_replicas_error(exc: ValidationError) -> SFTPWardenError | None:
 
 
 def _command_text(command: Any) -> str:
+    """Render an arbitrary command value as readable text."""
     if isinstance(command, str):
         return command
     if isinstance(command, (list, tuple)):
@@ -219,6 +223,7 @@ def _command_text(command: Any) -> str:
 
 
 def _missing_key_text(exc: KeyError) -> str:
+    """Return a KeyError value without Python's extra quoting."""
     if exc.args:
         return str(exc.args[0])
     return str(exc)

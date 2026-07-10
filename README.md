@@ -94,17 +94,6 @@ pip install sftpwarden
 sftpwarden --version
 ```
 
-For source checkout usage:
-
-```bash
-git clone https://github.com/kithuto/sftpwarden.git
-cd sftpwarden
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e ".[mysql,postgres,mongodb]"
-sftpwarden --version
-```
-
 Optional extras:
 
 | Need | Install |
@@ -119,13 +108,6 @@ Optional extras:
 `mariadb` is an alias of the MySQL extra. Installing either
 `sftpwarden[mysql]` or `sftpwarden[mariadb]` enables both MySQL and MariaDB
 providers because they share PyMySQL.
-
-For runtime and watcher image development, build the images locally:
-
-```bash
-docker build -t sftpwarden:local -f docker/runtime/Dockerfile .
-docker build -t sftpwarden-watcher:local -f docker/watcher/Dockerfile .
-```
 
 ## Shell Autocomplete
 
@@ -258,13 +240,24 @@ sftpwarden init archive --remote deploy@sftp-archive.example.com:/opt/sftpwarden
   --remote-only \
   --critical
 
-sftpwarden refresh --dry-run
+sftpwarden deploy --dry-run
 ```
+
+Remote-only init registers an existing remote project without creating local
+project files. Use `sftpwarden deploy --dry-run` to preview the in-place remote
+Compose commands; use `sftpwarden refresh --dry-run` only when you want to
+preview a runtime user reload.
 
 Kubernetes manifests:
 
 ```bash
 sftpwarden init prod --deploy kube --yes
+sftpwarden deploy
+```
+
+Optional preview before deploying:
+
+```bash
 sftpwarden kube render
 sftpwarden deploy --dry-run
 ```
@@ -273,10 +266,19 @@ Helm:
 
 ```bash
 sftpwarden init prod --deploy helm --yes
+sftpwarden deploy
+```
+
+Optional preview before deploying:
+
+```bash
 sftpwarden helm values --write
 sftpwarden helm template
 sftpwarden deploy --dry-run
 ```
+
+Preview commands are optional. Use them when you want to inspect the manifests,
+Helm values or template output, or deployment plan before applying changes.
 
 During Kubernetes or Helm init, SFTPWarden checks the namespace. If it does not
 exist, interactive init asks whether to create it; `--yes` creates it

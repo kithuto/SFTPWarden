@@ -246,18 +246,22 @@ class DockerWatcher(BaseWatcher):
 
     @classmethod
     def is_supported(cls) -> bool:
+        """Return whether Docker is available on the current host."""
         return shutil.which("docker") is not None
 
     @classmethod
     def path(cls) -> Path:
+        """Return the generated Docker Compose file path."""
         return docker_watcher_compose_path()
 
     @classmethod
     def render(cls, *, image: str | None = None) -> str:
+        """Render the Docker Compose watcher configuration."""
         return render_docker_watcher_compose(image=image)
 
     @classmethod
     def commands(cls, *, image: str | None = None) -> list[list[str]]:
+        """Return Docker Compose commands that activate the watcher."""
         image_reference = watcher_image_reference(image)
         compose_command = ["docker", "compose", "-f", str(docker_watcher_compose_path())]
         commands = []
@@ -271,10 +275,12 @@ class DockerWatcher(BaseWatcher):
 
     @classmethod
     def uninstall_commands(cls, *, path: Path | None = None) -> list[list[str]]:
+        """Return the Docker Compose command that stops the watcher."""
         compose_path = path or docker_watcher_compose_path()
         return [["docker", "compose", "-f", str(compose_path), "down"]]
 
     @classmethod
     def write(cls, *, image: str | None = None) -> Path:
+        """Write Docker watcher contexts and Compose configuration."""
         write_docker_watcher_contexts()
         return super().write(image=image)

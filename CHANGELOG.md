@@ -62,7 +62,7 @@ feedback. It summarizes the main public roadmap through v2.0.
 - Reuse existing CLI service-layer behavior for API operations.
 - Add token-based authentication and audit API mutations.
 
-## [1.3.0] - 2026-07-07
+## [1.3.0] - 2026-07-08
 
 ### Added
 

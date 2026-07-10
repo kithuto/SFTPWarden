@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
+
+if TYPE_CHECKING:
+    import psycopg
+
+    _DictConnection: TypeAlias = psycopg.Connection[dict[str, Any]]
 
 from sftpwarden.config import ProviderType
 from sftpwarden.providers.base import BaseProvider
@@ -68,13 +75,12 @@ class PostgreSQLProvider(BaseProvider):
                 "PostgreSQL provider requires the postgres optional dependency.",
                 suggestion='Install SFTPWarden with the "postgres" extra.',
             ) from exc
-        with (
-            psycopg.connect(
-                os.path.expandvars(dsn),
-                row_factory=dict_row,  # type: ignore
-            ) as connection,
-            connection.cursor() as cursor,
-        ):
+        connect = cast("Callable[..., _DictConnection]", psycopg.connect)
+        connection = connect(
+            os.path.expandvars(dsn),
+            row_factory=dict_row,
+        )
+        with connection, connection.cursor() as cursor:
             query = self.config.query or sql_select_users_query(self.config.table)
             if self.config.query:
                 validate_sql_read_query(query)
@@ -84,7 +90,7 @@ class PostgreSQLProvider(BaseProvider):
             if schema_uses_key_table(self.config.user_schema):
                 execute_validated_sql(cursor, sql_select_user_keys_query(self.config.table))
                 key_rows = cursor.fetchall()
-            return users_from_sql_rows(  # type: ignore
+            return users_from_sql_rows(
                 rows,
                 key_rows=key_rows,
                 schema_version=self.config.user_schema,

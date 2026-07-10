@@ -6,12 +6,8 @@ import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Literal
-
-try:
-    import pwd
-except ModuleNotFoundError:
-    pwd = None
 
 from sftpwarden.config import SFTPWardenConfig, load_config
 from sftpwarden.providers import ProviderUsers, SFTPUser, load_users, users_fingerprint
@@ -20,6 +16,14 @@ from sftpwarden.users.models import SFTPUserKey
 from sftpwarden.utils.console import console
 from sftpwarden.utils.constants import CONTAINER_CONFIG_PATH
 from sftpwarden.utils.errors import RuntimeError
+
+pwd: ModuleType | None
+try:
+    import pwd as _pwd
+except ModuleNotFoundError:
+    pwd = None
+else:
+    pwd = _pwd
 
 SSHD_CONFIG_PATH = Path("/etc/ssh/sshd_config")
 DISABLED_PASSWORD_HASH = "!"
@@ -754,7 +758,7 @@ def user_exists(username: str) -> bool:
             suggestion="Run runtime user refresh inside the Linux OpenSSH container.",
         )
     try:
-        pwd.getpwnam(username)  # type: ignore
+        pwd.getpwnam(username)
         return True
     except KeyError:
         return False

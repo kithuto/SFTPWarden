@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from sftpwarden.users.models import ProviderUsers, SFTPUser, SFTPUserKey
-from sftpwarden.users.schemas.base import BASIC_PUBLIC_KEYS, UserSchema
+from sftpwarden.users.schemas.base import BASIC_PUBLIC_KEYS, SFTPUserAuthFields, UserSchema
 from sftpwarden.users.schemas.registry import register_user_schema
 from sftpwarden.utils.errors import ProviderError
 
@@ -98,7 +98,7 @@ class UserSchemaV1(UserSchema):
         public_keys: list[str],
         *,
         source: str,
-    ) -> dict[str, object]:
+    ) -> SFTPUserAuthFields:
         """Return schema v1 auth fields for public key input."""
         return {"public_keys": public_keys, "keys": []}
 

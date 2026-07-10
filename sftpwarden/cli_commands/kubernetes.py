@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, TypedDict
 
 import typer
 from rich.prompt import Confirm
@@ -14,8 +14,8 @@ from sftpwarden.cli_commands.deploy_schema import (
 )
 from sftpwarden.cli_commands.errors import handle_error
 from sftpwarden.cli_commands.output import print_json
-from sftpwarden.config import load_config
-from sftpwarden.contexts import resolve_context
+from sftpwarden.config import SFTPWardenConfig, load_config
+from sftpwarden.contexts import ContextEntry, resolve_context
 from sftpwarden.render.kubernetes import kubernetes_manifest_text, write_kubernetes_manifests
 from sftpwarden.services.deploy import (
     kubectl_command,
@@ -25,6 +25,17 @@ from sftpwarden.services.deploy import (
 from sftpwarden.system.commands import run
 from sftpwarden.utils.console import console, print_info, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
+
+
+class KubernetesCheck(TypedDict):
+    """Structured result for one kubectl status check."""
+
+    name: str
+    command: list[str]
+    returncode: int
+    output: str
+    message: str
+    suggestion: str
 
 
 @kube_app.command("render")
@@ -243,11 +254,15 @@ def kube_delete(
         handle_error(exc)
 
 
-def _load_config(context: str | None, config: str | None):
+def _load_config(context: str | None, config: str | None) -> SFTPWardenConfig:
+    """Load project configuration for a resolved context."""
     return _load_context_config(context, config)[1]
 
 
-def _load_context_config(context: str | None, config: str | None):
+def _load_context_config(
+    context: str | None, config: str | None
+) -> tuple[ContextEntry, SFTPWardenConfig]:
+    """Resolve a context and load its required local configuration."""
     entry = resolve_context(config_path=config, context_name=context, reconcile_config=True)
     if not entry.config:
         raise SFTPWardenError(
@@ -257,7 +272,8 @@ def _load_context_config(context: str | None, config: str | None):
     return entry, load_config(entry.config)
 
 
-def _status_commands(config):
+def _status_commands(config: SFTPWardenConfig) -> list[tuple[str, list[str]]]:
+    """Build the kubectl commands used by Kubernetes status checks."""
     selector = f"app.kubernetes.io/instance={config.kubernetes.release}"
     namespace = config.kubernetes.namespace
     return [
@@ -279,7 +295,8 @@ def _status_commands(config):
     ]
 
 
-def _command_status(command: list[str], *, name: str | None = None) -> dict:
+def _command_status(command: list[str], *, name: str | None = None) -> KubernetesCheck:
+    """Execute one status command and normalize its diagnostic result."""
     result = run(command)
     message = ""
     suggestion = ""
@@ -297,7 +314,8 @@ def _command_status(command: list[str], *, name: str | None = None) -> dict:
     }
 
 
-def _print_check_details(check: dict) -> None:
+def _print_check_details(check: KubernetesCheck) -> None:
+    """Print diagnostic details for one Kubernetes check."""
     message = check.get("message") or check.get("output")
     suggestion = check.get("suggestion")
     if message:

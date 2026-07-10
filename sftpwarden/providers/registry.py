@@ -95,7 +95,7 @@ def build_provider(
         query=query,
         table=table,
         collection=collection,
-        user_schema=user_schema,  # type: ignore[arg-type]
+        user_schema=user_schema,
     )
     provider_path = Path(path) if path is not None else None
     return provider_class(normalized)(provider_config, path=provider_path)

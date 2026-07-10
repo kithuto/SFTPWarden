@@ -136,8 +136,8 @@ def refresh_context(context: ContextEntry, *, dry_run: bool = False) -> str:
     if not dry_run:
         ensure_remote_only_root_available(context)
 
-    command = " ".join(shlex.quote(part) for part in docker_compose_command(context))
-    remote_command = f"cd {shlex.quote(context.remote.remote_root)} && {command}"
+    compose_command = " ".join(shlex.quote(part) for part in docker_compose_command(context))
+    remote_command = f"cd {shlex.quote(context.remote.remote_root)} && {compose_command}"
     ssh = ssh_base_command(context.remote)
     ssh.append(remote_command)
     if dry_run:
@@ -152,6 +152,7 @@ def refresh_context(context: ContextEntry, *, dry_run: bool = False) -> str:
 
 
 def _kubernetes_config_if_available(context: ContextEntry) -> SFTPWardenConfig | None:
+    """Return Kubernetes config when the context has a readable local file."""
     if not context.config:
         return None
     config_path = Path(context.config)

@@ -216,6 +216,7 @@ class SFTPUser(BaseModel):
         return self
 
     def _validate_unique_keys(self) -> None:
+        """Reject duplicate key names and fingerprints."""
         names = [key.name for key in self.keys]
         if len(names) != len(set(names)):
             raise ValueError("User contains duplicate key names.")

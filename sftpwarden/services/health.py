@@ -3,6 +3,7 @@ from __future__ import annotations
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from sftpwarden.config import FILE_PROVIDER_TYPES, RemoteStorage, load_config, provider_local_path
 from sftpwarden.contexts import ContextEntry, ContextType, resolve_context
@@ -47,7 +48,7 @@ class HealthReport:
         """
         return all(check.status != "fail" for check in self.checks)
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible health report.
 
         Returns

@@ -35,20 +35,24 @@ class WindowsTaskWatcher(BaseWatcher):
 
     @classmethod
     def is_supported(cls) -> bool:
+        """Return whether Windows Task Scheduler is available."""
         return system_is("Windows") and (
             shutil.which("schtasks") is not None or shutil.which("schtasks.exe") is not None
         )
 
     @classmethod
     def path(cls) -> Path:
+        """Return the generated PowerShell watcher-script path."""
         return windows_script_path()
 
     @classmethod
     def render(cls, *, image: str | None = None) -> str:
+        """Render the PowerShell watcher script."""
         return render_windows_script()
 
     @classmethod
     def commands(cls, *, image: str | None = None) -> list[list[str]]:
+        """Return commands that register and start the scheduled task."""
         task_command = (
             f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{windows_script_path()}"'
         )
@@ -69,4 +73,5 @@ class WindowsTaskWatcher(BaseWatcher):
 
     @classmethod
     def uninstall_commands(cls, *, path: Path | None = None) -> list[list[str]]:
+        """Return the command that removes the scheduled task."""
         return [["schtasks", "/Delete", "/TN", WINDOWS_TASK_NAME, "/F"]]

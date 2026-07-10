@@ -15,6 +15,7 @@ from sftpwarden.users.schemas.base import (
     KEY_LIFECYCLE,
     NAMED_KEY_METADATA,
     NAMED_KEYS,
+    SFTPUserAuthFields,
     UserSchema,
 )
 from sftpwarden.users.schemas.registry import register_user_schema
@@ -128,7 +129,7 @@ class UserSchemaV2(UserSchema):
         public_keys: list[str],
         *,
         source: str,
-    ) -> dict[str, object]:
+    ) -> SFTPUserAuthFields:
         """Return schema v2 auth fields for public key input."""
         return {
             "public_keys": [],

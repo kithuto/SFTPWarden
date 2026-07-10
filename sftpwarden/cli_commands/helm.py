@@ -17,9 +17,10 @@ from sftpwarden.cli_commands.deploy_schema import (
 from sftpwarden.cli_commands.errors import handle_error
 from sftpwarden.cli_commands.output import print_json
 from sftpwarden.config import SFTPWardenConfig, load_config
-from sftpwarden.contexts import resolve_context
+from sftpwarden.contexts import ContextEntry, resolve_context
 from sftpwarden.render.kubernetes import HELM_VALUES_FILE, helm_values_text, write_helm_values
 from sftpwarden.services.deploy import (
+    DeploymentPlan,
     HelmChartReference,
     helm_chart_reference,
     helm_command,
@@ -199,7 +200,10 @@ def helm_uninstall(
         handle_error(exc)
 
 
-def _load_context_config(context: str | None, config: str | None):
+def _load_context_config(
+    context: str | None, config: str | None
+) -> tuple[ContextEntry, SFTPWardenConfig]:
+    """Resolve a context and load its required local configuration."""
     entry = resolve_context(config_path=config, context_name=context, reconcile_config=True)
     if not entry.config:
         raise SFTPWardenError(
@@ -209,7 +213,8 @@ def _load_context_config(context: str | None, config: str | None):
     return entry, load_config(entry.config)
 
 
-def _helm_upgrade_commands(plan, *, install: bool) -> list[list[str]]:
+def _helm_upgrade_commands(plan: DeploymentPlan, *, install: bool) -> list[list[str]]:
+    """Return Helm upgrade commands with the requested install behavior."""
     commands = [list(action.command) for action in plan.actions if action.command]
     if install:
         return commands

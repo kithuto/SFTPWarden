@@ -24,6 +24,7 @@ from sftpwarden.config.global_config import (
     resolve_provider,
 )
 from sftpwarden.contexts import (
+    ContextEntry,
     ContextRegistry,
     ContextType,
     is_production_like,
@@ -224,7 +225,7 @@ def update_context_field(
     return entry.name
 
 
-def rename_context_and_project(registry, old_name: str, new_name: str) -> str:
+def rename_context_and_project(registry: ContextRegistry, old_name: str, new_name: str) -> str:
     """Rename a context and its local project config when present."""
     if new_name in registry.contexts and new_name != old_name:
         raise SFTPWardenError(f"Context already exists: {new_name}")
@@ -243,7 +244,9 @@ def rename_context_and_project(registry, old_name: str, new_name: str) -> str:
     return new_name
 
 
-def migrate_context_root(entry, new_root_value: str, *, delete_old_root: bool, yes: bool):
+def migrate_context_root(
+    entry: ContextEntry, new_root_value: str, *, delete_old_root: bool, yes: bool
+) -> ContextEntry:
     """Copy a context project to a new local root and update paths."""
     old_root = expand_path(entry.root)
     new_root = expand_path(new_root_value)
@@ -269,7 +272,7 @@ def migrate_context_root(entry, new_root_value: str, *, delete_old_root: bool, y
 
 
 def convert_context_type(
-    entry,
+    entry: ContextEntry,
     value: str,
     *,
     remote_url: str | None,
@@ -279,7 +282,7 @@ def convert_context_type(
     remote_root: str | None,
     remote_only: bool,
     yes: bool,
-):
+) -> ContextEntry:
     """Convert a context between local and remote."""
     target = value.lower()
     if target == entry.type.value:
@@ -322,7 +325,7 @@ def convert_context_type(
     )
 
 
-def update_remote_root(entry, value: str, *, yes: bool):
+def update_remote_root(entry: ContextEntry, value: str, *, yes: bool) -> ContextEntry:
     """Update remote root and dependent remote config path."""
     if not entry.remote:
         raise SFTPWardenError("Context has no remote settings.")

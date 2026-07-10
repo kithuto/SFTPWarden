@@ -79,6 +79,7 @@ Focused validation:
 
 ```bash
 tox -e lint
+tox -e mypy
 tox -e py311
 tox -e py312
 tox -e py313

@@ -46,6 +46,7 @@ class OpenRCWatcher(BaseWatcher):
 
     @classmethod
     def is_supported(cls) -> bool:
+        """Return whether OpenRC is available on the current host."""
         return (
             system_is("Linux")
             and shutil.which("rc-service") is not None
@@ -54,14 +55,17 @@ class OpenRCWatcher(BaseWatcher):
 
     @classmethod
     def path(cls) -> Path:
+        """Return the generated OpenRC service-script path."""
         return openrc_script_path()
 
     @classmethod
     def render(cls, *, image: str | None = None) -> str:
+        """Render the OpenRC watcher service script."""
         return render_openrc_script()
 
     @classmethod
     def commands(cls, *, image: str | None = None) -> list[list[str]]:
+        """Return commands that install and start the OpenRC watcher."""
         return [
             [
                 "sudo",
@@ -77,6 +81,7 @@ class OpenRCWatcher(BaseWatcher):
 
     @classmethod
     def uninstall_commands(cls, *, path: Path | None = None) -> list[list[str]]:
+        """Return commands that stop and remove the OpenRC watcher."""
         return [
             ["sudo", "rc-service", SERVICE_NAME, "stop"],
             ["sudo", "rc-update", "del", SERVICE_NAME, "default"],

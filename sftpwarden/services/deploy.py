@@ -395,6 +395,7 @@ def translate_command_failure(result: CommandResult) -> RuntimeError:
 
 
 def _is_docker_compose_command(args: list[str]) -> bool:
+    """Return whether arguments invoke Docker Compose."""
     return len(args) >= 2 and args[0] == "docker" and args[1] == "compose"
 
 
@@ -404,6 +405,7 @@ def _run_actions(
     runner: CommandRunner,
     cwd: str | None,
 ) -> None:
+    """Execute all command-bearing deployment actions in order."""
     for action in plan.actions:
         if not action.command:
             continue
@@ -413,6 +415,7 @@ def _run_actions(
 
 
 def _context_config(context: ContextEntry) -> SFTPWardenConfig:
+    """Load the required local configuration for a context."""
     if not context.config:
         raise ContextError(
             f"Context {context.name} has no local sftpwarden.yaml.",
@@ -422,6 +425,7 @@ def _context_config(context: ContextEntry) -> SFTPWardenConfig:
 
 
 def _safe_manifest_documents(config: SFTPWardenConfig) -> list[dict[str, Any]]:
+    """Build manifest documents through the validated renderer."""
     from sftpwarden.render.kubernetes import kubernetes_manifests
 
     return kubernetes_manifests(config)

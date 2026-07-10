@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Protocol, cast
 
-from sftpwarden.config import ProviderConfig, ProviderType, provider_local_path
+from sftpwarden.config import (
+    ProviderConfig,
+    ProviderType,
+    SFTPWardenConfig,
+    provider_local_path,
+)
 from sftpwarden.providers.base import BaseProvider
 from sftpwarden.providers.csv_provider import CSVProvider
 from sftpwarden.providers.mongodb_provider import MongoDBProvider
@@ -63,6 +69,12 @@ __all__ = [
 ]
 
 
+class _SchemaTextFactory(Protocol):
+    """Callable shape exposed by schema-aware file providers."""
+
+    def __call__(self, schema_version: int) -> str: ...
+
+
 def empty_provider_text(provider_type: ProviderType, *, user_schema: int = 2) -> str:
     """Return empty provider text for a provider type.
 
@@ -81,11 +93,11 @@ def empty_provider_text(provider_type: ProviderType, *, user_schema: int = 2) ->
     provider = provider_class(provider_type)
     schema_factory = getattr(provider, "empty_text_for_schema", None)
     if schema_factory is not None:
-        return schema_factory(user_schema)
+        return cast(_SchemaTextFactory, schema_factory)(user_schema)
     return provider.empty_text()
 
 
-def load_users_from_project(project_root: str | Path, config) -> ProviderUsers:
+def load_users_from_project(project_root: str | Path, config: SFTPWardenConfig) -> ProviderUsers:
     """Load provider users for a project.
 
     Parameters
@@ -189,7 +201,7 @@ def save_users(
     ).write(users)
 
 
-def provider_for_project(project_root: str | Path, config) -> BaseProvider:
+def provider_for_project(project_root: str | Path, config: SFTPWardenConfig) -> BaseProvider:
     """Return a provider for a project.
 
     Parameters
@@ -228,7 +240,7 @@ def provider_for_config(
     return provider_class(provider_config.type)(provider_config, path=provider_path)
 
 
-def provider_local(project_root: str | Path, config) -> BaseProvider:
+def provider_local(project_root: str | Path, config: SFTPWardenConfig) -> BaseProvider:
     """Return the local provider for a project config.
 
     Parameters

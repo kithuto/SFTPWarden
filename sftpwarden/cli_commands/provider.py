@@ -13,6 +13,7 @@ from sftpwarden.services.provider_schema import (
     reconcile_provider_schema,
 )
 from sftpwarden.services.provider_transfer import (
+    ImportMode,
     ProviderMutationResult,
     copy_provider_users,
     export_provider_users,
@@ -158,7 +159,7 @@ def provider_schema_show(
 ) -> None:
     """Show the active provider user schema."""
     try:
-        _entry, project_config, provider = resolve_provider_context(
+        _entry, project_config, _ = resolve_provider_context(
             context_name=context,
             config_path=config,
         )
@@ -244,7 +245,7 @@ def provider_keys_migrate(
     )
 
 
-def resolve_transfer_mode(*, merge: bool, replace: bool):
+def resolve_transfer_mode(*, merge: bool, replace: bool) -> ImportMode:
     """Resolve transfer mode flags.
 
     Parameters

@@ -29,6 +29,7 @@ from sftpwarden.users.schemas import (
 from sftpwarden.users.schemas import (
     user_schema as user_schema_for,
 )
+from sftpwarden.users.schemas.base import SFTPUserAuthFields
 from sftpwarden.utils.errors import RuntimeError
 
 
@@ -207,7 +208,10 @@ class UserService:
             value is not None
             for value in (public_keys, password_hash, upload_dir, uid, gid, disabled)
         )
-        auth_fields: dict[str, object] = {}
+        auth_fields = SFTPUserAuthFields(
+            public_keys=existing.public_keys,
+            keys=existing.keys,
+        )
         if public_keys is not None:
             auth_fields = user_schema_for(users.schema_version).auth_fields_from_public_keys(
                 public_keys,
@@ -215,8 +219,8 @@ class UserService:
             )
         updated = copy_user(
             existing,
-            public_keys=auth_fields.get("public_keys", existing.public_keys),
-            keys=auth_fields.get("keys", existing.keys),
+            public_keys=auth_fields["public_keys"],
+            keys=auth_fields["keys"],
             password_hash=password_hash if password_hash is not None else existing.password_hash,
             upload_dir=upload_dir if upload_dir is not None else existing.upload_dir,
             comment=comment if comment is not None else existing.comment,
@@ -447,6 +451,7 @@ class UserService:
         dry_run: bool,
         operation: str,
     ) -> tuple[ProviderUsers, bool]:
+        """Load users and ensure their schema supports key lifecycle operations."""
         users = self.provider.read()
         return ensure_schema_capability(
             users,

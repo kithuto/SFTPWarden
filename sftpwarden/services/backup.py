@@ -10,8 +10,14 @@ import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
-from sftpwarden.config import FILE_PROVIDER_TYPES, load_config, provider_local_path
+from sftpwarden.config import (
+    FILE_PROVIDER_TYPES,
+    SFTPWardenConfig,
+    load_config,
+    provider_local_path,
+)
 from sftpwarden.contexts import ContextEntry, resolve_context
 from sftpwarden.providers import provider_from_config
 from sftpwarden.remote.ssh import rsync_ssh_transport, ssh_base_command
@@ -406,7 +412,7 @@ def backup_entries_from_root(root: Path, *, compose_file: str, include_data: boo
     return sorted(dict.fromkeys(entries))
 
 
-def backup_entries(root: Path, config, *, include_data: bool) -> list[str]:
+def backup_entries(root: Path, config: SFTPWardenConfig, *, include_data: bool) -> list[str]:
     """Return backup entry paths.
 
     Parameters
@@ -452,7 +458,7 @@ def default_backup_path(context_name: str) -> Path:
     return Path(f"sftpwarden-{context_name}-{stamp}.tar.gz")
 
 
-def add_json(archive: tarfile.TarFile, name: str, data: dict) -> None:
+def add_json(archive: tarfile.TarFile, name: str, data: dict[str, Any]) -> None:
     """Add JSON data to an archive."""
     add_text(archive, name, json.dumps(data, indent=2, sort_keys=True) + "\n")
 

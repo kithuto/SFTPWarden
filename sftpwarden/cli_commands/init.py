@@ -669,13 +669,14 @@ def ensure_kubernetes_namespace_for_init(
 
 
 def _kubectl_namespace_missing(result: CommandResult) -> bool:
+    """Return whether kubectl reported a missing namespace."""
     output = result.output.lower()
     return "namespace" in output and "not found" in output
 
 
 def ensure_sql_table_for_init(
     project_root: Path,
-    config,
+    config: SFTPWardenConfig,
     *,
     create_table: bool | None,
     yes: bool,

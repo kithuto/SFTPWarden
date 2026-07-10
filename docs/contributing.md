@@ -102,6 +102,7 @@ tox
 The default `tox` run covers:
 
 - lint and formatting;
+- strict type checking with mypy;
 - tests on Python 3.11, 3.12, 3.13, and 3.14;
 - coverage once, instead of repeating it for every Python version;
 - Sphinx documentation build;
@@ -112,6 +113,7 @@ Run one part:
 
 ```bash
 tox -e lint
+tox -e mypy
 tox -e py311
 tox -e py312
 tox -e py313

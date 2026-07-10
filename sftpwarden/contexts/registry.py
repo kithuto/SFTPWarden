@@ -470,6 +470,7 @@ def resolve_context(
 
 
 def _registry_after_pruning_missing_contexts() -> ContextRegistry:
+    """Load the registry after pruning contexts with missing roots."""
     from sftpwarden.services.context_cleanup import prune_missing_contexts
 
     return prune_missing_contexts().registry

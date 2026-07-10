@@ -221,6 +221,7 @@ class PyMySQLProvider(BaseProvider):
             connection.close()
 
     def _connect(self, *, dict_cursor: bool = False) -> Any:
+        """Open a configured PyMySQL connection."""
         if not self.config.dsn:
             raise ProviderError(f"{self.provider_label} provider requires dsn.")
         try:

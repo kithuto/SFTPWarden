@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -51,7 +52,7 @@ def compose_model(
     project_root: str | Path = ".",
     *,
     allow_local_build: bool = True,
-) -> dict:
+) -> dict[str, Any]:
     """Build a Docker Compose model for the runtime.
 
     Parameters

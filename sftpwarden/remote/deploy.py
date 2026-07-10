@@ -27,7 +27,9 @@ class CommandRunner(Protocol):
         Optional working directory.
     """
 
-    def __call__(self, command: list[str], *, cwd: str | None = None) -> None: ...
+    def __call__(self, command: list[str], *, cwd: str | None = None) -> None:
+        """Execute one deployment command."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -146,6 +148,7 @@ def deploy_plan(context: ContextEntry) -> DeployPlan:
 
 
 def _local_deploy_plan(context: ContextEntry) -> DeployPlan:
+    """Build the Docker Compose deployment plan for a local context."""
     if not context.root or not context.config:
         raise ContextError(f"Local context {context.name} is missing local settings.")
     config = load_config(context.config)
@@ -167,6 +170,7 @@ def _local_deploy_plan(context: ContextEntry) -> DeployPlan:
 
 
 def _remote_local_sync_deploy_plan(context: ContextEntry) -> DeployPlan:
+    """Build the sync and Compose plan for a remote local-sync context."""
     if not context.remote:
         raise ContextError(f"Remote context {context.name} is missing remote settings.")
     if not context.root or not context.config:
@@ -194,6 +198,7 @@ def _remote_local_sync_deploy_plan(context: ContextEntry) -> DeployPlan:
 
 
 def _remote_only_deploy_plan(context: ContextEntry) -> DeployPlan:
+    """Build the in-place Compose plan for a remote-only context."""
     if not context.remote:
         raise ContextError(f"Remote context {context.name} is missing remote settings.")
     remote = context.remote

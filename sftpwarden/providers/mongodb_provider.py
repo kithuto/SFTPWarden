@@ -134,6 +134,7 @@ class MongoDBProvider(BaseProvider):
         self.create_table()
 
     def _database(self) -> Any:
+        """Return the configured MongoDB database handle."""
         if not self.config.dsn:
             raise ProviderError("MongoDB provider requires dsn.")
         try:
@@ -148,6 +149,7 @@ class MongoDBProvider(BaseProvider):
         return MongoClient(dsn)[database_name]
 
     def _collection(self) -> Any:
+        """Return the configured MongoDB collection handle."""
         return self._database()[self.config.collection]
 
 

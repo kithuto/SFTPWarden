@@ -28,10 +28,12 @@ from sftpwarden.cli_commands.output import (
 from sftpwarden.config import (
     DeployTarget,
     KubernetesMode,
+    SFTPWardenConfig,
     load_config,
     provider_local_path,
 )
 from sftpwarden.contexts import (
+    ContextEntry,
     require_initialized_context,
     resolve_context,
 )
@@ -62,7 +64,7 @@ from sftpwarden.watcher import (
 )
 
 
-def deploy_context(entry, *, dry_run: bool = False) -> str:
+def deploy_context(entry: ContextEntry, *, dry_run: bool = False) -> str:
     """Compatibility wrapper for deploy command execution."""
     plan_data = deployment_plan(entry)
     if dry_run:
@@ -163,7 +165,7 @@ def compose(
         handle_error(exc)
 
 
-def deploy_config_change_reasons(entry, loaded) -> list[str]:
+def deploy_config_change_reasons(entry: ContextEntry, loaded: SFTPWardenConfig) -> list[str]:
     """Return deploy-level configuration changes detected for a context.
 
     Parameters

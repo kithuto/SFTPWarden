@@ -202,6 +202,7 @@ class SQLiteProvider(FileProvider):
         chmod_private(path)
 
     def _connect(self, path: Path, *, write: bool = False) -> sqlite3.Connection:
+        """Open a configured SQLite connection with safe runtime pragmas."""
         connection = sqlite3.connect(path)
         connection.row_factory = sqlite3.Row
         connection.execute("pragma busy_timeout = 5000")

@@ -63,7 +63,7 @@ jobs:
         run: tox -e ${{ matrix.tox-env }}
 
   quality:
-    name: Lint, package, and examples
+    name: Lint, type check, package, and examples
     runs-on: ubuntu-latest
 
     steps:
@@ -85,8 +85,8 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v5.0.1
 
-      - name: Run lint and package checks
-        run: tox -e lint,package
+      - name: Run lint, type, and package checks
+        run: tox -e lint,mypy,package
 
       - name: Validate examples
         run: |

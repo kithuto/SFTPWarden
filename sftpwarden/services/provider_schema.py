@@ -112,6 +112,7 @@ def _build_provider_schema_plan(
     dry_run: bool,
     provider: BaseProvider | None = None,
 ) -> _ProviderSchemaPlan:
+    """Build the internal plan for reconciling provider user schemas."""
     if not entry.root:
         raise ProviderError(
             f"Context {entry.name} has no local project root.",
@@ -167,6 +168,7 @@ def _read_provider_users_for_configured_schema(
     config: SFTPWardenConfig,
     provider: BaseProvider,
 ) -> ProviderUsers:
+    """Read users, falling back to existing prior-schema storage."""
     target_version = validate_user_schema_version(config.provider.user_schema)
     if _schema_storage_missing(provider):
         previous_version = _previous_supported_schema(target_version)
@@ -182,6 +184,7 @@ def _provider_for_schema(
     config: SFTPWardenConfig,
     schema_version: int,
 ) -> BaseProvider:
+    """Build a provider configured for a specific user schema version."""
     if not entry.root:
         raise ProviderError(f"Context {entry.name} has no local project root.")
     schema_config = config.model_copy(
@@ -191,6 +194,7 @@ def _provider_for_schema(
 
 
 def _schema_storage_missing(provider: BaseProvider) -> bool:
+    """Return whether a provider reports missing schema storage."""
     table_exists = getattr(provider, "table_exists", None)
     if not callable(table_exists):
         return False
@@ -198,6 +202,7 @@ def _schema_storage_missing(provider: BaseProvider) -> bool:
 
 
 def _schema_storage_available(provider: BaseProvider) -> bool:
+    """Return whether a provider reports available schema storage."""
     table_exists = getattr(provider, "table_exists", None)
     if not callable(table_exists):
         return False
@@ -205,6 +210,7 @@ def _schema_storage_available(provider: BaseProvider) -> bool:
 
 
 def _previous_supported_schema(target_version: int) -> int | None:
+    """Return the nearest supported schema below the target version."""
     previous_versions = [
         version for version in supported_user_schemas() if version < target_version
     ]

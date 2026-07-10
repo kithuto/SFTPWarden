@@ -87,6 +87,7 @@ tox -e py312
 tox -e py313
 tox -e py314
 tox -e lint
+tox -e mypy
 tox -e coverage
 tox -e docs
 tox -e package

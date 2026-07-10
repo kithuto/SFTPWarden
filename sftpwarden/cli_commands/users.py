@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
 
@@ -13,7 +14,7 @@ from sftpwarden.cli_commands.errors import handle_error
 from sftpwarden.cli_commands.output import print_json
 from sftpwarden.cli_commands.prompts import prompt_password_hash
 from sftpwarden.services.cli_workflows import print_refresh_after_user_change
-from sftpwarden.services.users import UserService
+from sftpwarden.services.users import UserKeyMutationResult, UserService
 from sftpwarden.users.schemas import (
     KEY_LIFECYCLE,
     first_schema_with_capability,
@@ -612,7 +613,7 @@ def mutate_advanced_key(
     yes: bool,
     dry_run: bool,
     no_refresh: bool,
-    operation,
+    operation: Callable[[UserService], UserKeyMutationResult],
 ) -> None:
     """Run a key operation that requires schema v2 metadata."""
     try:
@@ -658,7 +659,9 @@ def confirm_key_schema_migration(
         raise typer.Exit(1)
 
 
-def report_key_mutation(label: str, username: str, key_name: str, result) -> None:
+def report_key_mutation(
+    label: str, username: str, key_name: str, result: UserKeyMutationResult
+) -> None:
     """Print a standard key mutation message."""
     prefix = "Dry run: would" if result.dry_run else label
     migration = " after migrating provider to schema v2" if result.schema_migrated else ""

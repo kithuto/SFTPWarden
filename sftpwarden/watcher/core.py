@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from sftpwarden.config import (
     WATCHER_SYNC_PROVIDER_TYPES,
@@ -134,7 +135,7 @@ def watcher_status_text() -> str:
     return "\n".join(lines)
 
 
-def watcher_status_data() -> dict:
+def watcher_status_data() -> dict[str, Any]:
     """Return watcher status as structured data."""
     state = load_global_config().watcher
     targets = derive_watch_targets()

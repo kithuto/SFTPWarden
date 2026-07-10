@@ -53,6 +53,7 @@ class SupervisordWatcher(BaseWatcher):
 
     @classmethod
     def is_supported(cls) -> bool:
+        """Return whether supervisord is available on the current host."""
         return (
             system_is("Linux")
             and shutil.which("supervisord") is not None
@@ -61,14 +62,17 @@ class SupervisordWatcher(BaseWatcher):
 
     @classmethod
     def path(cls) -> Path:
+        """Return the generated supervisord configuration path."""
         return supervisord_config_path()
 
     @classmethod
     def render(cls, *, image: str | None = None) -> str:
+        """Render the supervisord watcher configuration."""
         return render_supervisord_config()
 
     @classmethod
     def commands(cls, *, image: str | None = None) -> list[list[str]]:
+        """Return commands that install and start the supervisord watcher."""
         return [
             [
                 "sudo",
@@ -85,6 +89,7 @@ class SupervisordWatcher(BaseWatcher):
 
     @classmethod
     def uninstall_commands(cls, *, path: Path | None = None) -> list[list[str]]:
+        """Return commands that stop and remove the supervisord watcher."""
         return [
             ["sudo", "supervisorctl", "stop", SERVICE_NAME],
             ["sudo", "rm", "-f", supervisor_config_target()],

@@ -113,6 +113,8 @@ def prompt_remote_url(
     final_host = host or Prompt.ask("Remote host")
     final_user = remote_user or Prompt.ask("Remote user")
     final_remote_root = remote_root or Prompt.ask("Remote root", default=default_remote_root)
+    if final_remote_root is None:
+        raise SFTPWardenError("Remote root is required.")
     return remote_url_from_parts(
         host=final_host,
         remote_root=final_remote_root,

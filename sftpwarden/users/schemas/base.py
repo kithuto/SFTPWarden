@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar
+from typing import Any, ClassVar, TypedDict
 
 from sftpwarden.users.models import ProviderUsers, SFTPUser, SFTPUserKey
 
@@ -11,6 +11,13 @@ NAMED_KEY_METADATA = "named_key_metadata"
 KEY_LIFECYCLE = "key_lifecycle"
 
 UserSchemaVersion = int
+
+
+class SFTPUserAuthFields(TypedDict):
+    """Authentication fields accepted by ``SFTPUser`` construction."""
+
+    public_keys: list[str]
+    keys: list[SFTPUserKey]
 
 
 class UserSchema(ABC):
@@ -75,7 +82,7 @@ class UserSchema(ABC):
         public_keys: list[str],
         *,
         source: str,
-    ) -> dict[str, object]:
+    ) -> SFTPUserAuthFields:
         """Return SFTPUser auth fields for public key input."""
         raise NotImplementedError
 
