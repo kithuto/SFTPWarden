@@ -66,13 +66,13 @@ jobs:
           output: trivy-watcher.sarif
 
       - name: Upload runtime scan
-        uses: github/codeql-action/upload-sarif@v4.36.3
+        uses: github/codeql-action/upload-sarif@v4.37.0
         with:
           sarif_file: trivy-runtime.sarif
           category: trivy-runtime
 
       - name: Upload watcher scan
-        uses: github/codeql-action/upload-sarif@v4.36.3
+        uses: github/codeql-action/upload-sarif@v4.37.0
         with:
           sarif_file: trivy-watcher.sarif
           category: trivy-watcher
@@ -120,6 +120,6 @@ jobs:
           publish_results: true
 
       - name: Upload Scorecard results
-        uses: github/codeql-action/upload-sarif@v4.36.3
+        uses: github/codeql-action/upload-sarif@v4.37.0
         with:
           sarif_file: scorecard.sarif
