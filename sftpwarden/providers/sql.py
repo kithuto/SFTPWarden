@@ -7,6 +7,7 @@ from typing import Any
 from sftpwarden.users.models import ProviderUsers, SFTPUser, SFTPUserKey
 from sftpwarden.users.schemas import NAMED_KEYS, user_schema
 from sftpwarden.utils.errors import ProviderError
+from sftpwarden.utils.json import strict_json_value
 
 DEFAULT_SQL_USERS_TABLE = "sftp_users"
 SQL_TABLE_RE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?$", flags=re.ASCII)
@@ -223,51 +224,72 @@ def users_from_sql_rows(
     ProviderUsers
         Validated provider users.
     """
+    try:
+        return _users_from_sql_rows(rows, key_rows=key_rows, schema_version=schema_version)
+    except (ValueError, TypeError, KeyError, ProviderError):
+        raise ProviderError(
+            "Invalid SQL provider data.",
+            suggestion="Check user/key fields, booleans and JSON metadata before retrying.",
+        ) from None
+
+
+def _sql_metadata(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    metadata = strict_json_value(value) if isinstance(value, str) else value
+    if not isinstance(metadata, dict):
+        raise ValueError("SQL key metadata must be an object")
+    return metadata
+
+
+def _sql_public_keys(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = value.splitlines()
+    if not isinstance(value, (list, tuple)) or not all(isinstance(key, str) for key in value):
+        raise ValueError("SQL public_keys must contain strings")
+    return [key.strip() for key in value if key.strip()]
+
+
+def _users_from_sql_rows(
+    rows: list[dict[str, Any]],
+    *,
+    key_rows: list[dict[str, Any]] | None,
+    schema_version: int,
+) -> ProviderUsers:
     keys_by_username: dict[str, list[SFTPUserKey]] = {}
     uses_key_table = schema_uses_key_table(schema_version)
     if uses_key_table:
-        for row in key_rows or []:
-            if "name" not in row or "public_key" not in row:
-                continue
-            metadata_value = row.get("metadata") or "{}"
-            try:
-                metadata = (
-                    json.loads(metadata_value)
-                    if isinstance(metadata_value, str)
-                    else metadata_value
-                )
-            except json.JSONDecodeError:
-                metadata = {}
+        if key_rows is None:
+            raise ValueError("SQL schema v2 requires a complete key-row result")
+        for row in key_rows:
+            username = SFTPUser.validate_username(row["username"])
             key = SFTPUserKey(
-                name=str(row["name"]),
-                public_key=str(row["public_key"]),
-                fingerprint=row.get("fingerprint") or None,
-                comment=row.get("comment") or None,
+                name=row["name"],
+                public_key=row["public_key"],
+                fingerprint=row.get("fingerprint"),
+                comment=row.get("comment"),
                 disabled=parse_sql_bool(row.get("disabled", False)),
-                created_at=row.get("created_at") or None,
-                updated_at=row.get("updated_at") or None,
-                expires_at=row.get("expires_at") or None,
-                source=row.get("source") or None,
-                metadata=metadata if isinstance(metadata, dict) else {},
+                created_at=row.get("created_at"),
+                updated_at=row.get("updated_at"),
+                expires_at=row.get("expires_at"),
+                source=row.get("source"),
+                metadata=_sql_metadata(row.get("metadata")),
             )
-            keys_by_username.setdefault(str(row["username"]), []).append(key)
+            keys_by_username.setdefault(username, []).append(key)
     users: list[SFTPUser] = []
     for row in rows:
-        public_keys_value = row.get("public_keys") or ""
-        if isinstance(public_keys_value, str):
-            public_keys = [key.strip() for key in public_keys_value.splitlines() if key.strip()]
-        else:
-            public_keys = [str(key).strip() for key in public_keys_value if str(key).strip()]
         users.append(
             SFTPUser(
-                username=str(row["username"]),
-                public_keys=[] if uses_key_table else public_keys,
+                username=row["username"],
+                public_keys=[] if uses_key_table else _sql_public_keys(row.get("public_keys")),
                 keys=keys_by_username.get(str(row["username"]), []),
-                password_hash=row.get("password_hash") or None,
-                uid=int(row["uid"]) if row.get("uid") is not None else None,
-                gid=int(row["gid"]) if row.get("gid") is not None else None,
-                upload_dir=str(row.get("upload_dir") or "upload"),
-                comment=row.get("comment") or None,
+                password_hash=row.get("password_hash"),
+                uid=row.get("uid"),
+                gid=row.get("gid"),
+                upload_dir="upload" if row.get("upload_dir") in (None, "") else row["upload_dir"],
+                comment=row.get("comment"),
                 disabled=parse_sql_bool(row.get("disabled", False)),
             )
         )
@@ -287,9 +309,19 @@ def parse_sql_bool(value: Any) -> bool:
     bool
         Parsed boolean value.
     """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, bytes) and value in (b"\x00", b"\x01"):
+        return value == b"\x01"
     if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "t", "yes", "y", "on"}
-    return bool(value)
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "t", "yes", "y", "on"}:
+            return True
+        if normalized in {"0", "false", "f", "no", "n", "off"}:
+            return False
+    raise ProviderError("Invalid SQL provider boolean value.")
 
 
 def sql_user_row(user: SFTPUser) -> tuple[Any, ...]:
@@ -330,7 +362,7 @@ def sql_user_key_row(username: str, key: SFTPUserKey) -> tuple[Any, ...]:
         key.updated_at.isoformat() if key.updated_at else None,
         key.expires_at.isoformat() if key.expires_at else None,
         key.source,
-        json.dumps(key.metadata, sort_keys=True) if key.metadata else None,
+        json.dumps(key.metadata, sort_keys=True, allow_nan=False) if key.metadata else None,
     )
 
 
@@ -473,8 +505,10 @@ def upsert_sql_user(
         table,
         ProviderUsers(schema_version=schema_version, users=[user]),
         dialect=dialect,
-        schema_version=schema_version,
+        schema_version=1,
     )
+    if schema_uses_key_table(schema_version):
+        replace_sql_user_keys_for_user(cursor, table, user, dialect=dialect)
 
 
 def delete_sql_user(

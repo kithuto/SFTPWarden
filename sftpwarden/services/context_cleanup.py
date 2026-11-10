@@ -17,10 +17,12 @@ from sftpwarden.contexts import (
     save_registry,
 )
 from sftpwarden.remote.deploy import remote_shell_command
+from sftpwarden.remote.ssh import remote_path_expression
 from sftpwarden.system.commands import CommandResult, command_text, run
 from sftpwarden.utils.constants import CONFIG_FILENAME
 from sftpwarden.utils.errors import ContextError, RuntimeError, SFTPWardenError
-from sftpwarden.utils.paths import expand_path
+from sftpwarden.utils.paths import contexts_path, expand_path
+from sftpwarden.utils.state_transactions import serialized_state
 
 COMPOSE_WORKING_DIR_LABEL = "com.docker.compose.project.working_dir"
 REMOTE_ROOT_MISSING_EXIT_CODE = 42
@@ -56,6 +58,7 @@ class MissingContextCleanupReport:
     watcher_message: str | None = None
 
 
+@serialized_state(contexts_path)
 def prune_missing_contexts(*, runner: CleanupRunner = run) -> MissingContextCleanupReport:
     """Remove registry entries whose entire local context folder disappeared.
 
@@ -86,6 +89,7 @@ def prune_missing_contexts(*, runner: CleanupRunner = run) -> MissingContextClea
     )
 
 
+@serialized_state(contexts_path)
 def remove_context_with_cleanup(
     name: str,
     *,
@@ -147,7 +151,7 @@ def ensure_remote_only_root_available(
             f"{entry.remote.remote_root!r}"
         )
     command = (
-        f"if [ -d {shlex.quote(remote_root)} ]; then "
+        f"if [ -d {remote_path_expression(remote_root)} ]; then "
         "exit 0; "
         f"else exit {REMOTE_ROOT_MISSING_EXIT_CODE}; fi"
     )
@@ -155,7 +159,7 @@ def ensure_remote_only_root_available(
     if result.returncode == 0:
         return
     if result.returncode == REMOTE_ROOT_MISSING_EXIT_CODE:
-        remove_stale_context_entry(entry.name)
+        remove_stale_context_entry(entry.name, expected=entry)
         raise ContextError(
             f"Remote project root for context {entry.name} no longer exists.",
             suggestion=(
@@ -174,11 +178,19 @@ def ensure_remote_only_root_available(
     )
 
 
-def remove_stale_context_entry(name: str) -> ContextRegistry:
+@serialized_state(contexts_path)
+def remove_stale_context_entry(
+    name: str, *, expected: ContextEntry | None = None
+) -> ContextRegistry:
     """Remove one stale context entry without touching local or remote project files."""
     registry = load_registry()
     if name not in registry.contexts:
         return registry
+    if expected is not None and registry.contexts[name] != expected:
+        raise ContextError(
+            f"Context {name} changed while checking its remote root.",
+            suggestion="Retry using the updated context; the registry entry was preserved.",
+        )
     del registry.contexts[name]
     _repair_default(registry)
     save_registry(registry)

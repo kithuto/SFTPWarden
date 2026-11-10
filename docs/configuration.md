@@ -1,5 +1,23 @@
 # Configuration
 
+See [Configuration effects](configuration-effects.md) for field ownership,
+activation and verification, including compatibility fields without an independent
+runtime effect. See [Recovery and upgrades](recovery.md) before changing provider
+mounts, host identity or deployment targets.
+
+`kubernetes.host_keys_secret` selects an existing Secret containing SSH key pairs;
+otherwise identity uses a retained PVC. `kubernetes.provider_dsn_secret` selects
+an existing provider Secret with key `SFTPWARDEN_PROVIDER_DSN`; otherwise CLI preparation creates a
+private managed Secret from the explicitly resolved DSN. Rendering alone does
+not verify these resources or credentials.
+
+For Docker Compose, `server.host` selects the host interface used to publish the
+SFTP port. Use `127.0.0.1` or `::1` for loopback-only access; `0.0.0.0` or `::`
+selects the corresponding wildcard interface. Compose uses long port syntax so
+IPv6 addresses are unambiguous. The container's OpenSSH listener remains on port
+22. Apply binding changes with `deploy`, then inspect `docker compose port
+sftpwarden 22` on the Docker host.
+
 SFTPWarden has three configuration layers:
 
 - global CLI defaults in `~/.sftpwarden/config.toml`;
@@ -38,6 +56,13 @@ Provider selection order:
 Global config lives in `~/.sftpwarden/config.toml` by default. Set
 `SFTPWARDEN_HOME` when tests, CI, or isolated operator workstations need a
 different global config and context registry directory.
+
+CLI context changes and global default/watcher changes lock the complete
+read-modify-write operation and publish complete TOML files atomically. A competing
+operation waits up to five seconds before reporting a retryable lock error.
+Sibling lock files remain in place between operations; their presence alone does
+not mean a process is running. External editors do not participate in these locks,
+so avoid editing the same state while a CLI operation is in progress.
 
 Prefer CLI commands for normal changes:
 
@@ -154,6 +179,27 @@ that are already visible through the configured provider. `watch` is only for
 syncing editable user provider files in remote `local-sync` contexts. Neither
 command applies `sftpwarden.yaml` changes.
 
+The runtime validates a candidate OpenSSH configuration at first container start
+and keeps a private snapshot of the deployed settings in its container layer.
+User refresh, periodic sync and health use that snapshot. Restarting the same
+Compose container retains it. Local and remote `local-sync` Compose `deploy`
+recreate the container, validate the new daemon configuration and wait for
+readiness. Remote-only deployment preparation remains an open stabilization
+requirement. This also applies to
+environment-based provider credentials: recreate through deploy to activate a
+secret change.
+
+Manual refresh rejects a provider-setting change until deploy and reports other
+pending configuration changes without activating them. The background worker
+continues reading the deployed provider even if the desired config becomes
+invalid. Fix the desired file before the next deploy. Do not edit or remove the
+runtime's private applied snapshot to activate changes.
+
+Compose mounts the project's `data/`, `state/` and `host_keys/` directories at
+the configured `server.data_dir`, `server.state_dir` and `server.host_keys_dir`
+container paths. Changing those destinations requires deploy; their host-side
+project directories remain the same.
+
 `provider.user_schema` follows the same lifecycle. If the config command detects
 that changing it will require a provider data migration, it asks before accepting
 the config change. The migration itself runs during the next deploy,
@@ -211,7 +257,7 @@ Runtime server and sync behavior:
 | `server.state_dir` | Container path for runtime state such as UID/GID allocation state. Default `/var/lib/sftpwarden`. | Change only when customizing runtime mounts; losing state can change allocated IDs. |
 | `server.group` | Linux group assigned to managed SFTP users. Default `sftpwarden_users`. | Change when your container policy requires a different group name. |
 | `sync.enabled` | Enables the long-running runtime sync loop. The entrypoint still performs one startup refresh before starting OpenSSH. | Disable only when you want manual refreshes after startup and understand users will not be reconciled periodically. |
-| `sync.interval_seconds` | Runtime sync loop interval. Minimum 5 seconds; default 60. | Lower for faster automatic reconciliation, raise to reduce provider load. |
+| `sync.interval_seconds` | Periodic interval between runtime reconciliation starts. Minimum 5 seconds; default 60. File-provider metadata changes can wake the loop earlier; config edits cannot. Periodic passes still enforce expiry. Passes never overlap, and slow work does not add another full interval of waiting. | Lower for faster database reconciliation, raise to reduce periodic provider reads. |
 | `sync.apply_on_startup` | Accepted startup refresh policy field. Current runtime entrypoint always performs startup refresh. | Leave at the default unless future release notes describe changed startup behavior. |
 | `sync.disable_missing_users` | Disables Linux/runtime users that exist in state but no longer exist in the provider. | Keep enabled for declarative providers. Disable only if removed provider entries should not disable runtime users. |
 | `sync.delete_missing_user_data` | Accepted safety field for future missing-user data deletion policy. Current runtime does not delete user data automatically. | Leave disabled. Use explicit user deletion flags for destructive data removal. |
@@ -225,9 +271,9 @@ Authentication, isolation, and UID/GID allocation:
 | `auth.recommended` | Operator-facing preference for which auth style the project recommends. Runtime behavior is controlled by `allow_public_key` and `allow_password`. | Set to `public_key` or `password` to document the intended onboarding style. |
 | `auth.password_hash_scheme` | Accepted password hash scheme setting. Current accepted value is `sha512crypt`. | Keep `sha512crypt`; plaintext provider passwords are rejected. |
 | `isolation.mode` | Runtime isolation mode. Current supported value is `chroot`. | Do not change; other modes are not supported. |
-| `isolation.upload_dir` | Relative directory inside each user's chroot where uploads are writable. Default `upload`. | Change when users should land files in a different relative folder. Must be a safe relative path. |
-| `isolation.root_owner` | Owner for chroot root directories. Default `root`. | Keep `root` unless you have a tested container policy requiring another owner. |
-| `isolation.root_group` | Group for chroot root directories. Default `root`. | Keep `root` for OpenSSH chroot safety unless policy requires otherwise. |
+| `isolation.upload_dir` | Reserved compatibility field; does not override provider users. | Set each user's `upload_dir` through the provider or user command to select a writable directory. |
+| `isolation.root_owner` | Chroot roots are owned by `root`. Other values are rejected. | Keep `root`; non-root chroot ownership is unsupported. |
+| `isolation.root_group` | Chroot roots use group `root`. Other values are rejected. | Keep `root`; changing this field cannot change directory ownership. |
 | `isolation.root_permissions` | Permissions for chroot roots. Default `755`; must not be group/other writable. | Change only with OpenSSH chroot rules in mind. Unsafe values are rejected. |
 | `isolation.upload_permissions` | Permissions for writable upload directories. Default `750`; must not be world writable. | Change when group access policy requires it, while keeping the directory safe. |
 | `uid_gid.mode` | UID/GID allocation strategy. Current supported value is `auto`. | Do not change; manual modes are not implemented. |
@@ -255,7 +301,7 @@ Provider, logging, healthcheck, and Compose rendering:
 | `docker.image` | Runtime image reference in generated Compose. Source checkouts default to local build behavior. | Change to use a published or private runtime image. |
 | `docker.container_name` | Compose container name for the runtime service. | Change when multiple local contexts run on the same Docker host. |
 | `docker.restart` | Compose restart policy. Default `unless-stopped`. | Change to match host operations policy, for example `always` in a lab/production host. |
-| `docker.compose_file` | Generated Compose filename. Default `docker-compose.yml`. | Change when a project needs a different Compose file name. |
+| `docker.compose_file` | Generated Compose filename. Default `docker-compose.yml`. | Local deploy, refresh and health use this filename. Remote operations use the context's `remote.compose_file`. |
 | `deploy.target` | Deployment target: `compose` or `kubernetes`. | Change when switching a project from Compose to Kubernetes workflows. |
 
 Kubernetes and Helm:
@@ -263,6 +309,8 @@ Kubernetes and Helm:
 | Field | Purpose | When to change it |
 | --- | --- | --- |
 | `kubernetes.mode` | Kubernetes deployment mode: `manifests` for `kubectl`, `helm` for Helm. | Change to choose direct manifests or Helm-managed release workflows. |
+| `kubernetes.host_keys_secret` | Existing SSH identity Secret; null selects a retained generated-key PVC. | Prepare and verify identity before switching authority or upgrading legacy Pods. |
+| `kubernetes.provider_dsn_secret` | Existing Secret with `SFTPWARDEN_PROVIDER_DSN`; null selects private managed delivery. | Set for operator-managed credentials; do not put resolved credentials in public values. |
 | `kubernetes.namespace` | Kubernetes namespace used by manifests and Helm. Default `sftpwarden`. | Change to match cluster tenancy or environment naming. |
 | `kubernetes.release` | Helm release name and Kubernetes app naming seed. Defaults to the project name during init. | Change when the Helm release should have a different name from the project. |
 | `kubernetes.kube_context` | Optional kube context passed to `kubectl` or Helm. | Set when your kubeconfig has multiple clusters and SFTPWarden must target one explicitly. |
@@ -293,7 +341,7 @@ Remote project defaults and watcher preferences:
 | `remote.remote_config` | Project-level remote config path hint. Context `remote.remote_config` controls remote-only config discovery. | Prefer updating the context registry with `sftpwarden context remote-config`. |
 | `remote.ssh_key` | Project-level SSH key hint. Context `remote.ssh_key` controls actual SSH key usage. | Prefer updating the context registry with `sftpwarden context ssh-key`. |
 | `remote.delete_extra_files` | Accepted remote sync policy field. Current deploy sync does not delete extra remote files automatically. | Leave disabled unless a future release documents active deletion behavior. |
-| `remote.include_env` | Accepted remote sync policy field. Current deploy sync deliberately excludes `.env`. | Leave disabled; pass secrets through safer environment/secret mechanisms. |
+| `remote.include_env` | Explicitly delivers the local `.env` privately during remote local-sync deploy. Watcher and ordinary sync exclude it. | Enable only when the selected local file should become the remote deployment environment. |
 | `watcher.enabled` | Project-level watcher preference. Global watcher installation and context `watcher_required` drive actual watcher behavior. | Use `sftpwarden watcher install/status/uninstall` for real watcher management. |
 | `watcher.mode` | Preferred watcher backend for this project. Supported values match global `defaults.watcher_mode`. | Change when this context needs a specific watcher backend. |
 | `watcher.image` | Docker watcher image when `watcher.mode` is `docker`. | Set only for Docker watcher deployments using a custom image. |
@@ -493,6 +541,13 @@ Using an environment variable is recommended for real deployments:
 ```bash
 export SFTPWARDEN_POSTGRES_DSN='postgresql://sftpwarden:change-me@db.example.com:5432/sftpwarden'
 ```
+
+Use `${NAME}` for an explicit environment reference. Values are resolved once,
+and missing or empty variables fail before connecting. Provider commands read
+their process environment; generated Compose files require only referenced
+variables from the machine running Docker Compose. See [database transport
+options](providers.md#database-transport-options) for TLS parameters, timeout
+bounds, and certificate-file ownership.
 
 For production Kubernetes, prefer PostgreSQL, MariaDB/MySQL, or MongoDB over
 file-backed providers when users must change outside a deploy cycle. The runtime

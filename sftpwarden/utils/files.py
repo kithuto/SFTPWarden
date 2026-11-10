@@ -4,6 +4,8 @@ import os
 from contextlib import suppress
 from pathlib import Path
 
+from sftpwarden.utils.persistence import atomic_bytes
+
 
 def chmod_private(path: str | Path) -> None:
     """Set private owner-only permissions on a file.
@@ -18,7 +20,7 @@ def chmod_private(path: str | Path) -> None:
 
 
 def write_private_text(path: str | Path, text: str) -> None:
-    """Write text to a file and restrict it to the owner.
+    """Publish complete UTF-8 text from a private same-directory temporary file.
 
     Parameters
     ----------
@@ -27,7 +29,4 @@ def write_private_text(path: str | Path, text: str) -> None:
     text
         UTF-8 text to write.
     """
-    file_path = Path(path)
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_text(text, encoding="utf-8")
-    chmod_private(file_path)
+    atomic_bytes(Path(path), text.encode("utf-8"))

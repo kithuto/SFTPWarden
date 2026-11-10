@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import platform
 import shutil
 from pathlib import Path
@@ -17,8 +18,7 @@ import sftpwarden.cli_commands.kubernetes as kube_commands
 import sftpwarden.cli_commands.provider as provider_commands
 import sftpwarden.cli_commands.runtime as runtime_commands
 import sftpwarden.cli_commands.users as user_commands
-import sftpwarden.services.cli_workflows as cli_workflows
-import sftpwarden.utils.files as file_utils
+import sftpwarden.cli_commands.workflows as cli_workflows
 from sftpwarden.cli import app
 from sftpwarden.config import (
     DeployTarget,
@@ -40,10 +40,10 @@ from sftpwarden.system.commands import CommandResult
 from sftpwarden.users import ProviderUsers, SFTPUser
 from sftpwarden.watcher import WatchTarget
 
-TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests"
-SECOND_TEST_KEY = "ssh-ed25519 ZmFrZS1rZXktMg=="
-THIRD_TEST_KEY = "ssh-ed25519 ZmFrZS1rZXktMw=="
-FOURTH_TEST_KEY = "ssh-ed25519 ZmFrZS1rZXktNA=="
+TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFMsDFmvcbuEKKQ2nRx6M4jxyJuS9KoOesN7GyrXw+d+"
+SECOND_TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGv5cJFgm0ffn6oHXkIseBv94l3DX7v+2vbF0+qWC+M6"
+THIRD_TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO4yPXotP3j1CbR8K0q0gMB5l+dDIw21jyWrsXIwLFO2"
+FOURTH_TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPNHX24NeM20qVNvawVjx28aji9+2dGOLTZSFSQFMCgV"
 
 
 def test_version_command_matches_version_flag() -> None:
@@ -63,12 +63,6 @@ def test_init_named_context_creates_project_name(tmp_path: Path, monkeypatch) ->
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     root = tmp_path / "dev-project"
     runner = CliRunner()
-    chmods: list[tuple[Path, int]] = []
-    monkeypatch.setattr(
-        file_utils.os,
-        "chmod",
-        lambda path, mode: chmods.append((Path(path), mode)),
-    )
 
     result = runner.invoke(app, ["init", "dev", "--root", str(root), "--yes"])
 
@@ -77,8 +71,9 @@ def test_init_named_context_creates_project_name(tmp_path: Path, monkeypatch) ->
     assert config.project.name == "dev"
     assert (root / "users.yaml").exists()
     assert (root / "docker-compose.yml").exists()
-    assert (root / "sftpwarden.yaml", 0o600) in chmods
-    assert (root / "users.yaml", 0o600) in chmods
+    if os.name != "nt":
+        assert (root / "sftpwarden.yaml").stat().st_mode & 0o777 == 0o600
+        assert (root / "users.yaml").stat().st_mode & 0o777 == 0o600
 
 
 def test_init_user_schema_option_and_command_first_key_flow(tmp_path: Path, monkeypatch) -> None:
@@ -114,7 +109,7 @@ def test_init_user_schema_option_and_command_first_key_flow(tmp_path: Path, monk
             "alice",
             "prod-ci",
             "--public-key",
-            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests",
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFMsDFmvcbuEKKQ2nRx6M4jxyJuS9KoOesN7GyrXw+d+",
             "--context",
             "dev",
             "--no-refresh",
@@ -401,7 +396,8 @@ def test_deploy_uses_active_local_context_and_builds_compose(tmp_path: Path, mon
     output = " ".join(result.output.split())
 
     assert result.exit_code == 0, result.output
-    assert "docker compose -f docker-compose.yml up -d --build" in output
+    assert "docker compose -f docker-compose.yml up -d" in output
+    assert "--force-recreate --wait --wait-timeout 90 --build" in output
 
 
 def test_plan_explains_detected_changes_will_be_applied(tmp_path: Path, monkeypatch) -> None:
@@ -640,7 +636,15 @@ def test_manual_project_name_change_reconciles_registered_context(
     assert current_before_deploy.output.strip() == "dev"
     assert deploy.exit_code == 0, deploy.output
     assert current_after_deploy.exit_code == 0, current_after_deploy.output
-    assert current_after_deploy.output.strip() == "manual"
+    assert "Context: manual" in deploy.output
+    assert current_after_deploy.output.strip() == "dev"
+    assert registry.default == "dev"
+    assert "dev" in registry.contexts
+    assert "manual" not in registry.contexts
+    monkeypatch.setattr(core_commands, "deploy_context", lambda entry: f"Deployed {entry.name}.")
+    applied = runner.invoke(app, ["deploy", "--yes"])
+    assert applied.exit_code == 0, applied.output
+    registry = load_registry()
     assert registry.default == "manual"
     assert "manual" in registry.contexts
     assert "dev" not in registry.contexts
@@ -735,33 +739,25 @@ def test_provider_schema_migration_writes_v2_and_updates_config(
     root.mkdir()
     config = default_project_config(
         "dev",
-        ProviderType.MYSQL,
-        dsn="mysql://user:pass@localhost/sftp",
+        ProviderType.SQLITE,
         user_schema=1,
     )
     write_config(root / "sftpwarden.yaml", config)
-    entry = local_context("dev", root, ProviderType.MYSQL)
-    written: list[ProviderUsers] = []
+    from sftpwarden.providers import provider_from_config
 
-    class FakeProvider:
-        def read(self) -> ProviderUsers:
-            return ProviderUsers(
-                schema_version=1,
-                users=[
-                    SFTPUser(
-                        username="alice",
-                        public_keys=["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests"],
-                    )
-                ],
-            )
-
-        def write(self, users: ProviderUsers) -> None:
-            written.append(users)
+    entry = local_context("dev", root, ProviderType.SQLITE)
+    provider = provider_from_config(root, config)
+    provider.write(
+        ProviderUsers(
+            schema_version=1,
+            users=[SFTPUser(username="alice", public_keys=[TEST_KEY])],
+        )
+    )
 
     monkeypatch.setattr(
         provider_commands,
         "resolve_provider_context",
-        lambda **_kwargs: (entry, config, FakeProvider()),
+        lambda **_kwargs: (entry, config, provider),
     )
 
     result = provider_commands.migrate_provider_schema(
@@ -774,9 +770,11 @@ def test_provider_schema_migration_writes_v2_and_updates_config(
     )
 
     assert result["changed"]
-    assert written[0].schema_version == 2
-    assert written[0].users[0].keys[0].name.startswith("legacy-")
-    assert load_config(root / "sftpwarden.yaml").provider.user_schema == 2
+    current = load_config(root / "sftpwarden.yaml")
+    stored = provider_from_config(root, current).read()
+    assert stored.schema_version == 2
+    assert stored.users[0].keys[0].name.startswith("legacy-")
+    assert current.provider.user_schema == 2
 
 
 def test_provider_schema_migration_can_be_cancelled(
@@ -787,27 +785,25 @@ def test_provider_schema_migration_can_be_cancelled(
     root.mkdir()
     config = default_project_config(
         "dev",
-        ProviderType.MYSQL,
-        dsn="mysql://user:pass@localhost/sftp",
+        ProviderType.SQLITE,
         user_schema=1,
     )
-    entry = local_context("dev", root, ProviderType.MYSQL)
-    wrote: list[ProviderUsers] = []
+    from sftpwarden.providers import provider_from_config
 
-    class FakeProvider:
-        def read(self) -> ProviderUsers:
-            return ProviderUsers(
-                schema_version=1,
-                users=[SFTPUser(username="alice", public_keys=[TEST_KEY])],
-            )
-
-        def write(self, users: ProviderUsers) -> None:
-            wrote.append(users)
+    entry = local_context("dev", root, ProviderType.SQLITE)
+    write_config(root / "sftpwarden.yaml", config)
+    provider = provider_from_config(root, config)
+    original = ProviderUsers(
+        schema_version=1,
+        users=[SFTPUser(username="alice", public_keys=[TEST_KEY])],
+    )
+    provider.write(original)
+    before = (root / "sftpwarden.yaml").read_bytes()
 
     monkeypatch.setattr(
         provider_commands,
         "resolve_provider_context",
-        lambda **_kwargs: (entry, config, FakeProvider()),
+        lambda **_kwargs: (entry, config, provider),
     )
     monkeypatch.setattr(provider_commands.typer, "confirm", lambda *_args, **_kwargs: False)
 
@@ -821,7 +817,8 @@ def test_provider_schema_migration_can_be_cancelled(
             dry_run=False,
         )
 
-    assert wrote == []
+    assert provider.read() == original
+    assert (root / "sftpwarden.yaml").read_bytes() == before
 
 
 def test_provider_schema_cli_show_migrate_keys_alias_and_errors(
@@ -1131,6 +1128,18 @@ def test_deploy_equivalents_apply_pending_user_schema_migration_with_backup(
 
     monkeypatch.setattr(kube_commands, "run", fake_run)
     monkeypatch.setattr(helm_commands, "run", fake_run)
+    from contextlib import nullcontext
+
+    import sftpwarden.services.kubernetes_identity as identity_module
+    import sftpwarden.services.kubernetes_lock as lock_module
+
+    monkeypatch.setattr(identity_module, "pin_context", lambda config: config)
+    monkeypatch.setattr(identity_module, "write_resource", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(lock_module, "operation_lock", lambda *_args: nullcontext())
+    monkeypatch.setattr(identity_module, "get_resource", lambda *_args: None)
+    monkeypatch.setattr(identity_module, "prepare_identity", lambda *_args: None)
+    monkeypatch.setattr(identity_module, "prepare_provider_secret", lambda *_args: None)
+    monkeypatch.setattr(identity_module, "wait_for_activation", lambda *_args, **_kwargs: None)
 
     kube_root = tmp_path / "kube-project"
     runner.invoke(
@@ -1249,7 +1258,7 @@ def test_validate_json_reports_config_and_provider(tmp_path: Path, monkeypatch) 
 def test_doctor_json_reports_checks() -> None:
     result = CliRunner().invoke(app, ["doctor", "--json"])
     data = json.loads(result.output)
-    sync_binary = "scp" if platform.system() == "Windows" else "rsync"
+    sync_binary = "scp" if platform.system() in {"Windows", "Darwin"} else "rsync"
 
     assert result.exit_code == 0, result.output
     assert {check["name"] for check in data["checks"]} == {
@@ -1441,6 +1450,7 @@ def test_runtime_cli_commands_use_runtime_services(monkeypatch) -> None:
     sync_calls: list[str] = []
 
     monkeypatch.setattr(runtime_commands, "apply_once", lambda config, force=False: "applied")
+    monkeypatch.setattr(runtime_commands, "check_desired_provider", lambda _config: False)
     monkeypatch.setattr(
         runtime_commands,
         "load_runtime_inputs",

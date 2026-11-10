@@ -4,7 +4,19 @@ import shlex
 from pathlib import Path
 
 from sftpwarden.contexts import RemoteEndpoint
+from sftpwarden.utils.errors import ContextError
 from sftpwarden.utils.paths import expand_path
+
+
+def remote_path_expression(path: str) -> str:
+    """Quote a POSIX remote path, expanding only the remote user's home prefix."""
+    if any(char in path for char in "\0\n\r"):
+        raise ContextError("Remote paths cannot contain control characters.")
+    if path == "~":
+        return '"$HOME"'
+    if path.startswith("~/"):
+        return f'"$HOME"/{shlex.quote(path[2:])}'
+    return shlex.quote(path)
 
 
 def uses_default_ssh_identity(ssh_key: str | None) -> bool:

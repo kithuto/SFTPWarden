@@ -72,6 +72,8 @@ CONFIG_MUTATION_VALUES: dict[str, tuple[str, Any]] = {
     "kubernetes.service_type": ("NodePort", "NodePort"),
     "kubernetes.storage_class": ("fast", "fast"),
     "kubernetes.data_storage_size": ("2Gi", "2Gi"),
+    "kubernetes.host_keys_secret": ("operator-identity", "operator-identity"),
+    "kubernetes.provider_dsn_secret": ("provider-connection", "provider-connection"),
     "kubernetes.startup_probe.period_seconds": ("6", 6),
     "kubernetes.startup_probe.timeout_seconds": ("4", 4),
     "kubernetes.startup_probe.failure_threshold": ("12", 12),

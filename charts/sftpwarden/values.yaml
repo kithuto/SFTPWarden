@@ -68,7 +68,8 @@ probes:
     timeoutSeconds: 5
 
 hostKeys:
-  secretName: sftpwarden-host-keys
+  # Empty selects the retained host-key PVC. A named Secret must already exist.
+  secretName: ""
   mountPath: /etc/sftpwarden/host_key_secret
 
 resources: {}

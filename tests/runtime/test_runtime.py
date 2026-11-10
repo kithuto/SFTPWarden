@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -141,7 +142,7 @@ def test_assert_unique_resolved_uid_reports_duplicates() -> None:
         assert_unique_resolved_uid(10000, {10000})
 
 
-def test_runtime_rejects_user_without_enabled_auth_method() -> None:
+def test_runtime_accepts_user_without_enabled_auth_method_as_deny_policy() -> None:
     config = SFTPWardenConfig.model_validate(
         {
             "version": 1,
@@ -150,18 +151,16 @@ def test_runtime_rejects_user_without_enabled_auth_method() -> None:
         }
     )
 
-    with pytest.raises(RuntimeError, match="no enabled authentication method"):
-        validate_runtime_users(config, ProviderUsers(users=[user("alice")]))
+    validate_runtime_users(config, ProviderUsers(users=[user("alice")]))
 
 
-def test_runtime_rejects_impossible_hash_as_only_active_auth_method() -> None:
+def test_runtime_accepts_impossible_hash_as_deny_policy() -> None:
     config = SFTPWardenConfig(project=ProjectConfig(name="dev"))
 
-    with pytest.raises(RuntimeError, match="no enabled authentication method"):
-        validate_runtime_users(
-            config,
-            ProviderUsers(users=[user("alice", password_hash="!")]),  # noqa: S106
-        )
+    validate_runtime_users(
+        config,
+        ProviderUsers(users=[user("alice", password_hash="!")]),  # noqa: S106
+    )
 
 
 def test_runtime_allows_disabled_user_with_impossible_hash() -> None:
@@ -189,7 +188,12 @@ def test_runtime_allows_public_key_when_password_auth_is_disabled() -> None:
                 user(
                     "alice",
                     password_hash=None,
-                    public_keys=["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests"],
+                    public_keys=[
+                        (
+                            "ssh-ed25519 "
+                            "AAAAC3NzaC1lZDI1NTE5AAAAIFMsDFmvcbuEKKQ2nRx6M4jxyJuS9KoOesN7GyrXw+d+"
+                        )
+                    ],
                 )
             ]
         ),
@@ -335,11 +339,9 @@ def test_render_sshd_config_and_state_path_use_configured_locations(
 def test_ensure_group_skips_existing_group(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
 
-    class Result:
-        returncode = 0
-
-    monkeypatch.setattr(runtime_module.shutil, "which", lambda command: "/usr/bin/getent")
-    monkeypatch.setattr(runtime_module, "run", lambda *_args, **_kwargs: Result())
+    monkeypatch.setattr(
+        runtime_module, "grp", SimpleNamespace(getgrnam=lambda _: SimpleNamespace(gr_gid=12000))
+    )
     monkeypatch.setattr(runtime_module, "run_command", calls.append)
 
     ensure_group("sftpusers")
@@ -349,7 +351,11 @@ def test_ensure_group_skips_existing_group(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_ensure_group_creates_missing_group_with_gid(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
-    monkeypatch.setattr(runtime_module.shutil, "which", lambda command: None)
+
+    def missing(_name):
+        raise KeyError(_name)
+
+    monkeypatch.setattr(runtime_module, "grp", SimpleNamespace(getgrnam=missing))
     monkeypatch.setattr(runtime_module, "run_command", calls.append)
 
     ensure_group("alice_sftp", gid=12000)
@@ -390,8 +396,8 @@ def test_ensure_system_user_creates_account_and_sets_password(
 
     assert groups == [("alice_sftp", 12000), ("sftpwarden_users", None)]
     assert commands[0][:5] == ["useradd", "-u", "12000", "-g", "alice_sftp"]
-    assert ["usermod", "-p", TEST_SHADOW_HASH, "alice"] in commands
-    assert ["usermod", "-U", "alice"] in commands
+    assert commands[0][-3:] == ["-p", TEST_SHADOW_HASH, "alice"]
+    assert len(commands) == 1
 
 
 def test_ensure_system_user_updates_and_disables_existing_account(
@@ -412,10 +418,45 @@ def test_ensure_system_user_updates_and_disables_existing_account(
     ensure_system_user(config, resolved)
 
     assert commands[0][:5] == ["usermod", "-u", "12000", "-g", "alice_sftp"]
-    assert ["usermod", "-p", "*", "alice"] in commands
-    assert ["usermod", "-p", "!", "alice"] in commands
+    assert commands[0][-3:] == ["-p", "!", "alice"]
+    assert len(commands) == 1
 
 
+@pytest.mark.parametrize("exists", [False, True])
+@pytest.mark.parametrize(
+    "password_hash,allow_password,disabled,expected",
+    [
+        (None, True, False, "*"),
+        (TEST_SHADOW_HASH, False, False, "*"),
+        (TEST_SHADOW_HASH, True, False, TEST_SHADOW_HASH),
+        (TEST_SHADOW_HASH, True, True, "!"),
+        ("!", True, False, "*"),
+    ],
+)
+def test_account_operation_sets_only_final_authentication_policy(
+    monkeypatch, exists, password_hash, allow_password, disabled, expected
+):
+    config = SFTPWardenConfig(project=ProjectConfig(name="policy"))
+    config.auth.allow_password = allow_password
+    spec = SFTPUser(username="alice", password_hash=password_hash, disabled=disabled)
+    commands = []
+    monkeypatch.setattr(runtime_module, "ensure_group", lambda *a: None)
+    monkeypatch.setattr(runtime_module, "user_exists", lambda _: exists)
+    monkeypatch.setattr(runtime_module, "run_command", commands.append)
+    ensure_system_user(config, ResolvedUser(spec=spec, uid=12000, gid=12000))
+    assert len(commands) == 1
+    assert commands[0][0] == ("usermod" if exists else "useradd")
+    assert commands[0][-3:] == ["-p", expected, "alice"]
+
+
+def test_group_lookup_without_linux_support_refuses_mutation(monkeypatch):
+    monkeypatch.setattr(runtime_module, "grp", None)
+    monkeypatch.setattr(runtime_module, "run_command", lambda _: pytest.fail("mutated host"))
+    with pytest.raises(RuntimeError, match="Linux container"):
+        ensure_group("sftpwarden_users")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Linux runtime descriptor ownership requires POSIX")
 def test_ensure_directories_sets_chroot_and_upload_permissions(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -428,19 +469,12 @@ def test_ensure_directories_sets_chroot_and_upload_permissions(
         }
     )
     resolved = ResolvedUser(spec=user("alice", uid=12000, gid=12000), uid=12000, gid=12000)
-    chowns: list[tuple[Path, int, int]] = []
-    chmods: list[tuple[Path, int]] = []
+    chowns: list[tuple[int, int, int]] = []
 
     monkeypatch.setattr(
         runtime_module.os,
-        "chown",
-        lambda path, uid, gid: chowns.append((Path(path), uid, gid)),
-        raising=False,
-    )
-    monkeypatch.setattr(
-        runtime_module.os,
-        "chmod",
-        lambda path, mode: chmods.append((Path(path), mode)),
+        "fchown",
+        lambda fd, uid, gid: chowns.append((os.fstat(fd).st_ino, uid, gid)),
         raising=False,
     )
 
@@ -452,8 +486,16 @@ def test_ensure_directories_sets_chroot_and_upload_permissions(
     assert data_root.is_dir()
     assert root.is_dir()
     assert upload.is_dir()
-    assert chowns == [(data_root, 0, 0), (root, 0, 0), (upload, 12000, 12000)]
-    assert chmods == [(data_root, 0o755), (root, 0o755), (upload, 0o750)]
+    assert chowns == [
+        (data_root.stat().st_ino, 0, 0),
+        (root.stat().st_ino, 0, 0),
+        (upload.stat().st_ino, 12000, 12000),
+    ]
+    assert [path.stat().st_mode & 0o777 for path in (data_root, root, upload)] == [
+        0o755,
+        0o755,
+        0o750,
+    ]
 
 
 def test_chown_path_reports_missing_linux_ownership(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -472,11 +514,16 @@ def test_disable_missing_marks_existing_system_users_disabled(
 
     monkeypatch.setattr(runtime_module, "user_exists", lambda username: True)
     monkeypatch.setattr(runtime_module, "run_command", commands.append)
+    removed: list[ResolvedUser] = []
+    monkeypatch.setattr(
+        runtime_module, "write_authorized_keys", lambda _config, user: removed.append(user)
+    )
 
     disable_missing(config, ProviderUsers(users=[]), state)
 
     assert commands == [["usermod", "-p", "!", "alice"]]
     assert state.users["alice"].disabled
+    assert removed[0].spec.disabled and not removed[0].spec.key_objects()
 
 
 def test_disable_missing_returns_when_feature_is_disabled(
@@ -548,7 +595,9 @@ def test_write_authorized_keys_uses_restricted_key_options(
     resolved = ResolvedUser(
         spec=user(
             "alice",
-            public_keys=["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests"],
+            public_keys=[
+                "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFMsDFmvcbuEKKQ2nRx6M4jxyJuS9KoOesN7GyrXw+d+"
+            ],
         ),
         uid=12000,
         gid=12000,
@@ -558,8 +607,11 @@ def test_write_authorized_keys_uses_restricted_key_options(
 
     target = auth_dir / "alice"
     assert target.read_text(encoding="utf-8").startswith("restrict ssh-ed25519")
-    assert chmods == [(target, 0o644)]
-    assert chowns == [(str(target), 0, 0)]
+    assert len(chmods) == len(chowns) == 1
+    temporary, mode = chmods[0]
+    assert temporary.parent == auth_dir and mode == 0o644
+    assert chowns == [(str(temporary), 0, 0)]
+    assert not temporary.exists()
 
 
 def test_write_authorized_keys_uses_only_active_named_keys(
@@ -582,12 +634,25 @@ def test_write_authorized_keys_uses_only_active_named_keys(
             keys=[
                 SFTPUserKey(
                     name="prod-ci",
-                    public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests",
+                    public_key=(
+                        "ssh-ed25519 "
+                        "AAAAC3NzaC1lZDI1NTE5AAAAIFMsDFmvcbuEKKQ2nRx6M4jxyJuS9KoOesN7GyrXw+d+"
+                    ),
                 ),
-                SFTPUserKey(name="old-ci", public_key="ssh-ed25519 AAAA", disabled=True),
+                SFTPUserKey(
+                    name="old-ci",
+                    public_key=(
+                        "ssh-ed25519 "
+                        "AAAAC3NzaC1lZDI1NTE5AAAAIGv5cJFgm0ffn6oHXkIseBv94l3DX7v+2vbF0+qWC+M6"
+                    ),
+                    disabled=True,
+                ),
                 SFTPUserKey(
                     name="expired-ci",
-                    public_key="ssh-ed25519 AAAB",
+                    public_key=(
+                        "ssh-ed25519 "
+                        "AAAAC3NzaC1lZDI1NTE5AAAAIO4yPXotP3j1CbR8K0q0gMB5l+dDIw21jyWrsXIwLFO2"
+                    ),
                     expires_at="2000-01-01",
                 ),
             ],
@@ -606,7 +671,7 @@ def test_write_authorized_keys_uses_only_active_named_keys(
 
 
 def test_load_runtime_inputs_loads_config_users_and_state(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, applied_runtime_config
 ) -> None:
     config = SFTPWardenConfig.model_validate(
         {
@@ -619,6 +684,7 @@ def test_load_runtime_inputs_loads_config_users_and_state(
     config_path = tmp_path / "sftpwarden.yaml"
     users_path = tmp_path / "users.yaml"
     write_config(config_path, config)
+    applied_runtime_config(config_path)
     users_path.write_text("users: []\n", encoding="utf-8")
     RuntimeState(users={"alice": RuntimeUserState(uid=10000, gid=10000)}).save(
         tmp_path / "state" / "state.json"
@@ -632,7 +698,7 @@ def test_load_runtime_inputs_loads_config_users_and_state(
 
 
 def test_apply_once_saves_fingerprint_when_nothing_changed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reconciliation_lock
 ) -> None:
     config = SFTPWardenConfig.model_validate(
         {
@@ -645,15 +711,22 @@ def test_apply_once_saves_fingerprint_when_nothing_changed(
     users = ProviderUsers(users=[])
 
     monkeypatch.setattr(runtime_module, "load_runtime_inputs", lambda _path: (config, users, state))
+    monkeypatch.setattr(runtime_module, "load_config", lambda _path: config)
     monkeypatch.setattr(runtime_module, "render_sshd_config", lambda _config: None)
 
     result = apply_once("config.yaml")
 
     assert result == "No user changes detected."
     assert RuntimeState.load(tmp_path / "state" / "state.json").fingerprint == state.fingerprint
+    before = (tmp_path / "state" / "state.json").stat()
+    assert apply_once("config.yaml") == "No user changes detected."
+    after = (tmp_path / "state" / "state.json").stat()
+    assert (before.st_ino, before.st_mtime_ns) == (after.st_ino, after.st_mtime_ns)
 
 
-def test_apply_once_applies_changed_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_apply_once_applies_changed_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reconciliation_lock
+) -> None:
     config = SFTPWardenConfig.model_validate(
         {
             "version": 1,
@@ -666,8 +739,11 @@ def test_apply_once_applies_changed_plan(tmp_path: Path, monkeypatch: pytest.Mon
     calls: list[str] = []
 
     monkeypatch.setattr(runtime_module, "load_runtime_inputs", lambda _path: (config, users, state))
+    monkeypatch.setattr(runtime_module, "load_config", lambda _path: config)
     monkeypatch.setattr(runtime_module, "render_sshd_config", lambda _config: calls.append("sshd"))
+    monkeypatch.setattr(runtime_module, "validate_system_accounts", lambda *_args: None)
     monkeypatch.setattr(runtime_module, "ensure_group", lambda _group: calls.append("group"))
+    monkeypatch.setattr(runtime_module, "user_exists", lambda _name: False)
     monkeypatch.setattr(runtime_module, "ensure_system_user", lambda *_args: calls.append("user"))
     monkeypatch.setattr(runtime_module, "ensure_directories", lambda *_args: calls.append("dirs"))
     monkeypatch.setattr(
@@ -678,7 +754,9 @@ def test_apply_once_applies_changed_plan(tmp_path: Path, monkeypatch: pytest.Mon
     result = apply_once("config.yaml")
 
     assert result.startswith("Applied 1 action(s):")
-    assert calls == ["sshd", "group", "user", "dirs", "keys", "missing"]
+    assert calls.index("keys") < calls.index("user")
+    assert set(calls) == {"group", "user", "dirs", "keys", "missing"}
+    assert "sshd" not in calls, "User refresh must never render daemon configuration"
     assert RuntimeState.load(tmp_path / "state" / "state.json").users["alice"].uid == 10000
 
 
@@ -688,8 +766,10 @@ def test_run_sync_loop_prints_changes_until_sleep_stops(
     config = SFTPWardenConfig.model_validate(
         {"version": 1, "project": {"name": "dev"}, "sync": {"interval_seconds": 5}}
     )
-    monkeypatch.setattr(runtime_module, "load_config", lambda _path: config)
-    monkeypatch.setattr(runtime_module, "apply_once", lambda _path: "Applied 1 action(s).")
+    monkeypatch.setattr(
+        "sftpwarden.runtime.configuration.load_runtime_config", lambda _path: config
+    )
+    monkeypatch.setattr(runtime_module, "execute_pass", lambda _path: "Applied 1 action(s).")
     monkeypatch.setattr(
         runtime_module.time,
         "sleep",
@@ -699,4 +779,4 @@ def test_run_sync_loop_prints_changes_until_sleep_stops(
     with pytest.raises(KeyboardInterrupt):
         run_sync_loop("config.yaml")
 
-    assert "Applied 1 action(s)." in capsys.readouterr().out
+    assert "Runtime policy reconciliation completed." in capsys.readouterr().err

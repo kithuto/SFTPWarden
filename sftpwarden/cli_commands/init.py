@@ -11,6 +11,7 @@ from rich.prompt import Confirm, Prompt
 from sftpwarden.cli_commands.app import app
 from sftpwarden.cli_commands.errors import handle_error
 from sftpwarden.cli_commands.prompts import prompt_mongodb_dsn, prompt_sql_dsn
+from sftpwarden.cli_commands.workflows import install_context_watcher
 from sftpwarden.config import (
     EXTERNAL_DSN_PROVIDER_TYPES,
     FILE_PROVIDER_TYPES,
@@ -44,7 +45,6 @@ from sftpwarden.providers import (
 )
 from sftpwarden.remote.checks import verify_remote_runtime_requirements
 from sftpwarden.render.compose import write_compose
-from sftpwarden.services.cli_workflows import install_context_watcher
 from sftpwarden.services.deploy import kubectl_command, translate_command_failure
 from sftpwarden.system.commands import CommandResult, run
 from sftpwarden.users import ProviderUsers
@@ -52,7 +52,8 @@ from sftpwarden.users.schemas import validate_user_schema_version
 from sftpwarden.utils.console import print_info, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
 from sftpwarden.utils.files import write_private_text
-from sftpwarden.utils.paths import expand_path
+from sftpwarden.utils.paths import expand_path, global_config_path
+from sftpwarden.utils.state_transactions import state_transaction
 
 
 @app.command()
@@ -224,13 +225,16 @@ def init(
         ):
             raise typer.Exit(1)
         selected_provider = resolve_provider(provider)
-        global_config = load_global_config()
-        if global_config.default_provider is None:
-            global_config.default_provider = selected_provider
-            save_global_config(global_config)
-            print_success(f"Set global default provider to [bold]{selected_provider.value}[/bold].")
-        else:
-            print_info(f"Using global default provider [bold]{selected_provider.value}[/bold].")
+        with state_transaction(global_config_path()):
+            global_config = load_global_config()
+            if global_config.default_provider is None:
+                global_config.default_provider = selected_provider
+                save_global_config(global_config)
+                print_success(
+                    f"Set global default provider to [bold]{selected_provider.value}[/bold]."
+                )
+            else:
+                print_info(f"Using global default provider [bold]{selected_provider.value}[/bold].")
         selected_root = expand_path(root) if root else Path.cwd()
         if (
             root is None

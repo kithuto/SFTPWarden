@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-import os
+from collections.abc import Callable
+from contextlib import suppress
 from typing import Any, ClassVar
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qsl, unquote, urlparse
 
 from sftpwarden.config import ProviderType
 from sftpwarden.providers.base import BaseProvider
@@ -25,6 +26,9 @@ from sftpwarden.providers.sql import (
     validate_sql_read_query,
     validate_sql_table,
 )
+from sftpwarden.providers.sql_mutations import mutate_sql_user, replace_sql_snapshot
+from sftpwarden.security.environment import resolve_provider_dsn
+from sftpwarden.security.provider_errors import private_database_errors
 from sftpwarden.users.models import ProviderUsers, SFTPUser
 from sftpwarden.utils.errors import ProviderError
 
@@ -47,6 +51,7 @@ class PyMySQLProvider(BaseProvider):
         """
         return ""
 
+    @private_database_errors
     def read(self) -> ProviderUsers:
         """Read users from a PyMySQL-compatible database.
 
@@ -58,6 +63,8 @@ class PyMySQLProvider(BaseProvider):
         connection = self._connect(dict_cursor=True)
         try:
             with connection.cursor() as cursor:
+                cursor.execute("set transaction isolation level repeatable read")
+                cursor.execute("start transaction with consistent snapshot, read only")
                 query = self.config.query or sql_select_users_query(self.config.table)
                 if self.config.query:
                     validate_sql_read_query(query)
@@ -75,6 +82,7 @@ class PyMySQLProvider(BaseProvider):
         finally:
             connection.close()
 
+    @private_database_errors
     def write(self, users: ProviderUsers) -> None:
         """Replace the users table with a desired user set.
 
@@ -103,6 +111,7 @@ class PyMySQLProvider(BaseProvider):
         finally:
             connection.close()
 
+    @private_database_errors
     def upsert_user(self, user: SFTPUser) -> None:
         """Create or update one database user row.
 
@@ -130,6 +139,7 @@ class PyMySQLProvider(BaseProvider):
         finally:
             connection.close()
 
+    @private_database_errors
     def remove_user(self, username: str) -> None:
         """Remove one database user row.
 
@@ -156,6 +166,72 @@ class PyMySQLProvider(BaseProvider):
         finally:
             connection.close()
 
+    def _checked_mutation(self, operation: Callable[[Any], None]) -> None:
+        for attempt in range(3):
+            try:
+                self._mutation_transaction(operation)
+                return
+            except Exception as exc:
+                if getattr(exc, "args", ())[:1] == (1213,) and attempt < 2:
+                    continue
+                if isinstance(exc, ProviderError):
+                    raise
+                raise ProviderError(
+                    "SQL mutation failed or conflicted; reload the provider before retrying."
+                ) from exc
+
+    def _mutation_transaction(self, operation: Callable[[Any], None]) -> None:
+        connection = self._connect(dict_cursor=True)
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("set transaction isolation level serializable")
+                cursor.execute("set session innodb_lock_wait_timeout = 5")
+                operation(cursor)
+            connection.commit()
+        except Exception:
+            with suppress(Exception):
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    @private_database_errors
+    def mutate_user(
+        self,
+        expected: ProviderUsers,
+        username: str,
+        replacement: SFTPUser | None,
+        *,
+        migrate_schema: bool = False,
+    ) -> None:
+        """Compare and edit one user while holding transactional row locks."""
+        if migrate_schema:
+            self.ensure_schema_storage(expected.schema_version)
+        self._checked_mutation(
+            lambda cursor: mutate_sql_user(
+                cursor,
+                self.config.table,
+                expected,
+                username,
+                replacement,
+                dialect="mysql",
+                source_schema=self.config.user_schema,
+                migrate_schema=migrate_schema,
+            )
+        )
+
+    @private_database_errors
+    def replace_if_unchanged(self, expected: ProviderUsers, replacement: ProviderUsers) -> None:
+        """Check the complete source snapshot before a transactional bulk replacement."""
+        if replacement.schema_version != expected.schema_version:
+            self.ensure_schema_storage(replacement.schema_version)
+        self._checked_mutation(
+            lambda cursor: replace_sql_snapshot(
+                cursor, self.config.table, expected, replacement, dialect="mysql"
+            )
+        )
+
+    @private_database_errors
     def table_exists(self) -> bool:
         """Return whether the configured provider storage exists.
 
@@ -182,6 +258,7 @@ class PyMySQLProvider(BaseProvider):
         finally:
             connection.close()
 
+    @private_database_errors
     def create_table(self) -> None:
         """Create the configured users table."""
         validate_sql_table(self.config.table)
@@ -201,6 +278,7 @@ class PyMySQLProvider(BaseProvider):
         finally:
             connection.close()
 
+    @private_database_errors
     def ensure_schema_storage(self, schema_version: int) -> None:
         """Ensure tables required by a user schema exist."""
         validate_sql_table(self.config.table)
@@ -235,7 +313,7 @@ class PyMySQLProvider(BaseProvider):
                 suggestion='Install SFTPWarden with "sftpwarden[mysql]" or "sftpwarden[mariadb]".',
             ) from exc
         kwargs = pymysql_connect_kwargs(
-            os.path.expandvars(self.config.dsn),
+            resolve_provider_dsn(self.config.dsn),
             allowed_schemes=self.allowed_schemes,
             default_port=self.default_port,
             provider_label=self.provider_label,
@@ -288,17 +366,76 @@ def pymysql_connect_kwargs(
     dict[str, Any]
         Connection keyword arguments for PyMySQL.
     """
-    parsed = urlparse(dsn)
+    try:
+        parsed = urlparse(dsn)
+        port = parsed.port
+        query_options = parse_qsl(parsed.query, keep_blank_values=True, strict_parsing=True)
+    except ValueError:
+        raise ProviderError("Invalid MySQL/MariaDB connection URL.") from None
+    if parsed.fragment:
+        raise ProviderError("MySQL/MariaDB connection URLs must not contain a fragment.")
     if parsed.scheme not in allowed_schemes:
         schemes = " or ".join(f"{scheme}://" for scheme in sorted(allowed_schemes))
         raise ProviderError(f"{provider_label} DSN must use {schemes}.")
-    return {
+    kwargs: dict[str, Any] = {
         "host": parsed.hostname or "localhost",
-        "port": parsed.port or default_port,
+        "port": port or default_port,
         "user": unquote(parsed.username or ""),
         "password": unquote(parsed.password or ""),
-        "database": parsed.path.lstrip("/"),
+        "database": unquote(parsed.path.lstrip("/")),
+        "connect_timeout": 5,
+        "read_timeout": 20,
+        "write_timeout": 20,
     }
+    allowed = {
+        "charset",
+        "connect_timeout",
+        "read_timeout",
+        "write_timeout",
+        "ssl_ca",
+        "ssl_cert",
+        "ssl_key",
+        "ssl_verify_cert",
+        "ssl_verify_identity",
+        "ssl_disabled",
+    }
+    options: dict[str, str] = {}
+    for name, value in query_options:
+        if name not in allowed or name in options:
+            raise ProviderError("Unsupported or duplicate MySQL/MariaDB DSN option.")
+        if not value:
+            raise ProviderError("MySQL/MariaDB DSN options must not be empty.")
+        options[name] = value
+    for name, value in options.items():
+        if name.endswith("_timeout"):
+            try:
+                timeout = int(value)
+            except ValueError:
+                raise ProviderError(
+                    "MySQL/MariaDB timeouts must be positive whole seconds."
+                ) from None
+            if not 1 <= timeout <= 30:
+                raise ProviderError("MySQL/MariaDB timeouts must be between 1 and 30 seconds.")
+            kwargs[name] = timeout
+        elif name in {"ssl_verify_cert", "ssl_verify_identity", "ssl_disabled"}:
+            if value.lower() not in {"true", "false", "1", "0"}:
+                raise ProviderError("MySQL/MariaDB TLS flags must be true or false.")
+            kwargs[name] = value.lower() in {"true", "1"}
+        else:
+            kwargs[name] = value
+    tls_requested = any(name.startswith("ssl_") and name != "ssl_disabled" for name in options)
+    tls_requested = tls_requested or kwargs.get("ssl_disabled") is False
+    if tls_requested:
+        if kwargs.get("ssl_disabled") or any(
+            kwargs.get(name) is False for name in ("ssl_verify_cert", "ssl_verify_identity")
+        ):
+            raise ProviderError(
+                "Requested MySQL/MariaDB TLS requires certificate and hostname verification."
+            )
+        if "ssl_key" in options and "ssl_cert" not in options:
+            raise ProviderError("MySQL/MariaDB ssl_key requires ssl_cert.")
+        kwargs.update(ssl_verify_cert=True, ssl_verify_identity=True)
+    return kwargs
 
 
 def mysql_connect_kwargs(dsn: str) -> dict[str, Any]:

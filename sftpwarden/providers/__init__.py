@@ -124,6 +124,7 @@ def load_users(
     table: str = "sftp_users",
     collection: str = "sftp_users",
     user_schema: int = 2,
+    require_schema_match: bool = False,
 ) -> ProviderUsers:
     """Load users from an explicit provider.
 
@@ -143,13 +144,15 @@ def load_users(
         MongoDB collection name.
     user_schema
         Preferred user schema for providers that need initialization context.
+    require_schema_match
+        Reject stored data with a different schema before returning runtime inputs.
 
     Returns
     -------
     ProviderUsers
         Loaded provider users.
     """
-    return build_provider(
+    provider = build_provider(
         provider_type,
         path=path,
         dsn=dsn,
@@ -157,7 +160,12 @@ def load_users(
         table=table,
         collection=collection,
         user_schema=user_schema,
-    ).read()
+    )
+    if require_schema_match:
+        from sftpwarden.providers.schema import require_configured_schema
+
+        return require_configured_schema(provider)
+    return provider.read()
 
 
 def save_users(

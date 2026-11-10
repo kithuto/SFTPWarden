@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import sys
 from collections.abc import Callable
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -70,7 +71,7 @@ def test_sqlite_provider_table_exists_requires_key_table_for_schema_v2(tmp_path:
         path=db_path,
     )
 
-    with sqlite3.connect(db_path) as connection:
+    with closing(sqlite3.connect(db_path)) as connection, connection:
         connection.execute("create table sftp_users (username text primary key)")
 
     assert not provider.table_exists()
@@ -96,7 +97,10 @@ def test_sqlite_provider_schema_v2_mutations_manage_key_table(tmp_path: Path) ->
         keys=[
             SFTPUserKey(
                 name="prod",
-                public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests",
+                public_key=(
+                    "ssh-ed25519 "
+                    "AAAAC3NzaC1lZDI1NTE5AAAAIFMsDFmvcbuEKKQ2nRx6M4jxyJuS9KoOesN7GyrXw+d+"
+                ),
             )
         ],
     )
@@ -106,14 +110,14 @@ def test_sqlite_provider_schema_v2_mutations_manage_key_table(tmp_path: Path) ->
     assert provider.table_exists()
     provider.write(ProviderUsers(schema_version=2, users=[user]))
 
-    with sqlite3.connect(db_path) as connection:
+    with closing(sqlite3.connect(db_path)) as connection, connection:
         count = connection.execute("select count(*) from sftp_user_keys").fetchone()[0]
 
     assert count == 1
 
     provider.remove_user("alice")
 
-    with sqlite3.connect(db_path) as connection:
+    with closing(sqlite3.connect(db_path)) as connection, connection:
         count = connection.execute("select count(*) from sftp_user_keys").fetchone()[0]
 
     assert count == 0
@@ -193,7 +197,10 @@ def test_mongodb_provider_preserves_document_schema_version_for_password_only_v2
             keys=[
                 SFTPUserKey(
                     name="prod",
-                    public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests",
+                    public_key=(
+                        "ssh-ed25519 "
+                        "AAAAC3NzaC1lZDI1NTE5AAAAIFMsDFmvcbuEKKQ2nRx6M4jxyJuS9KoOesN7GyrXw+d+"
+                    ),
                 )
             ],
         )

@@ -4,7 +4,7 @@ users:
     password_hash: "$6$rounds=500000$example$replace-with-real-hash"
     keys:
       - name: laptop
-        public_key: "ssh-ed25519 AAAA alice@example"
+        public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEj3kA3vYtFmCVuUtBxuIu/Mjy0qAuysIHNlskLMSbST replace-before-use"
         comment: Example key; replace before use
         source: example
     upload_dir: upload

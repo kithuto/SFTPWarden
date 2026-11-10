@@ -13,7 +13,13 @@ from sftpwarden.providers import (
     find_user,
     provider_from_config,
 )
+from sftpwarden.providers.schema import require_configured_schema
 from sftpwarden.remote.deploy import remote_shell_command
+from sftpwarden.services.provider_schema import write_provider_schema_backup
+from sftpwarden.services.schema_transition import (
+    publish_schema_transition,
+    require_no_pending_transition,
+)
 from sftpwarden.system.commands import run_checked
 from sftpwarden.users.models import (
     USERNAME_RE,
@@ -30,7 +36,9 @@ from sftpwarden.users.schemas import (
     user_schema as user_schema_for,
 )
 from sftpwarden.users.schemas.base import SFTPUserAuthFields
-from sftpwarden.utils.errors import RuntimeError
+from sftpwarden.users.service import upsert_user
+from sftpwarden.utils.errors import ProviderError, RuntimeError
+from sftpwarden.utils.state_transactions import state_transaction
 
 
 @dataclass(frozen=True)
@@ -94,7 +102,8 @@ class UserService:
         ProviderUsers
             Users currently stored in the provider.
         """
-        return self.provider.read()
+        require_no_pending_transition(self.entry)
+        return require_configured_schema(self.provider)
 
     def show_user(self, username: str) -> SFTPUser:
         """Return a single provider user.
@@ -146,7 +155,9 @@ class UserService:
         SFTPUser
             Created user.
         """
-        users = self.provider.read()
+        if not public_keys and not password_hash:
+            raise RuntimeError("User requires at least one public key or a password_hash.")
+        users = self.list_users()
         schema = user_schema_for(users.schema_version)
         auth_fields = schema.auth_fields_from_public_keys(
             public_keys or [],
@@ -161,7 +172,7 @@ class UserService:
             gid=gid,
             **auth_fields,
         )
-        self.provider.write(upsert_provider_user(users, user))
+        self._save_user_mutation(users, username, user)
         return user
 
     def update_user(
@@ -202,7 +213,7 @@ class UserService:
         UserUpdateResult
             Updated user and runtime-change flag.
         """
-        users = self.provider.read()
+        users = self.list_users()
         existing = find_user(users, username)
         runtime_changed = any(
             value is not None
@@ -228,7 +239,7 @@ class UserService:
             gid=gid if gid is not None else existing.gid,
             disabled=disabled if disabled is not None else existing.disabled,
         )
-        self.provider.write(upsert_provider_user(users, updated))
+        self._save_user_mutation(users, username, updated)
         return UserUpdateResult(user=updated, runtime_changed=runtime_changed)
 
     def set_user_disabled(self, username: str, *, disabled: bool) -> UserUpdateResult:
@@ -243,7 +254,9 @@ class UserService:
         username
             Username to remove.
         """
-        self.provider.remove_user(username)
+        users = self.list_users()
+        find_user(users, username)
+        self._save_user_mutation(users, username, None)
 
     def list_user_keys(self, username: str) -> list[SFTPUserKey]:
         """Return keys for one user, deriving virtual keys for schema v1."""
@@ -265,7 +278,7 @@ class UserService:
         dry_run: bool = False,
     ) -> UserKeyMutationResult:
         """Add one public key to a user."""
-        users = self.provider.read()
+        users = self.list_users()
         user = find_user(users, username)
         schema = user_schema_for(users.schema_version)
         updated = schema.add_key(
@@ -276,7 +289,7 @@ class UserService:
             source=source or "user.key.add",
         )
         if not dry_run:
-            self.provider.write(upsert_provider_user(users, updated))
+            self._save_user_mutation(users, username, updated)
         return UserKeyMutationResult(user=updated, schema_migrated=False, dry_run=dry_run)
 
     def remove_user_key(
@@ -287,12 +300,12 @@ class UserService:
         dry_run: bool = False,
     ) -> UserKeyMutationResult:
         """Remove one key from a user."""
-        users = self.provider.read()
+        users = self.list_users()
         user = find_user(users, username)
         key = find_key(user, key_name)
         updated = user_schema_for(users.schema_version).remove_key(user, key)
         if not dry_run:
-            self.provider.write(upsert_provider_user(users, updated))
+            self._save_user_mutation(users, username, updated)
         return UserKeyMutationResult(user=updated, schema_migrated=False, dry_run=dry_run)
 
     def disable_user_key(
@@ -305,7 +318,7 @@ class UserService:
         dry_run: bool = False,
     ) -> UserKeyMutationResult:
         """Enable or disable one named key, migrating v1 when allowed."""
-        users, migrated = self._schema_users_with_key_lifecycle(
+        source, users, migrated = self._schema_users_with_key_lifecycle(
             allow_migration=allow_migration,
             dry_run=dry_run,
             operation="key disable/enable",
@@ -320,7 +333,7 @@ class UserService:
         ]
         updated = copy_user(user, public_keys=[], keys=keys)
         if not dry_run:
-            self.provider.write(upsert_provider_user(users, updated))
+            self._save_key_mutation(source, users, updated, migrated=migrated)
         return UserKeyMutationResult(user=updated, schema_migrated=migrated, dry_run=dry_run)
 
     def rename_user_key(
@@ -333,7 +346,7 @@ class UserService:
         dry_run: bool = False,
     ) -> UserKeyMutationResult:
         """Rename one key, migrating v1 when allowed."""
-        users, migrated = self._schema_users_with_key_lifecycle(
+        source, users, migrated = self._schema_users_with_key_lifecycle(
             allow_migration=allow_migration,
             dry_run=dry_run,
             operation="key rename",
@@ -348,7 +361,7 @@ class UserService:
         ]
         updated = copy_user(user, public_keys=[], keys=keys)
         if not dry_run:
-            self.provider.write(upsert_provider_user(users, updated))
+            self._save_key_mutation(source, users, updated, migrated=migrated)
         return UserKeyMutationResult(user=updated, schema_migrated=migrated, dry_run=dry_run)
 
     def rotate_user_key(
@@ -361,7 +374,7 @@ class UserService:
         dry_run: bool = False,
     ) -> UserKeyMutationResult:
         """Replace one key's public key, migrating v1 when allowed."""
-        users, migrated = self._schema_users_with_key_lifecycle(
+        source, users, migrated = self._schema_users_with_key_lifecycle(
             allow_migration=allow_migration,
             dry_run=dry_run,
             operation="key rotate",
@@ -381,7 +394,7 @@ class UserService:
         ]
         updated = copy_user(user, public_keys=[], keys=keys)
         if not dry_run:
-            self.provider.write(upsert_provider_user(users, updated))
+            self._save_key_mutation(source, users, updated, migrated=migrated)
         return UserKeyMutationResult(user=updated, schema_migrated=migrated, dry_run=dry_run)
 
     def expire_user_key(
@@ -394,7 +407,7 @@ class UserService:
         dry_run: bool = False,
     ) -> UserKeyMutationResult:
         """Set one key expiration timestamp, migrating v1 when allowed."""
-        users, migrated = self._schema_users_with_key_lifecycle(
+        source, users, migrated = self._schema_users_with_key_lifecycle(
             allow_migration=allow_migration,
             dry_run=dry_run,
             operation="key expire",
@@ -410,7 +423,7 @@ class UserService:
         ]
         updated = copy_user(user, public_keys=[], keys=keys)
         if not dry_run:
-            self.provider.write(upsert_provider_user(users, updated))
+            self._save_key_mutation(source, users, updated, migrated=migrated)
         return UserKeyMutationResult(user=updated, schema_migrated=migrated, dry_run=dry_run)
 
     def import_user_keys(
@@ -422,7 +435,7 @@ class UserService:
         dry_run: bool = False,
     ) -> UserKeyMutationResult:
         """Import named keys from file names and key contents."""
-        users, migrated = self._schema_users_with_key_lifecycle(
+        source, users, migrated = self._schema_users_with_key_lifecycle(
             allow_migration=allow_migration,
             dry_run=dry_run,
             operation="key import",
@@ -441,7 +454,7 @@ class UserService:
         ]
         updated = copy_user(user, public_keys=[], keys=[*user.key_objects(), *imported])
         if not dry_run:
-            self.provider.write(upsert_provider_user(users, updated))
+            self._save_key_mutation(source, users, updated, migrated=migrated)
         return UserKeyMutationResult(user=updated, schema_migrated=migrated, dry_run=dry_run)
 
     def _schema_users_with_key_lifecycle(
@@ -450,16 +463,56 @@ class UserService:
         allow_migration: bool,
         dry_run: bool,
         operation: str,
-    ) -> tuple[ProviderUsers, bool]:
+    ) -> tuple[ProviderUsers, ProviderUsers, bool]:
         """Load users and ensure their schema supports key lifecycle operations."""
-        users = self.provider.read()
-        return ensure_schema_capability(
+        users = self.list_users()
+        target, migrated = ensure_schema_capability(
             users,
             KEY_LIFECYCLE,
             allow_migration=allow_migration,
             dry_run=dry_run,
             operation=operation,
         )
+        return users, target, migrated
+
+    def _save_key_mutation(
+        self,
+        source: ProviderUsers,
+        users: ProviderUsers,
+        updated: SFTPUser,
+        *,
+        migrated: bool,
+    ) -> None:
+        if not migrated:
+            self._save_user_mutation(users, updated.username, updated)
+            return
+        backup = write_provider_schema_backup(self.entry.root, source)
+        publish_schema_transition(
+            self.entry,
+            self.config,
+            source,
+            upsert_user(users, updated),
+            provider=self.provider,
+            backup_path=str(backup),
+        )
+        self.config = load_config(self.entry.config)
+        self.provider = provider_from_config(self.entry.root, self.config)
+
+    def _save_user_mutation(
+        self,
+        users: ProviderUsers,
+        username: str,
+        replacement: SFTPUser | None,
+    ) -> None:
+        """Keep the checked provider write inside the schema/config transaction."""
+        with state_transaction(Path(self.entry.config)):
+            require_no_pending_transition(self.entry)
+            if load_config(self.entry.config).provider != self.config.provider:
+                raise ProviderError(
+                    "Provider configuration changed before the user edit.",
+                    suggestion="Reload the project configuration and retry the edit.",
+                )
+            self.provider.mutate_user(users, username, replacement)
 
     def delete_user_files(self, username: str) -> str:
         """Delete all runtime data files for a user.

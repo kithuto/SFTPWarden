@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-import sftpwarden.services.cli_workflows as workflow_services
+import sftpwarden.cli_commands.workflows as workflow_services
 from sftpwarden.config import (
     DeployTarget,
     KubernetesMode,

@@ -92,15 +92,36 @@ tox -e coverage
 tox -e docs
 tox -e package
 tox -e audit
-tox -e clean
 ```
 
-Run pytest directly while iterating:
+Batch related changes and use Python 3.14 for focused checks while iterating:
 
 ```bash
-python -m pytest
-python -m pytest tests/test_cli.py
+python -m pytest tests/cli/
 ```
+
+Select tests for the changed behavior and failure/recovery paths. Run the full
+ordinary `tox` matrix once the complete change is ready, including documentation.
+If corrections follow, repeat the affected checks rather than an unchanged full
+matrix. Runtime, deployment, watcher and recovery changes also require disposable
+real-environment checks in [release validation](tests/release_validation/README.md).
+Mocked tests and rendered manifests do not establish working SFTP or recovery.
+Validate corrections locally before pushing another candidate. When changing CI
+execution, compare measured elapsed time and total execution cost, preserve every
+required gate and distinguish local evidence from checks requiring native hosts.
+
+The ordinary coverage gate requires at least 95% line coverage, with a project
+target above 97%. Add meaningful behavior and failure-path tests; do not
+exclude executable code to meet the gate.
+
+The release workflow runs on pushes and pull requests to `dev` and `main`. It
+builds candidate packages, chart and native images, records their hashes and
+validates those artifacts before publication. Configure branch protection to
+require the `Release aggregate` check before promotion. Failed or missing gates
+block publication. Versioned artifact conflicts are errors, not permission
+to overwrite an existing release. Publishing is restricted to the gated `main`
+release path; contributor PRs target `dev`. Never include local planning files,
+temporary credentials, backup archives or unredacted diagnostics in commits.
 
 Build docs:
 

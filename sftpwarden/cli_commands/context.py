@@ -15,6 +15,7 @@ from sftpwarden.cli_commands.output import (
     print_watcher_without_local_sync_targets,
 )
 from sftpwarden.cli_commands.prompts import prompt_remote_url
+from sftpwarden.cli_commands.workflows import install_context_watcher
 from sftpwarden.config import (
     load_config,
     write_config,
@@ -38,13 +39,13 @@ from sftpwarden.contexts import (
     set_default_context,
 )
 from sftpwarden.remote.checks import verify_remote_runtime_requirements
-from sftpwarden.services.cli_workflows import install_context_watcher
 from sftpwarden.services.context_cleanup import remove_context_with_cleanup
 from sftpwarden.utils.console import console, print_info, print_success
 from sftpwarden.utils.constants import CONFIG_FILENAME
 from sftpwarden.utils.dotted import format_value, get_dotted, parse_cli_value, set_dotted
 from sftpwarden.utils.errors import SFTPWardenError
-from sftpwarden.utils.paths import expand_path
+from sftpwarden.utils.paths import contexts_path, expand_path
+from sftpwarden.utils.state_transactions import serialized_state, state_transaction
 from sftpwarden.watcher import uninstall_watcher
 
 
@@ -147,6 +148,7 @@ def normalize_context_field(field: str) -> str:
     return aliases.get(field, field)
 
 
+@serialized_state(contexts_path)
 def update_context_field(
     context_name: str,
     field: str,
@@ -234,9 +236,10 @@ def rename_context_and_project(registry: ContextRegistry, old_name: str, new_nam
     if entry.config:
         config_path = expand_path(entry.config)
         if config_path.exists():
-            config = load_config(config_path)
-            config.project.name = new_name
-            write_config(config_path, config)
+            with state_transaction(config_path):
+                config = load_config(config_path)
+                config.project.name = new_name
+                write_config(config_path, config)
     registry.contexts[new_name] = entry
     if registry.default == old_name:
         registry.default = new_name
@@ -528,6 +531,7 @@ def context_use(name: str) -> None:
 
 
 @context_app.command("clear")
+@serialized_state(contexts_path)
 def context_clear() -> None:
     """Clear the default context from the registry."""
     try:
@@ -619,6 +623,7 @@ def context_remove(
 
 
 @context_app.command("rename")
+@serialized_state(contexts_path)
 def context_rename(old_name: str, new_name: str) -> None:
     """Rename a registered context.
 
@@ -635,6 +640,8 @@ def context_rename(old_name: str, new_name: str) -> None:
             raise SFTPWardenError(
                 f"Unknown context: {old_name}", suggestion="Run `sftpwarden context ls`."
             )
+        if new_name in registry.contexts and new_name != old_name:
+            raise SFTPWardenError(f"Context already exists: {new_name}")
         entry = registry.contexts.pop(old_name)
         entry.name = new_name
         registry.contexts[new_name] = entry

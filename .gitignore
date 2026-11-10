@@ -39,3 +39,12 @@ users.csv
 !examples/**/users.csv
 .tox/
 version-*.md
+implementation-*.md
+.sftpwarden/
+.runtime/
+.*.lock
+.*.migrated
+.*.pending-deploy
+users.sqlite
+users.sqlite-wal
+users.sqlite-shm

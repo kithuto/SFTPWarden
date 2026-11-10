@@ -13,7 +13,7 @@ from sftpwarden.cli_commands.app import app, user_app, user_key_app
 from sftpwarden.cli_commands.errors import handle_error
 from sftpwarden.cli_commands.output import print_json
 from sftpwarden.cli_commands.prompts import prompt_password_hash
-from sftpwarden.services.cli_workflows import print_refresh_after_user_change
+from sftpwarden.cli_commands.workflows import print_refresh_after_user_change
 from sftpwarden.services.users import UserKeyMutationResult, UserService
 from sftpwarden.users.schemas import (
     KEY_LIFECYCLE,
@@ -597,7 +597,7 @@ def user_key_import(
             dry_run=dry_run,
         )
         report_key_mutation("Imported", username, f"{len(key_files)} key(s)", result)
-        if not no_refresh and result.runtime_changed and not dry_run:
+        if not no_refresh and result.runtime_changed and not dry_run and not result.schema_migrated:
             print_refresh_after_user_change(service.context)
     except SFTPWardenError as exc:
         handle_error(exc)
@@ -621,7 +621,7 @@ def mutate_advanced_key(
         confirm_key_schema_migration(service, label.lower(), yes=yes, dry_run=dry_run)
         result = operation(service)
         report_key_mutation(label, username, key_name, result)
-        if not no_refresh and result.runtime_changed and not dry_run:
+        if not no_refresh and result.runtime_changed and not dry_run and not result.schema_migrated:
             print_refresh_after_user_change(service.context)
     except SFTPWardenError as exc:
         handle_error(exc)
@@ -668,6 +668,11 @@ def report_key_mutation(
     console.print(
         f"{prefix} key [bold]{key_name}[/bold] for user [bold]{username}[/bold]{migration}."
     )
+    if result.schema_migrated and not result.dry_run:
+        console.print(
+            "Provider schema and configuration were updated. Run `sftpwarden deploy` "
+            "to apply this change to the runtime."
+        )
 
 
 def key_import_entries(from_dir: Path, *, explicit_name: str | None) -> list[tuple[str, str]]:

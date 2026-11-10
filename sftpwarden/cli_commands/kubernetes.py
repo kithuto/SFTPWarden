@@ -14,10 +14,14 @@ from sftpwarden.cli_commands.deploy_schema import (
 )
 from sftpwarden.cli_commands.errors import handle_error
 from sftpwarden.cli_commands.output import print_json
-from sftpwarden.config import SFTPWardenConfig, load_config
+from sftpwarden.config import KubernetesMode, SFTPWardenConfig, load_config
 from sftpwarden.contexts import ContextEntry, resolve_context
-from sftpwarden.render.kubernetes import kubernetes_manifest_text, write_kubernetes_manifests
+from sftpwarden.render.kubernetes import (
+    kubernetes_manifest_text,
+    kubernetes_resource_name,
+)
 from sftpwarden.services.deploy import (
+    apply_kubernetes_deployment,
     kubectl_command,
     kubernetes_deployment_plan,
     translate_command_failure,
@@ -60,7 +64,9 @@ def kube_apply(
 ) -> None:
     """Apply rendered Kubernetes manifests with kubectl."""
     try:
-        entry = resolve_context(context_name=context, reconcile_config=True)
+        entry = resolve_context(
+            context_name=context, reconcile_config=not dry_run, read_only=dry_run
+        )
         loaded = load_config(entry.config) if entry.config else None
         if loaded is None:
             raise SFTPWardenError(
@@ -95,27 +101,65 @@ def kube_apply(
             print_success(provider_schema_deploy_text(schema_result))
             if schema_result.backup_path:
                 console.print(f"Backup: {schema_result.backup_path}")
-        write_kubernetes_manifests(loaded, entry.root)
-        commands = [action.command for action in plan.actions if action.command]
-        if not commands:
-            raise SFTPWardenError("Kubernetes apply command was not generated.")
-        results = []
         with terminal_status("Applying Kubernetes manifests"):
-            for command in commands:
-                result = run(command, cwd=entry.root)
-                if result.returncode != 0:
-                    raise translate_command_failure(result)
-                results.append(result.stdout.strip())
+            result = apply_kubernetes_deployment(
+                entry, loaded, mode=KubernetesMode.MANIFESTS, runner=run
+            )
         if json_output:
             print_json(
                 {
                     "dry_run": False,
                     "plan": plan.as_dict(),
-                    "result": "\n".join(output for output in results if output),
+                    "result": result,
                 }
             )
             return
         print_success("Applied Kubernetes manifests.")
+    except SFTPWardenError as exc:
+        handle_error(exc)
+
+
+@kube_app.command("prepare")
+def kube_prepare(
+    context: Annotated[str | None, typer.Option("--context", "-c")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
+    json_output: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Preserve identity and privately prepare Secrets before a direct Kubernetes/Helm upgrade."""
+    from sftpwarden.services.kubernetes_identity import (
+        pin_context,
+        prepare_identity,
+        prepare_provider_secret,
+    )
+    from sftpwarden.services.kubernetes_lock import operation_lock
+
+    try:
+        entry = resolve_context(context_name=context, read_only=dry_run)
+        if not entry.config:
+            raise SFTPWardenError("Kubernetes preparation requires a local project configuration.")
+        loaded = load_config(entry.config)
+        if not dry_run:
+            loaded = pin_context(loaded)
+            with operation_lock(loaded, "preparation"):
+                prepare_identity(loaded)
+                prepare_provider_secret(loaded)
+        result = {
+            "dry_run": dry_run,
+            "namespace": loaded.kubernetes.namespace,
+            "release": loaded.kubernetes.release,
+            "status": "live_prerequisites_unverified" if dry_run else "prepared",
+        }
+        if json_output:
+            print_json(result)
+        elif dry_run:
+            console.print(
+                "Would capture and verify server identity and privately prepare "
+                "provider credentials. Live prerequisites have not been checked."
+            )
+        else:
+            print_success(
+                "Identity and provider credentials prepared; the running Pod has not been replaced."
+            )
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -228,17 +272,29 @@ def kube_delete(
 ) -> None:
     """Delete Kubernetes resources with explicit confirmation."""
     try:
-        entry = resolve_context(context_name=context, reconcile_config=True)
+        entry = resolve_context(
+            context_name=context, reconcile_config=not dry_run, read_only=dry_run
+        )
         loaded = load_config(entry.config) if entry.config else None
         if loaded is None or not entry.root:
             raise SFTPWardenError(
                 f"Context {entry.name} has no local Kubernetes project.",
                 suggestion="Use a local or remote local-sync context.",
             )
-        write_kubernetes_manifests(loaded, entry.root)
+        if not dry_run:
+            from sftpwarden.services.kubernetes_identity import pin_context
+
+            loaded = pin_context(loaded)
+        name = kubernetes_resource_name(loaded.kubernetes.release)
         command = kubectl_command(
             loaded,
-            ["delete", "-f", "kubernetes.yml", "--ignore-not-found"],
+            [
+                "delete",
+                f"statefulset/{name}",
+                f"service/{name}",
+                f"configmap/{name}-config",
+                "--ignore-not-found",
+            ],
             namespace=loaded.kubernetes.namespace,
         )
         if dry_run:
@@ -246,10 +302,18 @@ def kube_delete(
             return
         if not yes and not Confirm.ask("Delete Kubernetes resources?", default=False):
             raise typer.Exit(1)
-        result = run(command, cwd=entry.root)
-        if result.returncode != 0:
-            raise translate_command_failure(result)
-        print_success("Deleted Kubernetes resources.")
+        from sftpwarden.services.kubernetes_identity import prepare_identity
+        from sftpwarden.services.kubernetes_lock import operation_lock
+
+        with operation_lock(loaded, "delete-runtime"):
+            prepare_identity(loaded)
+            result = run(command, cwd=entry.root)
+            if result.returncode != 0:
+                raise translate_command_failure(result)
+        print_success(
+            "Deleted runtime resources; data, state, provider and host identity "
+            "storage were retained."
+        )
     except SFTPWardenError as exc:
         handle_error(exc)
 

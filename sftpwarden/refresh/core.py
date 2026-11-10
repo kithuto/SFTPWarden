@@ -3,7 +3,12 @@ from __future__ import annotations
 import shlex
 from pathlib import Path
 
-from sftpwarden.config import DeployTarget, SFTPWardenConfig, load_config
+from sftpwarden.config import (
+    DeployTarget,
+    SFTPWardenConfig,
+    load_config,
+    runtime_config_fingerprints,
+)
 from sftpwarden.contexts import (
     ContextEntry,
     ContextRegistry,
@@ -12,8 +17,9 @@ from sftpwarden.contexts import (
     require_initialized_context,
     resolve_context,
 )
+from sftpwarden.remote.locking import locked_project_script
 from sftpwarden.remote.ssh import ssh_base_command
-from sftpwarden.render.kubernetes import kubernetes_resource_name
+from sftpwarden.render.kubernetes import kubernetes_resource_name, kubernetes_runtime_config
 from sftpwarden.services.context_cleanup import ensure_remote_only_root_available
 from sftpwarden.services.deploy import kubectl_command
 from sftpwarden.system.commands import command_text, run_checked
@@ -21,22 +27,36 @@ from sftpwarden.utils.constants import CONTAINER_CONFIG_PATH
 from sftpwarden.utils.errors import ContextError, RuntimeError
 
 
-def docker_compose_command(context: ContextEntry) -> list[str]:
-    """Build the Docker Compose runtime refresh command.
+def docker_compose_command(context: ContextEntry, *, runtime_command: str = "refresh") -> list[str]:
+    """Build a Docker Compose runtime command, including desired state for refresh.
 
     Parameters
     ----------
     context
         Context whose runtime should be refreshed.
+    runtime_command
+        Runtime operation. Only refresh carries desired-configuration fingerprints.
 
     Returns
     -------
     list[str]
         Docker Compose command arguments.
     """
-    compose_file = "docker-compose.yml"
+    config = (
+        load_config(context.config) if context.config and Path(context.config).is_file() else None
+    )
+    compose_file = config.docker.compose_file if config else "docker-compose.yml"
     if context.type == ContextType.REMOTE and context.remote:
         compose_file = context.remote.compose_file
+    desired = []
+    if runtime_command == "refresh" and config is not None:
+        provider_digest, config_digest = runtime_config_fingerprints(config)
+        desired = [
+            "--desired-provider-fingerprint",
+            provider_digest,
+            "--desired-config-fingerprint",
+            config_digest,
+        ]
     return [
         "docker",
         "compose",
@@ -47,11 +67,14 @@ def docker_compose_command(context: ContextEntry) -> list[str]:
         "sftpwarden",
         "sftpwarden",
         "runtime",
-        "refresh",
+        runtime_command,
+        *desired,
     ]
 
 
-def kubernetes_refresh_command(config: SFTPWardenConfig) -> list[str]:
+def kubernetes_refresh_command(
+    config: SFTPWardenConfig, *, runtime_command: str = "refresh"
+) -> list[str]:
     """Build the kubectl command that refreshes the runtime pod.
 
     Parameters
@@ -65,6 +88,17 @@ def kubernetes_refresh_command(config: SFTPWardenConfig) -> list[str]:
         kubectl exec command arguments.
     """
     pod_name = f"{kubernetes_resource_name(config.kubernetes.release)}-0"
+    desired = []
+    if runtime_command == "refresh":
+        provider_digest, config_digest = runtime_config_fingerprints(
+            kubernetes_runtime_config(config)
+        )
+        desired = [
+            "--desired-provider-fingerprint",
+            provider_digest,
+            "--desired-config-fingerprint",
+            config_digest,
+        ]
     return kubectl_command(
         config,
         [
@@ -75,15 +109,21 @@ def kubernetes_refresh_command(config: SFTPWardenConfig) -> list[str]:
             "--",
             "sftpwarden",
             "runtime",
-            "refresh",
+            runtime_command,
             "--config",
             CONTAINER_CONFIG_PATH,
+            *desired,
         ],
         namespace=config.kubernetes.namespace,
     )
 
 
-def refresh_context(context: ContextEntry, *, dry_run: bool = False) -> str:
+def refresh_context(
+    context: ContextEntry,
+    *,
+    dry_run: bool = False,
+    timeout: float | None = None,
+) -> str:
     """Refresh a local or remote runtime context.
 
     Parameters
@@ -116,18 +156,20 @@ def refresh_context(context: ContextEntry, *, dry_run: bool = False) -> str:
                 error_type=RuntimeError,
                 message=f"Kubernetes refresh failed for context {context.name}.",
                 fallback_suggestion="Verify kubectl access and that the runtime pod is ready.",
+                private_output=True,
             )
             return result.stdout.strip() or f"Refreshed {context.name}."
         command = docker_compose_command(context)
         cwd = context.root or "."
         if dry_run:
-            return f"(dry-run) cd {cwd} && {' '.join(command)}"
+            return f"(dry-run) cd {shlex.quote(cwd)} && {command_text(command)}"
         result = run_checked(
             command,
             cwd=cwd,
             error_type=RuntimeError,
             message=f"Refresh failed for context {context.name}.",
             fallback_suggestion="Start the runtime with `sftpwarden deploy`.",
+            private_output=True,
         )
         return result.stdout.strip() or f"Refreshed {context.name}."
 
@@ -137,7 +179,7 @@ def refresh_context(context: ContextEntry, *, dry_run: bool = False) -> str:
         ensure_remote_only_root_available(context)
 
     compose_command = " ".join(shlex.quote(part) for part in docker_compose_command(context))
-    remote_command = f"cd {shlex.quote(context.remote.remote_root)} && {compose_command}"
+    remote_command = locked_project_script(context.remote.remote_root, compose_command)
     ssh = ssh_base_command(context.remote)
     ssh.append(remote_command)
     if dry_run:
@@ -147,6 +189,8 @@ def refresh_context(context: ContextEntry, *, dry_run: bool = False) -> str:
         error_type=RuntimeError,
         message=f"Remote refresh failed for context {context.name}.",
         fallback_suggestion="Verify SSH access and that the remote runtime is running.",
+        timeout=timeout,
+        private_output=True,
     )
     return result.stdout.strip() or f"Refreshed {context.name}."
 

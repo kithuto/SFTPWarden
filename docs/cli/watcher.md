@@ -52,8 +52,9 @@ sftpwarden watch --dry-run
 
 ### Effects
 
-This command keeps running until stopped. It uses `scp` on Windows and `rsync`
-elsewhere, according to the implementation.
+This command keeps running until stopped. It sends validated provider snapshots
+through native SSH on Linux, macOS and Windows, then verifies their visibility
+inside the runtime before acknowledging delivery.
 
 ## `sftpwarden watcher`
 

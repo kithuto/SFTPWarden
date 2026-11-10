@@ -3,7 +3,12 @@ from __future__ import annotations
 from typing import Any
 
 from sftpwarden.users.models import ProviderUsers, SFTPUser, SFTPUserKey
-from sftpwarden.users.schemas.base import BASIC_PUBLIC_KEYS, SFTPUserAuthFields, UserSchema
+from sftpwarden.users.schemas.base import (
+    BASIC_PUBLIC_KEYS,
+    SFTPUserAuthFields,
+    UserSchema,
+    parse_csv_disabled,
+)
 from sftpwarden.users.schemas.registry import register_user_schema
 from sftpwarden.utils.errors import ProviderError
 
@@ -44,7 +49,8 @@ class UserSchemaV1(UserSchema):
             if not isinstance(raw_user, dict):
                 raise ProviderError("Provider users must be mappings.")
             record = dict(raw_user)
-            if record.get("keys"):
+            keys = record.get("keys", [])
+            if not isinstance(keys, list) or keys:
                 raise ProviderError("Schema v1 users must use public_keys, not keys.")
             record.pop("keys", None)
             normalized_users.append(record)
@@ -83,7 +89,7 @@ class UserSchemaV1(UserSchema):
             gid=int(row["gid"]) if row.get("gid") else None,
             upload_dir=row.get("upload_dir") or "upload",
             comment=row.get("comment") or None,
-            disabled=(row.get("disabled") or "").lower() in {"1", "true", "yes"},
+            disabled=parse_csv_disabled(row.get("disabled")),
         )
 
     def csv_row_from_user(self, user: SFTPUser) -> dict[str, str | int | bool | None]:

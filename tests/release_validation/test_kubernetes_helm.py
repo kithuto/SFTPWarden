@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
+
+from sftpwarden.config import load_config, write_config
 
 from .conftest import (
     CleanupStack,
@@ -27,6 +30,17 @@ def require_kubernetes_cluster() -> None:
             "Release validation requires kubectl access to a real Kubernetes cluster.\n"
             f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
         )
+
+
+def select_candidate(root: Path) -> None:
+    """Use the installed candidate image and explicitly selected disposable cluster."""
+    path = root / "sftpwarden.yaml"
+    config = load_config(path)
+    if image := os.environ.get("SFTPWARDEN_RELEASE_RUNTIME_IMAGE"):
+        config.docker.image = image
+    if context := os.environ.get("SFTPWARDEN_RELEASE_KUBE_CONTEXT"):
+        config.kubernetes.kube_context = context
+    write_config(path, config)
 
 
 @pytest.mark.release_validation
@@ -59,6 +73,7 @@ def test_kubernetes_manifest_release_flow_against_real_cluster(
             timeout=180,
         )
     )
+    select_candidate(root)
     render = cli.run("kube", "render", "--context", context_name)
     dry_apply = cli.run("kube", "apply", "--context", context_name, "--dry-run", "--json")
     apply = cli.run("kube", "apply", "--context", context_name, "--json", timeout=240)
@@ -120,6 +135,7 @@ def test_helm_release_flow_against_real_cluster(
             timeout=180,
         )
     )
+    select_candidate(root)
     values = cli.run("helm", "values", "--context", context_name, "--write")
     template = cli.run("helm", "template", "--context", context_name, "--json", timeout=120)
     lint = cli.run("helm", "lint", "--context", context_name, timeout=120)

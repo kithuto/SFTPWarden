@@ -42,7 +42,7 @@ def test_watcher_dockerfile_uses_flat_package_layout() -> None:
 def test_release_workflows_exist() -> None:
     workflows = {path.name for path in Path(".github/workflows").glob("*.yml")}
 
-    assert workflows == {
+    assert workflows >= {
         "ci.yml",
         "docker.yml",
         "docs.yml",

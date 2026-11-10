@@ -16,6 +16,7 @@ sftpwarden kube --help
 Subcommands:
 
 - `render`
+- `prepare`
 - `apply`
 - `status`
 - `logs`
@@ -42,7 +43,25 @@ sftpwarden kube render --config ./sftpwarden.yaml
 
 ### Effects
 
-Read-only. It prints rendered manifest YAML.
+Read-only. It prints rendered manifest YAML. Offline rendering does not verify
+live identity, retained storage or provider credentials.
+
+## `sftpwarden kube prepare`
+
+Privately captures the running server identity into its selected durable source
+and prepares provider credentials before a direct manifest or Helm upgrade.
+It prepares a legacy StatefulSet for explicit activation without replacing the
+running Pod and rejects concurrent workload changes. The same preparation runs
+during CLI deploy.
+
+```bash
+sftpwarden kube prepare --context prod --dry-run
+sftpwarden kube prepare --context prod
+```
+
+Options are `--context`/`-c`, `--dry-run` and `--json`. Dry-run reports unverified
+live prerequisites; it is not evidence that identity has been preserved. Follow
+the ordered [upgrade procedure](../recovery.md) before using raw Kubernetes tools.
 
 ## `sftpwarden kube apply`
 
@@ -73,7 +92,8 @@ A real apply can:
 - migrate provider data forward when `provider.user_schema` requires it;
 - write `kubernetes.yml` in the project root;
 - run `kubectl apply -f kubernetes.yml` with configured namespace/context;
-- run `kubectl rollout restart statefulset/<release>`;
+- explicitly replace the Pod after preparing identity and updating resources;
+- verify replacement readiness, applied configuration and host-key fingerprints;
 - sync YAML/CSV provider data into the provider PVC as part of the deployment plan.
 
 ## `sftpwarden kube status`
@@ -174,6 +194,7 @@ sftpwarden kube delete --yes
 
 ### Effects
 
-A real delete writes the current `kubernetes.yml`, then runs
-`kubectl delete -f kubernetes.yml --ignore-not-found` with the configured
-namespace/context.
+A real delete first prepares identity, then removes the runtime StatefulSet,
+Service and configuration/bootstrap resources. It retains the namespace,
+data/state/provider/host-key PVCs and identity Secrets. Intentional storage
+deletion is a separate operator action.

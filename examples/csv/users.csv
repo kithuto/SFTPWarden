@@ -1,2 +1,2 @@
 username,keys,password_hash,uid,gid,upload_dir,comment,disabled
-alice,"[{""name"":""laptop"",""public_key"":""ssh-ed25519 AAAA alice@example"",""comment"":""Example key; replace before use"",""source"":""example""}]",$6$rounds=500000$example$replace-with-real-hash,,,upload,Example user,false
+alice,"[{""name"":""laptop"",""public_key"":""ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEj3kA3vYtFmCVuUtBxuIu/Mjy0qAuysIHNlskLMSbST replace-before-use"",""comment"":""Example key; replace before use"",""source"":""example""}]",$6$rounds=500000$example$replace-with-real-hash,,,upload,Example user,false

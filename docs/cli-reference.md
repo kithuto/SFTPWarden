@@ -1,5 +1,17 @@
 # CLI Reference
 
+User and provider mutations report a conflict if their source changed before
+the write. Reload before retrying. MongoDB standalone supports individual user
+edits; bulk import/copy, schema migration and provider restore require a replica
+set or sharded cluster. See [provider guarantees](providers.md#concurrent-edits).
+
+Runtime refresh uses the deployed configuration snapshot and never rewrites
+OpenSSH's daemon configuration. Apply pending provider or daemon changes with
+`deploy`; see [runtime commands](cli/runtime.md).
+Local Compose refresh and health use the configured `docker.compose_file`,
+including filenames containing spaces. Remote operations use the context's
+`remote.compose_file` setting.
+
 This reference documents the public `sftpwarden` command surface from the real
 Typer application. It is written for operators who are new to SFTPWarden and need
 to know what each command does, what each argument accepts, and which commands
@@ -7,6 +19,12 @@ change local files, remote hosts, containers, provider data, or Kubernetes
 resources.
 
 ## How To Read Commands
+
+Compose `deploy` for local and remote `local-sync` contexts includes the explicit
+[file-provider mount migration](providers.md#compose-file-provider-migration).
+It preserves recovery copies, updates the authoritative provider path and waits
+for the recreated runtime. `deploy --dry-run` leaves project files and the context
+registry unchanged.
 
 `sftpwarden` is command-first:
 
@@ -27,6 +45,24 @@ apply`, or `sftpwarden helm upgrade`. User/provider data changes are applied to
 the running runtime with `sftpwarden refresh`, except Kubernetes YAML/CSV
 providers, where the provider file is copied into the PVC during deploy/apply or
 upgrade.
+
+Public keys must contain one supported SSH key with a valid wire encoding whose
+algorithm matches the declared type. Truncated blobs, mismatched types and
+multiple key lines are rejected before provider changes. A malformed key in a
+provider fails refresh and preserves the previously applied authorization.
+See [public-key validation](named-keys.md#public-key-validation) for its scope.
+
+Key deletion, disable and expiry may leave a user with no usable credentials;
+that is a valid deny policy. Successful refresh removes authorization for new
+sessions. Already authenticated sessions continue until closed or terminated by
+the runtime administrator; see [revocation and expiry](named-keys.md#revocation-and-expiry).
+In schema v2, an explicit `keys: []` also revokes a leftover legacy `public_keys`
+copy. A malformed key container or CSV boolean fails validation instead.
+
+`runtime health --probe readiness|liveness|startup` distinguishes policy readiness
+from process availability. External `health` fails for an unreachable or non-ready
+runtime. See [runtime health](cli/runtime.md#sftpwarden-runtime-health) for deadlines
+and recovery behavior.
 
 ## Common Value Types
 
@@ -72,7 +108,10 @@ arguments, options, examples, and operational effects.
 
 - [Init Commands](cli/init.md): project creation and provider schema selection.
 - [Core Commands](cli/core.md): deploy, validate, compose, plan, refresh, health,
-  backup, and restore.
+  backup (including explicit runtime maintenance), and restore to an existing
+  context (with maintenance and interruption tracking for local file providers)
+  or an empty local recovery directory. In-place recovery requires host access
+  to protected runtime files; see the [recovery permissions](recovery.md).
 - [User Commands](cli/users.md): user listing, creation, updates, disable/enable,
   and removal.
 - [User Key Commands](cli/user-keys.md): named key listing, add/remove,
@@ -148,6 +187,8 @@ arguments, options, examples, and operational effects.
 - [sftpwarden watcher install](cli/watcher.md#sftpwarden-watcher-install)
 - [sftpwarden watcher uninstall](cli/watcher.md#sftpwarden-watcher-uninstall)
 - [sftpwarden kube render](cli/kubernetes.md#sftpwarden-kube-render)
+- [sftpwarden kube prepare](cli/kubernetes.md#sftpwarden-kube-prepare): preserve
+  identity and prepare explicit activation before an upgrade.
 - [sftpwarden kube apply](cli/kubernetes.md#sftpwarden-kube-apply)
 - [sftpwarden kube status](cli/kubernetes.md#sftpwarden-kube-status)
 - [sftpwarden kube logs](cli/kubernetes.md#sftpwarden-kube-logs)

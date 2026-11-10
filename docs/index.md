@@ -38,6 +38,7 @@ commands and declarative providers.
 self
 getting-started
 operations
+recovery
 ```
 
 ```{toctree}
@@ -46,6 +47,7 @@ operations
 :caption: Configure
 
 configuration
+configuration-effects
 providers
 named-keys
 ```

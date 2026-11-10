@@ -1,3 +1,5 @@
+"""CLI prompts and presentation around user refresh and watcher services."""
+
 from __future__ import annotations
 
 from rich.prompt import Confirm

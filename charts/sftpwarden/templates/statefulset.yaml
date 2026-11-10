@@ -2,10 +2,11 @@
 {{- $startupProbe := get $probes "startup" | default dict -}}
 {{- $readinessProbe := get $probes "readiness" | default dict -}}
 {{- $livenessProbe := get $probes "liveness" | default dict -}}
-{{- $providerTextType := or (eq .Values.provider.type "yaml") (eq .Values.provider.type "csv") -}}
-{{- $providerHasContent := ne (default "" .Values.provider.bootstrapContent) "" -}}
-{{- $providerSyncsFromConfig := and .Values.persistence.provider.enabled $providerHasContent $providerTextType -}}
-{{- $providerBootstrapsFromValue := and .Values.persistence.provider.enabled $providerHasContent (not $providerTextType) -}}
+{{- $fileProvider := has .Values.provider.type (list "yaml" "csv" "sqlite") -}}
+{{- $runtimeConfig := fromYaml .Values.sftpwardenConfig -}}
+{{- $server := get $runtimeConfig "server" | default dict -}}
+{{- include "sftpwarden.identityPreflight" . -}}
+# Offline templates do not verify live identity. Prepare before apply; activate explicitly.
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -16,14 +17,21 @@ metadata:
 spec:
   serviceName: {{ include "sftpwarden.name" . }}
   replicas: {{ .Values.runtime.replicas }}
+  updateStrategy:
+    type: OnDelete
+    rollingUpdate: null
   selector:
     matchLabels:
       {{- include "sftpwarden.selectorLabels" . | nindent 6 }}
   template:
     metadata:
+      annotations:
+        sftpwarden.io/config-revision: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum | quote }}
+        sftpwarden.io/activation: "explicit-identity-preflight-required"
       labels:
         {{- include "sftpwarden.selectorLabels" . | nindent 8 }}
     spec:
+      automountServiceAccountToken: false
       initContainers:
         - name: host-key-bootstrap
           image: "{{ include "sftpwarden.image" . }}"
@@ -31,28 +39,32 @@ spec:
             - sh
             - -c
             - |
-              cp /host-key-secret/* /host-keys/ 2>/dev/null || true
-              chmod 700 /host-keys
-              {{- if or $providerSyncsFromConfig $providerBootstrapsFromValue }}
-              mkdir -p /etc/sftpwarden/provider-data
-              {{- if $providerSyncsFromConfig }}
-              cp "/config/{{ base .Values.provider.path }}" {{ .Values.provider.path | quote }}
-              {{- else }}
-              test -f {{ .Values.provider.path | quote }} || printf %b {{ .Values.provider.bootstrapContent | quote }} > {{ .Values.provider.path | quote }}
+              set -eu
+              python -m sftpwarden.runtime.host_keys --directory /host-keys --state /previous-state{{ if .Values.hostKeys.secretName }} --secret "$SFTPWARDEN_HOST_KEY_SECRET"{{ end }}
+              {{- if $fileProvider }}
+              python -m sftpwarden.runtime.bootstrap_provider --config /config/sftpwarden.yaml
               {{- end }}
-              chmod 600 {{ .Values.provider.path | quote }}
-              {{- end }}
+          {{- if .Values.hostKeys.secretName }}
+          env:
+            - name: SFTPWARDEN_HOST_KEY_SECRET
+              value: {{ .Values.hostKeys.mountPath | quote }}
+          {{- end }}
           volumeMounts:
             - name: host-keys
               mountPath: /host-keys
-            - name: host-key-secret
-              mountPath: /host-key-secret
+            - name: state
+              mountPath: /previous-state
               readOnly: true
-            {{- if or $providerSyncsFromConfig $providerBootstrapsFromValue }}
+            {{- if .Values.hostKeys.secretName }}
+            - name: host-key-secret
+              mountPath: {{ .Values.hostKeys.mountPath | quote }}
+              readOnly: true
+            {{- end }}
+            {{- if $fileProvider }}
             - name: provider
               mountPath: /etc/sftpwarden/provider-data
             {{- end }}
-            {{- if $providerSyncsFromConfig }}
+            {{- if $fileProvider }}
             - name: config
               mountPath: /config
               readOnly: true
@@ -80,33 +92,30 @@ spec:
               subPath: sftpwarden.yaml
               readOnly: true
             - name: data
-              mountPath: /data
+              mountPath: {{ default "/data" (get $server "data_dir") | quote }}
             - name: state
-              mountPath: /var/lib/sftpwarden
+              mountPath: {{ default "/var/lib/sftpwarden" (get $server "state_dir") | quote }}
             - name: host-keys
-              mountPath: /etc/sftpwarden/host_keys
-            - name: host-key-secret
-              mountPath: {{ .Values.hostKeys.mountPath }}
-              readOnly: true
+              mountPath: {{ default "/etc/sftpwarden/host_keys" (get $server "host_keys_dir") | quote }}
             {{- if .Values.persistence.provider.enabled }}
             - name: provider
               mountPath: /etc/sftpwarden/provider-data
             {{- end }}
           startupProbe:
             exec:
-              command: ["sftpwarden", "runtime", "health", "--config", "/etc/sftpwarden/sftpwarden.yaml"]
+              command: ["sftpwarden", "runtime", "health", "--config", "/etc/sftpwarden/sftpwarden.yaml", "--probe", "startup"]
             failureThreshold: {{ default 30 (get $startupProbe "failureThreshold") }}
             periodSeconds: {{ default 5 (get $startupProbe "periodSeconds") }}
             timeoutSeconds: {{ default 5 (get $startupProbe "timeoutSeconds") }}
           readinessProbe:
             exec:
-              command: ["sftpwarden", "runtime", "health", "--config", "/etc/sftpwarden/sftpwarden.yaml"]
+              command: ["sftpwarden", "runtime", "health", "--config", "/etc/sftpwarden/sftpwarden.yaml", "--probe", "readiness"]
             failureThreshold: {{ default 3 (get $readinessProbe "failureThreshold") }}
             periodSeconds: {{ default 10 (get $readinessProbe "periodSeconds") }}
             timeoutSeconds: {{ default 5 (get $readinessProbe "timeoutSeconds") }}
           livenessProbe:
             exec:
-              command: ["sftpwarden", "runtime", "health", "--config", "/etc/sftpwarden/sftpwarden.yaml"]
+              command: ["sftpwarden", "runtime", "health", "--config", "/etc/sftpwarden/sftpwarden.yaml", "--probe", "liveness"]
             failureThreshold: {{ default 3 (get $livenessProbe "failureThreshold") }}
             periodSeconds: {{ default 30 (get $livenessProbe "periodSeconds") }}
             timeoutSeconds: {{ default 5 (get $livenessProbe "timeoutSeconds") }}
@@ -129,11 +138,18 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "sftpwarden.name" . }}-state
         - name: host-keys
+          {{- if .Values.hostKeys.secretName }}
           emptyDir: {}
+          {{- else }}
+          persistentVolumeClaim:
+            claimName: {{ include "sftpwarden.name" . }}-host-keys
+          {{- end }}
+        {{- if .Values.hostKeys.secretName }}
         - name: host-key-secret
           secret:
             secretName: {{ .Values.hostKeys.secretName }}
-            optional: true
+            defaultMode: 0600
+        {{- end }}
         {{- if .Values.persistence.provider.enabled }}
         - name: provider
           persistentVolumeClaim:

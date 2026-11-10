@@ -92,7 +92,7 @@ def test_package_metadata_is_public_release_ready() -> None:
     assert project["license"] == "MIT"
     assert project["license-files"] == ["LICENSE"]
     assert project["readme"] == "README.md"
-    assert project["urls"]["Documentation"] == "https://kithuto.github.io/sftpwarden/"
+    assert project["urls"]["Documentation"] == "http://sftpwarden.espacionacho.com/"
 
 
 def test_release_versions_are_consistent() -> None:
@@ -178,8 +178,8 @@ def test_database_extras_cover_public_provider_aliases() -> None:
     pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
     extras = pyproject["project"]["optional-dependencies"]
 
-    assert extras["mysql"] == extras["mariadb"] == ["pymysql"]
-    assert extras["mongodb"] == ["pymongo"]
+    assert extras["mysql"] == extras["mariadb"] == ["pymysql>=1.2.0"]
+    assert extras["mongodb"] == ["pymongo>=4.2"]
 
 
 def test_readme_uses_pypi_safe_logo_url() -> None:

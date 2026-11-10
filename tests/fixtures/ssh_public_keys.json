@@ -1,0 +1,34 @@
+{
+  "ed25519": {
+    "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFMsDFmvcbuEKKQ2nRx6M4jxyJuS9KoOesN7GyrXw+d+",
+    "fingerprint": "SHA256:jzn3UWshrh149NoH60CYubNHzPBK/gnEg4Er8a9LxdQ"
+  },
+  "second": {
+    "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGv5cJFgm0ffn6oHXkIseBv94l3DX7v+2vbF0+qWC+M6",
+    "fingerprint": "SHA256:KOFWArAzTjLCGSXcnk5ZtBG79+X6a+vG8dyPfq0udoQ"
+  },
+  "third": {
+    "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO4yPXotP3j1CbR8K0q0gMB5l+dDIw21jyWrsXIwLFO2",
+    "fingerprint": "SHA256:siWhht3CpZCpRg1LWNoXqosXropNZgjkuG60oOCEXyQ"
+  },
+  "fourth": {
+    "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPNHX24NeM20qVNvawVjx28aji9+2dGOLTZSFSQFMCgV",
+    "fingerprint": "SHA256:4zQEx/a1lNl1lRrhNSuck7a5Jvd6VWUmVxZMoa/ZJk8"
+  },
+  "rsa": {
+    "public_key": "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDcGu5oTYn8WgGFQDO0n/tCoTHMtBZwd70hMU8RcUvzjjoNdn0WSLw+utvjkjBgXra8//5N3aoyvge3OO4qFcUzxaP0XKc8xfi9zXZekskDFpyrT9bAOizTl60Bs49AN1BnSpbt53hv6MJg0zNskyQ8b1v9mFD+QgY/g1tPEyoeJrxJEdi+Wulwu6vEYj1GYYg7NsiVAQOqRhbMFAsaj4JIRKBIoolXO4UC5jepvkYJIqsuVtVyAKRIP0IBklMKVSmuLealOBGu0ZObw+GLPOZBR/ve7I9uHAlrX66Q7P6lZuMsBD9WAlgbHukaraIJYg0G076wLo0k0gwCbAAc1ELp",
+    "fingerprint": "SHA256:ivZjdn9S53asHNCNFuGAfQW3ZzAEw0H1dDjKhhDlSA4"
+  },
+  "nistp256": {
+    "public_key": "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBK1iEExHhAuSABbG7ZZsHzy5YqZjJOd+RRxoCChHYuqRGRrxbXkUsbWNaRzZikTuQLuhF2EtmVRL5ENp6F/vNAU=",
+    "fingerprint": "SHA256:f8hOzG3188oFzoZXu40T+Ea/Dr63NuDoTm8XAEZNsZI"
+  },
+  "nistp384": {
+    "public_key": "ecdsa-sha2-nistp384 AAAAE2VjZHNhLXNoYTItbmlzdHAzODQAAAAIbmlzdHAzODQAAABhBNKT/UFK0oo9hMNDLHbtoxJ1YsXiXzFKMtG4s2VmpuJDfML5BpsfCjlcQCzPVWCQsTQSsqPFZCGP8LAYytd4h6UygjSYlcSPEkZMFn7BZwsZWbAL8udJGxXVUe8NZFtbTw==",
+    "fingerprint": "SHA256:B8lRyE21hk86QvsqVDzDHSfb8naehJfQfrh7kd+m3EA"
+  },
+  "nistp521": {
+    "public_key": "ecdsa-sha2-nistp521 AAAAE2VjZHNhLXNoYTItbmlzdHA1MjEAAAAIbmlzdHA1MjEAAACFBAFIH2ERoegTyMWfBF6So17C1hOztod3+4pym55AG/FcxuQYaZEpRlVRZrvytge4k7woAuwSOOful7HRq5g1uOqywAFuGbvFl3wA5g9E1UYC+A7GLy3Z/HiOjeGHUFlJdv9f2z6nslhgcYTR7Hsj6v40KwzJL0HODYW48gpnJVDTfWDfLw==",
+    "fingerprint": "SHA256:P49B70fPQpymL449vdgcT280gvs/96QqKt2mnwCWP/o"
+  }
+}

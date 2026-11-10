@@ -7,7 +7,6 @@ import typer
 from sftpwarden.cli_commands.app import provider_app, provider_keys_app, provider_schema_app
 from sftpwarden.cli_commands.errors import handle_error
 from sftpwarden.cli_commands.output import print_json
-from sftpwarden.config import write_config
 from sftpwarden.services.provider_schema import (
     plan_provider_schema_reconciliation,
     reconcile_provider_schema,
@@ -218,6 +217,10 @@ def provider_schema_migrate(
             )
             if result["backup_path"]:
                 console.print(f"Backup: {result['backup_path']}")
+            if not dry_run:
+                console.print(
+                    "Run `sftpwarden deploy` to apply the matching runtime configuration."
+                )
         else:
             print_success(f"Provider already uses schema v{result['to_schema']}.")
     except SFTPWardenError as exc:
@@ -311,11 +314,6 @@ def migrate_provider_schema(
     result = reconcile_provider_schema(
         entry, target_config, dry_run=False, backup=backup, provider=provider
     )
-    if config_changed:
-        write_config(
-            entry.config,
-            target_config,
-        )
     return {
         "changed": result.changed or bool(config_changed),
         "from_schema": result.from_schema,
@@ -323,6 +321,7 @@ def migrate_provider_schema(
         "backup_path": result.backup_path,
         "dry_run": False,
         "users": result.users,
+        "deploy_required": result.changed or bool(config_changed),
     }
 
 
@@ -367,8 +366,8 @@ def print_provider_mutation_result(
         console.print(result.refresh_output)
     if result.deploy_required:
         console.print(
-            "Kubernetes provider changes are saved locally. Run `sftpwarden deploy` "
-            "to sync YAML/CSV users into the provider PVC."
+            "Provider changes are saved locally. Run `sftpwarden deploy` "
+            "to apply them to the deployment."
         )
     if result.manual_action:
         console.print(result.manual_action)

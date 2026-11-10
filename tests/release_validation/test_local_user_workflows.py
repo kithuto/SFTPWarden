@@ -8,9 +8,9 @@ import pytest
 import yaml
 
 from .conftest import (
-    FAKE_KEY_1,
-    FAKE_KEY_2,
-    FAKE_KEY_3,
+    PUBLIC_KEY_1,
+    PUBLIC_KEY_2,
+    PUBLIC_KEY_3,
     TEST_HASH,
     ReleaseCli,
     assert_failed,
@@ -24,7 +24,7 @@ def test_local_yaml_project_full_user_and_key_lifecycle(cli: ReleaseCli, tmp_pat
     root = tmp_path / "yaml-project"
     key_dir = tmp_path / "keys"
     key_dir.mkdir()
-    (key_dir / "laptop.pub").write_text(FAKE_KEY_3, encoding="utf-8")
+    (key_dir / "laptop.pub").write_text(PUBLIC_KEY_3, encoding="utf-8")
 
     assert_ok(cli.run("init", "dev", "--root", root, "--yes"))
     assert_ok(cli.run("validate", "--config", root / "sftpwarden.yaml", "--json"))
@@ -76,7 +76,7 @@ def test_local_yaml_project_full_user_and_key_lifecycle(cli: ReleaseCli, tmp_pat
             "alice",
             "prod-ci",
             "--public-key",
-            FAKE_KEY_1,
+            PUBLIC_KEY_1,
             "--comment",
             "CI deploy key",
             "--no-refresh",
@@ -108,7 +108,7 @@ def test_local_yaml_project_full_user_and_key_lifecycle(cli: ReleaseCli, tmp_pat
             "alice",
             "prod-renamed",
             "--public-key",
-            FAKE_KEY_2,
+            PUBLIC_KEY_2,
             "--yes",
             "--no-refresh",
         )
@@ -252,7 +252,7 @@ def test_provider_copy_schema_migration_and_remote_sync_guidance(
             "create",
             "legacy",
             "--public-key",
-            FAKE_KEY_1,
+            PUBLIC_KEY_1,
             "--context",
             "simple",
             "--no-refresh",
@@ -327,10 +327,10 @@ def test_provider_copy_schema_migration_and_remote_sync_guidance(
 
 
 @pytest.mark.release_validation
-def test_backup_restore_with_data_uses_explicit_confirmation(
+def test_data_backup_requires_confirmation_and_runtime_capture(
     cli: ReleaseCli, tmp_path: Path
 ) -> None:
-    """Backup/restore should preserve data only when explicitly requested."""
+    """Never publish a data archive that lacks the runtime's retained identity."""
     root = tmp_path / "backup-project"
     backup_path = tmp_path / "full-backup.tar.gz"
 
@@ -352,17 +352,20 @@ def test_backup_restore_with_data_uses_explicit_confirmation(
     refused = cli.run("backup", "--include-data", "--output", backup_path, input_text="n\n")
     assert refused.returncode != 0
     assert not backup_path.exists()
-    assert_ok(cli.run("backup", "--include-data", "--output", backup_path, "--yes"))
-
-    payload.write_text("changed", encoding="utf-8")
-    assert_ok(cli.run("restore", backup_path, "--include-data", "--yes"))
+    refused = cli.run("backup", "--include-data", "--output", backup_path, "--yes")
+    assert refused.returncode != 0 and "--maintenance" in refused.output
+    assert not backup_path.exists()
     assert payload.read_text(encoding="utf-8") == "release payload"
 
 
 @pytest.mark.release_validation
-def test_common_error_paths_are_user_friendly(cli: ReleaseCli, tmp_path: Path) -> None:
+@pytest.mark.parametrize("columns", [40, 240])
+def test_common_error_paths_are_user_friendly(
+    cli: ReleaseCli, tmp_path: Path, columns: int
+) -> None:
     """Common invalid user actions should be controlled and actionable."""
-    root = tmp_path / "errors"
+    cli.env["COLUMNS"] = str(columns)
+    root = tmp_path / ("project with spaces 日本語 " * 3) / "errors"
     empty_keys = tmp_path / "empty-keys"
     empty_keys.mkdir()
 

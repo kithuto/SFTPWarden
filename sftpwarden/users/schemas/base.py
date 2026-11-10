@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Any, ClassVar, TypedDict
 
 from sftpwarden.users.models import ProviderUsers, SFTPUser, SFTPUserKey
+from sftpwarden.utils.errors import ProviderError
 
 BASIC_PUBLIC_KEYS = "basic_public_keys"
 NAMED_KEYS = "named_keys"
@@ -11,6 +12,21 @@ NAMED_KEY_METADATA = "named_key_metadata"
 KEY_LIFECYCLE = "key_lifecycle"
 
 UserSchemaVersion = int
+
+
+def parse_csv_disabled(value: object) -> bool:
+    """Interpret an optional CSV boolean without treating malformed text as false."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "t", "yes", "y", "on"}:
+            return True
+        if normalized in {"", "0", "false", "f", "no", "n", "off"}:
+            return False
+    raise ProviderError("Invalid CSV disabled value.")
 
 
 class SFTPUserAuthFields(TypedDict):

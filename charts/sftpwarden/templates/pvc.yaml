@@ -3,6 +3,8 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ include "sftpwarden.name" . }}-data
+  annotations:
+    helm.sh/resource-policy: keep
   namespace: {{ include "sftpwarden.namespace" . }}
   labels:
     {{- include "sftpwarden.labels" . | nindent 4 }}
@@ -21,6 +23,8 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ include "sftpwarden.name" . }}-state
+  annotations:
+    helm.sh/resource-policy: keep
   namespace: {{ include "sftpwarden.namespace" . }}
   labels:
     {{- include "sftpwarden.labels" . | nindent 4 }}
@@ -39,6 +43,8 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ include "sftpwarden.name" . }}-provider
+  annotations:
+    helm.sh/resource-policy: keep
   namespace: {{ include "sftpwarden.namespace" . }}
   labels:
     {{- include "sftpwarden.labels" . | nindent 4 }}
@@ -50,4 +56,24 @@ spec:
   resources:
     requests:
       storage: {{ .Values.persistence.provider.size }}
+{{- end }}
+{{- if not .Values.hostKeys.secretName }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "sftpwarden.name" . }}-host-keys
+  namespace: {{ include "sftpwarden.namespace" . }}
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "sftpwarden.labels" . | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.kubernetes.storageClass }}
+  storageClassName: {{ .Values.kubernetes.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: 1Gi
 {{- end }}

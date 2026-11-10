@@ -194,8 +194,9 @@ runtime. It does not copy local YAML/CSV files into Kubernetes by itself, and th
 watcher is only for remote `local-sync` contexts. For YAML/CSV on Kubernetes,
 use `sftpwarden deploy`, `sftpwarden kube apply`, or
 `sftpwarden helm upgrade --install` after changing the local provider file.
-SQLite provider PVCs are initialized as a database file for single-pod lab use,
-but local SQLite files are not declaratively copied into Kubernetes.
+SQLite requires an explicitly initialized provider PVC with the configured schema.
+An empty PVC fails startup; local SQLite files are not declaratively copied into
+Kubernetes. Use YAML/CSV or an external database for ordinary cluster bootstrap.
 
 The SFTP user data PVC defaults to `10Gi`. Increase it through project config
 and deploy the generated manifests or values:
@@ -295,9 +296,12 @@ commands use `sudo` and may ask for the host user's sudo password.
 
 Native watcher modes run `sftpwarden watch` on the host and use the host's default
 SSH identity, agent, SSH config, known hosts, bastions, and `ProxyJump`. This is
-the recommended production shape when those SSH features matter. Windows native
-watcher sync uses OpenSSH `scp` for the single provider file; Linux and macOS use
-`rsync`.
+the recommended production shape when those SSH features matter. Provider delivery
+streams a private snapshot over SSH, verifies its digest and publishes it atomically
+on the remote Linux host. This path is shared by Windows, macOS and Linux clients.
+Delivery and application have separate persistent checkpoints. Failed targets retry
+without another edit and do not prevent other targets from progressing. Metadata-only
+edits are delivered without a runtime refresh.
 
 If no native scheduler is detected, interactive installs ask whether to use the
 Docker watcher. With `--yes`, Docker fallback is accepted automatically. In
@@ -308,7 +312,9 @@ Docker watcher mode writes a Docker-specific context registry with Linux
 container paths, mounts local project folders read-only, and mounts only explicit
 dedicated SSH keys. The entrypoint copies those keys inside the container with
 private permissions before syncing. It does not mount `~/.ssh` and does not
-require Docker socket access. Source checkouts build `sftpwarden-watcher:local`;
+require Docker socket access. Checkpoints and locks retain the host operator's
+ownership and private permissions, so CLI inspection and a later switch to a
+native watcher can reuse them. Source checkouts build `sftpwarden-watcher:local`;
 Python package installations use
 `ghcr.io/kithuto/sftpwarden-watcher:<installed-version>` unless `--image` is set.
 
@@ -357,27 +363,27 @@ because the provider PVC is synchronized during deploy rather than by refresh.
 
 ## Backup and Restore
 
-Create a project backup:
+For a deployed service, pause the watcher and external provider/data writers, then
+authorize a bounded maintenance window:
 
 ```bash
-sftpwarden backup --output sftpwarden-prod.tar.gz --yes
+sftpwarden backup --maintenance --include-data --output sftpwarden-prod.tar.gz --yes
 ```
 
-Restore a backup:
+Recover into a separate empty local directory:
 
 ```bash
-sftpwarden restore sftpwarden-prod.tar.gz --yes
+sftpwarden restore sftpwarden-prod.tar.gz --root ./recovered --include-data --yes
 ```
 
-Backups include project config, Compose file, `provider/users.json` with the
-current users read from the provider, raw local provider files when available,
-host keys, and runtime state. SQL and MongoDB providers are captured through that
-JSON user snapshot when the CLI can reach the configured database. SFTP user data
-under `data/` is excluded unless you pass `--include-data`.
+Capture selects actual runtime mounts and applied configuration for local Compose,
+remote local-sync, remote-only and Kubernetes/Helm contexts. User files are included
+only with `--include-data`. A required snapshot or resumption failure prevents
+publication. A file restore requires a separate deploy and SFTP verification before
+it counts as recovered service. Treat every archive as secret material.
 
-Backups may contain secrets if DSNs or environment references are stored in
-`sftpwarden.yaml`. Store backup archives with the same care as infrastructure
-secrets.
+See [Recovery and upgrades](recovery.md) for destination classification, external
+database isolation, cluster identity preparation and interruption handling.
 
 ## User Schema Migration
 

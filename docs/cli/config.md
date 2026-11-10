@@ -96,8 +96,8 @@ the `SFTPWardenConfig` model.
 | `auth.password_hash_scheme` | `sha512crypt` |
 | `isolation.mode` | `chroot` |
 | `isolation.upload_dir` | safe relative path |
-| `isolation.root_owner` | text owner name |
-| `isolation.root_group` | text group name |
+| `isolation.root_owner` | `root` only |
+| `isolation.root_group` | `root` only |
 | `isolation.root_permissions` | octal permission text |
 | `isolation.upload_permissions` | octal permission text |
 | `uid_gid.mode` | `auto` |

@@ -1,10 +1,8 @@
 name: Security
 
 on:
-  push:
-    branches: [main]
   pull_request:
-    branches: [main]
+    branches: [dev, main]
   schedule:
     - cron: "23 4 * * 1"
   workflow_dispatch:
@@ -18,10 +16,10 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python
-        uses: actions/setup-python@v7.0.0
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
           cache: pip
@@ -36,14 +34,12 @@ jobs:
 
   container-scan:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
-      security-events: write
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build runtime image
         run: docker build -t sftpwarden:security -f docker/runtime/Dockerfile .
@@ -52,50 +48,72 @@ jobs:
         run: docker build -t sftpwarden-watcher:security -f docker/watcher/Dockerfile .
 
       - name: Scan runtime image
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: sftpwarden:security
           format: sarif
           output: trivy-runtime.sarif
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
 
       - name: Scan watcher image
-        uses: aquasecurity/trivy-action@v0.36.0
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: sftpwarden-watcher:security
           format: sarif
           output: trivy-watcher.sarif
-
-      - name: Upload runtime scan
-        uses: github/codeql-action/upload-sarif@v4.38.1
-        with:
-          sarif_file: trivy-runtime.sarif
-          category: trivy-runtime
-
-      - name: Upload watcher scan
-        uses: github/codeql-action/upload-sarif@v4.38.1
-        with:
-          sarif_file: trivy-watcher.sarif
-          category: trivy-watcher
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
 
       - name: Generate runtime SBOM
-        uses: anchore/sbom-action@v0.24.2
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           image: sftpwarden:security
           output-file: runtime-sbom.spdx.json
 
       - name: Generate watcher SBOM
-        uses: anchore/sbom-action@v0.24.2
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           image: sftpwarden-watcher:security
           output-file: watcher-sbom.spdx.json
 
       - name: Upload SBOMs
-        uses: actions/upload-artifact@v7.0.1
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: sbom
+          name: security-reports
           path: |
             runtime-sbom.spdx.json
             watcher-sbom.spdx.json
+            trivy-runtime.sarif
+            trivy-watcher.sarif
+
+  publish-sarif:
+    needs: container-scan
+    if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Download reports without executing contributor code
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: security-reports
+          path: reports
+      - name: Upload runtime scan
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          sarif_file: reports/trivy-runtime.sarif
+          category: trivy-runtime
+      - name: Upload watcher scan
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          sarif_file: reports/trivy-watcher.sarif
+          category: trivy-watcher
 
   scorecard:
     runs-on: ubuntu-latest
@@ -108,18 +126,18 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Run OpenSSF Scorecard
-        uses: ossf/scorecard-action@v2.4.4
+        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
         with:
           results_file: scorecard.sarif
           results_format: sarif
           publish_results: true
 
       - name: Upload Scorecard results
-        uses: github/codeql-action/upload-sarif@v4.38.1
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
           sarif_file: scorecard.sarif

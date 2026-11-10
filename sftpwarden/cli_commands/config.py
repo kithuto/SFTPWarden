@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Annotated, Any
 
 import typer
@@ -12,7 +13,6 @@ from sftpwarden.config import (
     ProviderType,
     SFTPWardenConfig,
     load_config,
-    write_config,
 )
 from sftpwarden.config.global_config import (
     global_config_data,
@@ -20,11 +20,14 @@ from sftpwarden.config.global_config import (
     save_global_config,
 )
 from sftpwarden.contexts import ContextEntry, load_registry, resolve_context, save_registry
+from sftpwarden.services.project_config import update_project_field
 from sftpwarden.services.provider_schema import plan_provider_schema_reconciliation
 from sftpwarden.utils.console import console, print_success
 from sftpwarden.utils.constants import PROJECT_CONFIG_PATHS
 from sftpwarden.utils.dotted import format_value, get_dotted, parse_cli_value, set_dotted
 from sftpwarden.utils.errors import SFTPWardenError
+from sftpwarden.utils.paths import contexts_path, global_config_path
+from sftpwarden.utils.state_transactions import serialized_state, state_transaction
 
 
 @config_app.callback(invoke_without_command=True)
@@ -81,6 +84,7 @@ def config_value(
         handle_error(cli_error_from_exception(exc))
 
 
+@serialized_state(contexts_path)
 def rename_context_for_project_name(old_name: str, new_name: str) -> None:
     """Rename a registry context after ``project.name`` changes.
 
@@ -161,9 +165,20 @@ def update_project_config_data(
     set_dotted(data, path, parse_project_config_cli_value(data, path, value))
     updated = SFTPWardenConfig.model_validate(data)
     confirm_provider_schema_config_change(entry, updated, yes=yes, path=path)
-    write_config(entry.config, updated)
-    if path == "project.name" and updated.project.name != old_name and not context_config_path:
-        rename_context_for_project_name(entry.name, updated.project.name)
+    rename = path == "project.name" and updated.project.name != old_name and not context_config_path
+    with state_transaction(contexts_path()) if rename else nullcontext():
+        if rename:
+            registry = load_registry()
+            if updated.project.name in registry.contexts and updated.project.name != entry.name:
+                raise SFTPWardenError(f"Context already exists: {updated.project.name}")
+        update_project_field(
+            entry.config,
+            path,
+            get_dotted(updated.model_dump(mode="json"), path),
+            expected=loaded,
+        )
+        if rename:
+            rename_context_for_project_name(entry.name, updated.project.name)
     print_success(f"Updated [bold]{path}[/bold].")
 
 
@@ -253,12 +268,14 @@ def config_default_provider(provider: Annotated[str | None, typer.Argument()] = 
         Provider value to persist, or ``None`` to print the current default.
     """
     try:
-        config = load_global_config()
         if provider is None:
+            config = load_global_config()
             console.print(config.default_provider.value if config.default_provider else "yaml")
             return
-        config.default_provider = ProviderType(provider)
-        save_global_config(config)
+        with state_transaction(global_config_path()):
+            config = load_global_config()
+            config.default_provider = ProviderType(provider)
+            save_global_config(config)
         print_success(f"Default provider set to [bold]{config.default_provider.value}[/bold].")
     except (SFTPWardenError, ValueError) as exc:
         handle_error(cli_error_from_exception(exc))

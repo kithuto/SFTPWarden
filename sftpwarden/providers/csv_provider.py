@@ -1,21 +1,20 @@
 from __future__ import annotations
 
 import csv
-
-from pydantic import ValidationError
+import io
 
 from sftpwarden.config import ProviderType
 from sftpwarden.providers.base import FileProvider
+from sftpwarden.providers.documents import parse_provider_document
 from sftpwarden.providers.registry import register_provider
-from sftpwarden.users.models import ProviderUsers, SFTPUser
+from sftpwarden.users.models import ProviderUsers
 from sftpwarden.users.schemas import (
     UserSchemaVersion,
-    detect_csv_schema,
     user_schema,
 )
 from sftpwarden.users.schemas.v1 import CSV_V1_FIELDNAMES
 from sftpwarden.utils.errors import ProviderError
-from sftpwarden.utils.files import chmod_private
+from sftpwarden.utils.persistence import atomic_bytes
 
 CSV_FIELDNAMES = CSV_V1_FIELDNAMES
 
@@ -56,18 +55,13 @@ class CSVProvider(FileProvider):
             Raised when the file is missing or invalid.
         """
         path = self.ensure_exists()
-        users: list[SFTPUser] = []
         try:
             with path.open(newline="", encoding="utf-8") as handle:
-                reader = csv.DictReader(handle)
-                schema = detect_csv_schema(list(reader.fieldnames or []), fallback_schema=1)
-                for row in reader:
-                    users.append(schema.user_from_csv_row(row))
-            return ProviderUsers(schema_version=schema.version, users=users)
-        except ValidationError as exc:
-            raise ProviderError(f"Invalid CSV provider file: {path}: {exc}") from exc
+                return parse_provider_document(handle.read(), "csv")
+        except (OSError, UnicodeError, ProviderError) as exc:
+            raise ProviderError(f"Invalid CSV provider file: {path}.") from exc
 
-    def write(self, users: ProviderUsers) -> None:
+    def _write(self, users: ProviderUsers) -> None:
         """Write users to a CSV provider file.
 
         Parameters
@@ -78,9 +72,9 @@ class CSVProvider(FileProvider):
         path = self.ensure_parent_dir()
         schema = user_schema(users.schema_version)
         fieldnames = schema.csv_fieldnames()
-        with path.open("w", newline="", encoding="utf-8") as handle:
+        with io.StringIO(newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fieldnames)
             writer.writeheader()
             for user in users.users:
                 writer.writerow(schema.csv_row_from_user(user))
-        chmod_private(path)
+            atomic_bytes(path, handle.getvalue().encode("utf-8"))

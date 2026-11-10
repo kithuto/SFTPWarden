@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from enum import StrEnum
@@ -14,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from sftpwarden.users.schemas import validate_user_schema_version
 from sftpwarden.utils.constants import (
     CONFIG_FILENAME,
+    CONTAINER_PROVIDER_DATA_DIR,
     CONTAINER_PROVIDER_DIR,
     DEFAULT_GROUP,
     HOST_SSH_PORT,
@@ -189,8 +191,8 @@ class IsolationConfig(BaseModel):
 
     mode: Literal["chroot"] = "chroot"
     upload_dir: str = "upload"
-    root_owner: str = "root"
-    root_group: str = "root"
+    root_owner: Literal["root"] = "root"
+    root_group: Literal["root"] = "root"
     root_permissions: str = "755"
     upload_permissions: str = "750"
 
@@ -461,6 +463,8 @@ class KubernetesConfig(BaseModel):
     service_type: KubernetesServiceType = KubernetesServiceType.CLUSTER_IP
     storage_class: str | None = None
     data_storage_size: str = "10Gi"
+    host_keys_secret: str | None = Field(default=None, min_length=1, max_length=253)
+    provider_dsn_secret: str | None = Field(default=None, min_length=1, max_length=253)
     startup_probe: KubernetesStartupProbeConfig = Field(
         default_factory=KubernetesStartupProbeConfig
     )
@@ -471,6 +475,19 @@ class KubernetesConfig(BaseModel):
         default_factory=KubernetesLivenessProbeConfig
     )
     replicas: int = Field(default=1, ge=1)
+
+    @field_validator("host_keys_secret", "provider_dsn_secret")
+    @classmethod
+    def validate_secret_name(cls, value: str | None) -> str | None:
+        """Accept only Kubernetes DNS subdomain names for explicit Secret references."""
+        if value is not None and not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", value):
+            raise ValueError("Kubernetes Secret names must be lowercase DNS subdomain names.")
+        if value is not None and any(
+            not part or len(part) > 63 or part.startswith("-") or part.endswith("-")
+            for part in value.split(".")
+        ):
+            raise ValueError("Kubernetes Secret names contain an invalid DNS label.")
+        return value
 
     def ensure_supported_replicas(self) -> None:
         """Reject multi-pod runtime deployments until the runtime supports them."""
@@ -636,7 +653,13 @@ def load_config(path: str | Path = CONFIG_FILENAME) -> SFTPWardenConfig:
             f"Config file not found: {config_path}",
             suggestion="Run `sftpwarden init <name>` or pass --config with an existing file.",
         )
-    data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    try:
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except (yaml.YAMLError, UnicodeError):
+        raise ConfigError(
+            f"Invalid YAML configuration: {config_path}",
+            suggestion="Check the YAML syntax and UTF-8 encoding before retrying.",
+        ) from None
     if isinstance(data, dict):
         validate_raw_config_keys(data)
     try:
@@ -662,6 +685,16 @@ def dump_config(config: SFTPWardenConfig) -> str:
     return yaml.safe_dump(data, sort_keys=False, allow_unicode=False)
 
 
+def runtime_config_fingerprints(config: SFTPWardenConfig) -> tuple[str, str]:
+    """Return provider and complete config digests without transporting credentials."""
+
+    def digest(value: BaseModel) -> str:
+        encoded = json.dumps(value.model_dump(mode="json"), sort_keys=True).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    return digest(config.provider), digest(config)
+
+
 def write_config(path: str | Path, config: SFTPWardenConfig) -> None:
     """Write a private project configuration file.
 
@@ -672,8 +705,11 @@ def write_config(path: str | Path, config: SFTPWardenConfig) -> None:
     config
         Project config to write.
     """
+    from sftpwarden.utils.state_transactions import state_transaction
+
     config_path = expand_path(path)
-    write_private_text(config_path, dump_config(config))
+    with state_transaction(config_path):
+        write_private_text(config_path, dump_config(config))
 
 
 def default_project_config(
@@ -776,6 +812,9 @@ def provider_local_path(project_root: str | Path, config: SFTPWardenConfig) -> P
     root = expand_path(project_root)
     raw_path = str(config.provider.path)
     container_path = PurePosixPath(raw_path)
+    if container_path.parent == PurePosixPath(CONTAINER_PROVIDER_DATA_DIR):
+        validate_provider_path(container_path.name)
+        return root / "provider" / container_path.name
     if container_path.is_absolute() and _is_container_provider_path(container_path):
         validate_provider_path(container_path.name)
         return root / container_path.name

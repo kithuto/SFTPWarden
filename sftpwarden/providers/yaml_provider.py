@@ -1,20 +1,19 @@
 from __future__ import annotations
 
 import yaml
-from pydantic import ValidationError
 
 from sftpwarden.config import ProviderType
 from sftpwarden.providers.base import FileProvider
+from sftpwarden.providers.documents import parse_provider_document
 from sftpwarden.providers.registry import register_provider
 from sftpwarden.users.models import ProviderUsers
 from sftpwarden.users.schemas import (
     UserSchemaVersion,
     user_schema,
-    users_from_mapping,
     users_to_mapping,
 )
 from sftpwarden.utils.errors import ProviderError
-from sftpwarden.utils.files import write_private_text
+from sftpwarden.utils.persistence import atomic_bytes
 
 
 @register_provider
@@ -53,13 +52,12 @@ class YAMLProvider(FileProvider):
             Raised when the file is missing or invalid.
         """
         path = self.ensure_exists()
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {"users": []}
         try:
-            return users_from_mapping(data, fallback_schema=1)
-        except ValidationError as exc:
-            raise ProviderError(f"Invalid YAML provider file: {path}: {exc}") from exc
+            return parse_provider_document(path.read_text(encoding="utf-8"), "yaml")
+        except (OSError, UnicodeError, ProviderError) as exc:
+            raise ProviderError(f"Invalid YAML provider file: {path}.") from exc
 
-    def write(self, users: ProviderUsers) -> None:
+    def _write(self, users: ProviderUsers) -> None:
         """Write users to a YAML provider file.
 
         Parameters
@@ -69,4 +67,4 @@ class YAMLProvider(FileProvider):
         """
         path = self.ensure_parent_dir()
         data = users_to_mapping(users)
-        write_private_text(path, yaml.safe_dump(data, sort_keys=False))
+        atomic_bytes(path, yaml.safe_dump(data, sort_keys=False).encode("utf-8"))

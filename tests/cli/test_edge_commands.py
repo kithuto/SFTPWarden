@@ -59,7 +59,9 @@ def test_helm_upgrade_reports_missing_upgrade_command(monkeypatch: pytest.Monkey
 
     entry = local_context("dev", Path("project"), ProviderType.YAML)
     config = default_project_config("dev", deploy_target=DeployTarget.KUBERNETES)
-    monkeypatch.setattr(helm_commands, "_load_context_config", lambda *_args: (entry, config))
+    monkeypatch.setattr(
+        helm_commands, "_load_context_config", lambda *_args, **_kwargs: (entry, config)
+    )
     monkeypatch.setattr(
         helm_commands,
         "apply_provider_schema_before_deploy",
@@ -164,13 +166,14 @@ def test_provider_local_path_accepts_absolute_host_paths(tmp_path: Path) -> None
     assert provider_local_path(tmp_path / "project", config) == absolute_provider
 
 
-def test_kubernetes_bootstrap_command_initializes_non_configmap_provider(
+def test_kubernetes_bootstrap_command_validates_existing_sqlite_provider(
     tmp_path: Path,
 ) -> None:
     config = default_project_config("dev", ProviderType.SQLITE)
 
-    command = kubernetes_render._provider_bootstrap_command(config, tmp_path)
+    command = kubernetes_render._provider_bootstrap_command(config)
 
     assert command is not None
-    assert "test -f" in command
-    assert "printf %s" in command
+    assert "sftpwarden.runtime.bootstrap_provider" in command
+    assert "--config /config/sftpwarden.yaml" in command
+    assert "printf" not in command

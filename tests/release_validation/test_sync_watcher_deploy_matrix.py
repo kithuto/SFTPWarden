@@ -183,11 +183,20 @@ def test_deploy_dry_run_contracts_for_compose_remote_kube_and_helm(
     compose_data = json_data(compose_plan)["plan"]
     compose_commands = [" ".join(action["command"] or []) for action in compose_data["actions"]]
     assert compose_data["target"] == "compose"
-    assert any(
-        "docker compose -f docker-compose.yml up -d --build" in command
-        for command in compose_commands
+    up = next(
+        action["command"]
+        for action in compose_data["actions"]
+        if action["command"]
+        and action["command"][:6] == ["docker", "compose", "-f", "docker-compose.yml", "up", "-d"]
     )
+    assert {"--force-recreate", "--wait", "--wait-timeout", "90"} <= set(up)
     assert (compose_root / "docker-compose.yml").exists()
+    service = yaml.safe_load((compose_root / "docker-compose.yml").read_text())["services"][
+        "sftpwarden"
+    ]
+    assert ("--build" in up) == ("build" in service)
+    if "build" not in service:
+        assert "docker compose -f docker-compose.yml pull" in compose_commands
 
     assert_ok(
         cli.run(

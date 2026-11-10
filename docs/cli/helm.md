@@ -120,7 +120,8 @@ A real upgrade can:
 - migrate provider data forward when `provider.user_schema` requires it;
 - write `values.yaml`;
 - run `helm upgrade` or `helm upgrade --install` with configured chart, namespace, and values;
-- run `kubectl rollout restart statefulset/<release>`;
+- prepare and verify durable host identity before updating resources;
+- explicitly replace the Pod and verify applied configuration and fingerprints;
 - sync YAML/CSV provider data into the provider PVC as part of the deployment plan.
 
 ## `sftpwarden helm uninstall`
@@ -145,3 +146,9 @@ sftpwarden helm uninstall --yes
 
 A real uninstall runs `helm uninstall <release> --namespace <namespace>` with
 the configured kube context when one is set.
+
+Before uninstall, the CLI verifies that the installed Helm release records the
+retention policy for PVCs and Secrets. A live annotation alone is insufficient.
+Complete the prepared upgrade first for a legacy release. Retained claims can be
+reused under the same release name and namespace; do not delete them to resolve
+an ownership error. See [Recovery and upgrades](../recovery.md).

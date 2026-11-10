@@ -104,7 +104,7 @@ The default `tox` run covers:
 - lint and formatting;
 - strict type checking with mypy;
 - tests on Python 3.11, 3.12, 3.13, and 3.14;
-- coverage once, instead of repeating it for every Python version;
+- coverage once, with a 95% minimum and a project target above 97%;
 - Sphinx documentation build;
 - package build and wheel content check;
 - dependency audit.

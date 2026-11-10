@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,9 +17,11 @@ import sftpwarden.cli_commands.core as core_commands
 import sftpwarden.cli_commands.helm as helm_commands
 import sftpwarden.cli_commands.init as init_commands
 import sftpwarden.cli_commands.kubernetes as kube_commands
+import sftpwarden.cli_commands.workflows as cli_workflows
 import sftpwarden.render.compose as compose_module
-import sftpwarden.services.cli_workflows as cli_workflows
 import sftpwarden.services.deploy as deploy_module
+import sftpwarden.services.kubernetes_identity as identity_module
+import sftpwarden.services.kubernetes_lock as lock_module
 from sftpwarden.cli import app
 from sftpwarden.config import (
     DeployTarget,
@@ -95,6 +98,18 @@ def fake_init_kubernetes_namespace_check(monkeypatch: pytest.MonkeyPatch) -> Non
         return CommandResult(command, 0, "ok\n", "")
 
     monkeypatch.setattr(init_commands, "run", fake_run)
+    # These exercise CLI/render contracts. Preparation and activation have their
+    # own service tests and real cluster gates; never contact an operator cluster.
+    monkeypatch.setattr(
+        identity_module, "get_resource", lambda *_args: {"metadata": {"uid": "old"}}
+    )
+    monkeypatch.setattr(identity_module, "prepare_identity", lambda *_args: None)
+    monkeypatch.setattr(identity_module, "prepare_provider_secret", lambda *_args: None)
+    monkeypatch.setattr(identity_module, "wait_for_activation", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(identity_module, "ensure_release_retention", lambda *_args: None)
+    monkeypatch.setattr(identity_module, "pin_context", lambda config: config)
+    monkeypatch.setattr(identity_module, "write_resource", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(lock_module, "operation_lock", lambda *_args: nullcontext())
 
 
 def test_kubernetes_replicas_are_reserved_for_future_multi_node() -> None:
@@ -127,7 +142,14 @@ def test_kubernetes_manifest_rendering_includes_core_resources() -> None:
         and manifest["metadata"]["name"] == "sftp-prod-data"
     )
 
-    assert {"ConfigMap", "Secret", "PersistentVolumeClaim", "Service", "StatefulSet"} <= kinds
+    assert {"ConfigMap", "PersistentVolumeClaim", "Service", "StatefulSet"} <= kinds
+    assert "Secret" not in kinds
+    assert statefulset["spec"]["updateStrategy"] == {"type": "OnDelete", "rollingUpdate": None}
+    assert all(
+        item["metadata"]["annotations"]["helm.sh/resource-policy"] == "keep"
+        for item in manifests
+        if item["kind"] == "PersistentVolumeClaim"
+    )
     assert statefulset["spec"]["replicas"] == 1
     assert data_pvc["spec"]["resources"]["requests"]["storage"] == "50Gi"
     container = statefulset["spec"]["template"]["spec"]["containers"][0]
@@ -140,15 +162,15 @@ def test_kubernetes_manifest_rendering_includes_core_resources() -> None:
     assert container["readinessProbe"]["failureThreshold"] == 3
     assert container["livenessProbe"]["periodSeconds"] == 45
     assert container["livenessProbe"]["failureThreshold"] == 3
-    assert "provider-data/users.yaml" in init_container["command"][-1]
+    assert "sftpwarden.runtime.bootstrap_provider" in init_container["command"][-1]
     assert any(mount["name"] == "provider" for mount in init_container["volumeMounts"])
     assert "sftp-prod-data" in rendered
     assert "sftp-prod-state" in rendered
     assert "sftp-prod-host-keys" in rendered
 
 
-def test_kubernetes_manifest_keeps_external_dsn_in_secret() -> None:
-    """Move external provider DSNs out of ConfigMaps and into Secrets."""
+def test_kubernetes_manifest_keeps_external_dsn_out_of_public_output() -> None:
+    """Public rendering exposes only the Secret reference, never its private contents."""
     config = default_project_config(
         "prod",
         ProviderType.POSTGRESQL,
@@ -162,7 +184,9 @@ def test_kubernetes_manifest_keeps_external_dsn_in_secret() -> None:
 
     assert "postgresql://user:pass@db/sftp" not in rendered_config
     assert f"${{{PROVIDER_DSN_ENV}}}" in rendered_config
-    assert any(secret.get("stringData", {}).get(PROVIDER_DSN_ENV) for secret in secrets)
+    assert secrets == []
+    assert "postgresql://user:pass@db/sftp" not in kubernetes_manifest_text(config)
+    assert "postgresql://user:pass@db/sftp" not in json.dumps(helm_values_model(config))
 
 
 @pytest.mark.parametrize(
@@ -190,9 +214,9 @@ def test_kubernetes_and_helm_sync_local_text_provider(
     provider_text: str,
 ) -> None:
     """Sync Kubernetes YAML/CSV provider PVCs from local declarative provider files."""
-    config = default_project_config("prod", provider_type)
+    config = default_project_config("prod", provider_type, user_schema=1)
     config.deploy.target = DeployTarget.KUBERNETES
-    (tmp_path / filename).write_text(provider_text, encoding="utf-8")
+    (tmp_path / filename).write_bytes(provider_text.encode("utf-8"))
 
     manifests = kubernetes_manifests(config, tmp_path)
     manifest_text = kubernetes_manifest_text(config, tmp_path)
@@ -204,8 +228,8 @@ def test_kubernetes_and_helm_sync_local_text_provider(
 
     assert "alice" in manifest_text
     assert configmap["data"][filename] == provider_text
-    assert f"cp /config/{filename} /etc/sftpwarden/provider-data/{filename}" in init_command
-    assert f"test -f /etc/sftpwarden/provider-data/{filename}" not in init_command
+    assert "sftpwarden.runtime.bootstrap_provider --config /config/sftpwarden.yaml" in init_command
+    assert "cp " not in init_command
     assert {"name": "config", "mountPath": "/config", "readOnly": True} in init_container[
         "volumeMounts"
     ]
@@ -218,7 +242,7 @@ def test_kubernetes_text_provider_sync_validates_local_file(tmp_path: Path) -> N
     config.deploy.target = DeployTarget.KUBERNETES
     (tmp_path / "users.yaml").write_text("users:\n- username: ''\n", encoding="utf-8")
 
-    with pytest.raises(ProviderError, match="Invalid YAML provider file"):
+    with pytest.raises(ProviderError, match="Invalid YAML provider document"):
         kubernetes_manifest_text(config, tmp_path)
 
 
@@ -252,7 +276,7 @@ def test_helm_values_model_reserves_runtime_replicas() -> None:
 def test_kubernetes_rendering_uses_resolved_runtime_image(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Render local source images in development and GHCR images in packaged installs."""
+    """Cluster defaults must be published even when the CLI runs from a source checkout."""
     config = default_project_config("prod")
 
     local_values = helm_values_model(config)
@@ -261,17 +285,18 @@ def test_kubernetes_rendering_uses_resolved_runtime_image(
     )
 
     assert local_values["image"] == {
-        "repository": "sftpwarden",
-        "tag": "local",
+        "repository": "ghcr.io/kithuto/sftpwarden",
+        "tag": compose_module.get_version(),
         "pullPolicy": "IfNotPresent",
     }
     assert (
         local_statefulset["spec"]["template"]["spec"]["containers"][0]["image"]
-        == "sftpwarden:local"
+        == f"ghcr.io/kithuto/sftpwarden:{compose_module.get_version()}"
     )
 
     monkeypatch.setattr(compose_module, "LOCAL_RUNTIME_DOCKERFILE", tmp_path / "missing")
     monkeypatch.setattr(compose_module, "get_version", lambda: "9.9.9")
+    monkeypatch.setattr("sftpwarden.render.kubernetes.get_version", lambda: "9.9.9")
 
     packaged_values = helm_values_model(config)
     packaged_statefulset = next(
@@ -564,10 +589,10 @@ def test_deploy_dry_run_dispatches_to_kubernetes_and_helm(
         action["command"] for action in helm_data["plan"]["actions"] if action["command"]
     ]
     assert any(command[0] == "kubectl" and "apply" in command for command in kube_plan_commands)
-    assert any(command[0] == "kubectl" and "rollout" in command for command in kube_plan_commands)
+    assert any(command[0] == "kubectl" and "delete" in command for command in kube_plan_commands)
     assert helm_data["plan"]["mode"] == "helm"
     assert any(command[0] == "helm" and "upgrade" in command for command in helm_plan_commands)
-    assert any(command[0] == "kubectl" and "rollout" in command for command in helm_plan_commands)
+    assert any(command[0] == "kubectl" and "delete" in command for command in helm_plan_commands)
 
 
 def test_kubectl_and_helm_command_generation() -> None:
@@ -807,6 +832,7 @@ def test_deploy_services_cover_apply_paths_and_diff_detection(
     config.deploy.target = DeployTarget.KUBERNETES
     config.kubernetes.mode = KubernetesMode.MANIFESTS
     write_config(root / "sftpwarden.yaml", config)
+    (root / "users.yaml").write_text("schema_version: 2\nusers: []\n")
     entry = local_context("prod", root, ProviderType.YAML)
     save_registry(ContextRegistry(default="prod", contexts={"prod": entry}))
     calls: list[tuple[list[str], str | None]] = []
@@ -820,7 +846,7 @@ def test_deploy_services_cover_apply_paths_and_diff_detection(
     applied = apply_deployment_plan(entry, runner=runner)
 
     assert "Deploy target: kubernetes" in text
-    assert applied == "Applied Kubernetes manifests for prod."
+    assert applied == "Deployed prod; replacement runtime is ready."
     assert config.kubernetes.namespace == "sftpwarden"
     assert any(
         command[:3] == ["kubectl", "-n", "sftpwarden"] and "apply" in command
@@ -830,9 +856,12 @@ def test_deploy_services_cover_apply_paths_and_diff_detection(
         "kubectl",
         "-n",
         "sftpwarden",
-        "rollout",
-        "restart",
-        "statefulset/prod",
+        "delete",
+        "pod",
+        "prod-0",
+        "--ignore-not-found",
+        "--wait=true",
+        "--timeout=120s",
     ]
     assert kubernetes_rendered_manifest_diff_reason(config, root) is None
     (root / "kubernetes.yml").write_text("stale", encoding="utf-8")
@@ -846,10 +875,10 @@ def test_deploy_services_cover_apply_paths_and_diff_detection(
     write_config(root / "sftpwarden.yaml", config)
     calls.clear()
     helm_applied = apply_deployment_plan(entry, runner=runner)
-    assert helm_applied == "Deployed prod with Helm."
+    assert helm_applied == "Deployed prod; replacement runtime is ready."
     assert any(command[0] == "helm" and "upgrade" in command for command, _cwd in calls)
     assert calls[-1][0][0] == "kubectl"
-    assert "rollout" in calls[-1][0]
+    assert "delete" in calls[-1][0]
     assert helm_values_diff_reason(config, root) is None
     (root / "values.yaml").write_text("stale", encoding="utf-8")
     assert helm_values_diff_reason(config, root) == "values.yaml differs from current configuration"
@@ -866,7 +895,7 @@ def test_deploy_services_cover_compose_and_error_edges(
     root.mkdir()
     config = default_project_config("compose")
     write_config(root / "sftpwarden.yaml", config)
-    (root / "users.yaml").write_text("users: []\n", encoding="utf-8")
+    (root / "users.yaml").write_text("schema_version: 2\nusers: []\n", encoding="utf-8")
     entry = local_context("compose", root, ProviderType.YAML)
 
     def runner(command: list[str], *, cwd: str | None = None) -> CommandResult:
@@ -944,10 +973,12 @@ def test_deploy_services_cover_remaining_edges(
         return CommandResult(command, 0, "ok", "")
 
     monkeypatch.setattr(deploy_module, "compose_deployment_plan", lambda *_args: simple_plan)
-    assert apply_deployment_plan(no_config, runner=runner) == "Deployed plain with Docker Compose."
-    assert calls == [["docker", "compose", "ps"]]
+    with pytest.raises(ContextError, match="requires a local"):
+        apply_deployment_plan(no_config, runner=runner)
+    assert calls == []
+    (root / "users.yaml").write_text("schema_version: 2\nusers: []\n")
 
-    with pytest.raises(ContextError, match="no local root"):
+    with pytest.raises(ContextError, match="requires a local project root"):
         apply_deployment_plan(
             ContextEntry(
                 name="prod", type=ContextType.LOCAL, root="", config=str(root / "sftpwarden.yaml")
@@ -1022,6 +1053,7 @@ def test_core_deploy_wrapper_and_kubernetes_change_reasons(
     assert core_commands.deploy_context(entry, dry_run=True) == plan.text()
     assert core_commands.deploy_context(entry) == "applied"
 
+    (root / "users.yaml").write_text("schema_version: 2\nusers: []\n")
     helm_reasons = core_commands.deploy_config_change_reasons(entry, config)
     assert "deploy target is kubernetes" in helm_reasons
     assert "kubernetes mode is helm" in helm_reasons
@@ -1118,7 +1150,7 @@ def test_helm_cli_commands_cover_success_paths(
         assert result.exit_code == 0, result.output
     assert (root / "values.yaml").exists()
     assert any(call[0][0] == "helm" and "template" in call[0] for call in calls)
-    assert any(call[0][0] == "kubectl" and "rollout" in call[0] for call in calls)
+    assert any(call[0][0] == "kubectl" and "delete" in call[0] for call in calls)
     assert any(call[0][0] == "helm" and "uninstall" in call[0] for call in calls)
     assert "--install" not in results[5].output
 

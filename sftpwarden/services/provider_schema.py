@@ -4,12 +4,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 import yaml
 
-from sftpwarden.config import SFTPWardenConfig
+from sftpwarden.config import SFTPWardenConfig, load_config
 from sftpwarden.contexts import ContextEntry
 from sftpwarden.providers import BaseProvider, provider_from_config
+from sftpwarden.providers.schema import read_schema_snapshot
+from sftpwarden.services.project_config import update_project_field
+from sftpwarden.services.schema_transition import (
+    check_transition_config,
+    pending_transition,
+    publish_schema_transition,
+    resume_schema_transition,
+)
 from sftpwarden.users import ProviderUsers
 from sftpwarden.users.schemas import (
     migrate_provider_users,
@@ -19,6 +28,7 @@ from sftpwarden.users.schemas import (
 )
 from sftpwarden.utils.errors import ProviderError
 from sftpwarden.utils.files import write_private_text
+from sftpwarden.utils.state_transactions import state_transaction
 
 
 @dataclass(frozen=True)
@@ -60,6 +70,23 @@ def plan_provider_schema_reconciliation(
     provider: BaseProvider | None = None,
 ) -> ProviderSchemaReconciliation:
     """Return whether provider data must move to ``config.provider.user_schema``."""
+    if entry.root and entry.config:
+        pending = pending_transition(entry)
+        if pending is not None:
+            check_transition_config(pending, config)
+            if config.provider.user_schema != pending.target.schema_version:
+                raise ProviderError(
+                    "A provider schema migration is incomplete.",
+                    suggestion="Retry `sftpwarden provider schema migrate --to 2`.",
+                )
+            return ProviderSchemaReconciliation(
+                changed=True,
+                from_schema=pending.source.schema_version,
+                to_schema=pending.target.schema_version,
+                users=len(pending.target.users),
+                dry_run=dry_run,
+                backup_path=pending.backup_path,
+            )
     return _build_provider_schema_plan(entry, config, dry_run=dry_run, provider=provider).result
 
 
@@ -72,15 +99,61 @@ def reconcile_provider_schema(
     provider: BaseProvider | None = None,
 ) -> ProviderSchemaReconciliation:
     """Apply the configured provider user schema when a forward migration is needed."""
-    plan = _build_provider_schema_plan(entry, config, dry_run=dry_run, provider=provider)
-    if not plan.result.changed or dry_run:
+    if dry_run:
+        return plan_provider_schema_reconciliation(entry, config, dry_run=True, provider=provider)
+    if not entry.config or not entry.root:
+        raise ProviderError("Schema migration requires a local project configuration.")
+    with state_transaction(Path(entry.config)):
+        current = load_config(entry.config)
+        if current.provider.model_dump(exclude={"user_schema"}) != config.provider.model_dump(
+            exclude={"user_schema"}
+        ):
+            raise ProviderError("Provider configuration changed before schema migration.")
+        return _reconcile_provider_schema(entry, config, backup=backup, provider=provider)
+
+
+def _reconcile_provider_schema(
+    entry: ContextEntry,
+    config: SFTPWardenConfig,
+    *,
+    backup: bool,
+    provider: BaseProvider | None,
+) -> ProviderSchemaReconciliation:
+    """Reconcile under the same lock used by user and config writers."""
+    if pending_transition(entry) is not None:
+        plan_provider_schema_reconciliation(entry, config, provider=provider)
+        resumed = resume_schema_transition(entry, config)
+        return ProviderSchemaReconciliation(
+            changed=True,
+            from_schema=resumed.source.schema_version,
+            to_schema=resumed.target.schema_version,
+            users=len(resumed.target.users),
+            backup_path=resumed.backup_path,
+        )
+    plan = _build_provider_schema_plan(entry, config, dry_run=False, provider=provider)
+    current_config = load_config(entry.config)
+    if not plan.result.changed:
+        if current_config.provider.user_schema != config.provider.user_schema:
+            update_project_field(
+                entry.config,
+                "provider.user_schema",
+                config.provider.user_schema,
+                expected=current_config,
+            )
         return plan.result
 
     backup_path = None
     if backup:
         backup_path = write_provider_schema_backup(entry.root, plan.source_users)
     if plan.migrated_users is not None:
-        plan.provider.write(plan.migrated_users)
+        publish_schema_transition(
+            entry,
+            current_config,
+            plan.source_users,
+            plan.migrated_users,
+            provider=plan.provider,
+            backup_path=str(backup_path) if backup_path else None,
+        )
     return ProviderSchemaReconciliation(
         changed=True,
         from_schema=plan.result.from_schema,
@@ -97,7 +170,8 @@ def write_provider_schema_backup(project_root: str | Path | None, users: Provide
     from datetime import UTC, datetime
 
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    backup_path = root / ".sftpwarden" / "backups" / f"provider-users-{timestamp}.yaml"
+    filename = f"provider-users-{timestamp}-{uuid4().hex}.yaml"
+    backup_path = root / ".sftpwarden" / "backups" / filename
     write_private_text(
         backup_path,
         yaml.safe_dump(users_to_mapping(users), sort_keys=False),
@@ -176,7 +250,7 @@ def _read_provider_users_for_configured_schema(
             previous_provider = _provider_for_schema(entry, config, previous_version)
             if _schema_storage_available(previous_provider):
                 return previous_provider.read()
-    return provider.read()
+    return read_schema_snapshot(provider)
 
 
 def _provider_for_schema(

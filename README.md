@@ -544,7 +544,7 @@ sftpwarden plan --json
 sftpwarden refresh --dry-run
 sftpwarden watcher status --json
 sftpwarden health --json
-sftpwarden backup --output sftpwarden-dev.tar.gz --yes
+sftpwarden backup --maintenance --output sftpwarden-dev.tar.gz --yes
 sftpwarden provider export --format json > users.json
 ```
 
@@ -589,7 +589,7 @@ Back up the active context before upgrades, provider migrations, or risky
 configuration changes:
 
 ```bash
-sftpwarden backup --output sftpwarden-prod.tar.gz --yes
+sftpwarden backup --maintenance --output sftpwarden-prod.tar.gz --yes
 ```
 
 The default backup includes `sftpwarden.yaml`, generated deployment files,
@@ -600,7 +600,7 @@ database. The backup does not include uploaded SFTP user files under `data/`
 unless you ask for that explicitly:
 
 ```bash
-sftpwarden backup --include-data --output sftpwarden-prod-full.tar.gz
+sftpwarden backup --maintenance --include-data --output sftpwarden-prod-full.tar.gz
 ```
 
 Preview backup contents in automation with:
@@ -609,21 +609,28 @@ Preview backup contents in automation with:
 sftpwarden backup --dry-run --json
 ```
 
-Restore into the active context with:
+Restore into an existing local runtime with:
 
 ```bash
-sftpwarden restore sftpwarden-prod.tar.gz --yes
+sftpwarden restore sftpwarden-prod.tar.gz --maintenance --yes
 ```
 
 Use `--include-data` only when the archive was created with user data and you
 intend to overwrite the current `data/` tree:
 
 ```bash
-sftpwarden restore sftpwarden-prod-full.tar.gz --include-data --yes
+sftpwarden restore sftpwarden-prod-full.tar.gz --maintenance --include-data --yes
 ```
 
-Restore creates a safety backup before overwriting files. After restoring, review
-and apply the deployment so the running runtime matches the restored project:
+Pause external writers before maintenance capture. Existing readable local targets
+require a verified safety backup before replacement. For damaged targets, recover
+into a separate empty destination with `--root`; remote and Kubernetes recovery
+also require separate destinations. External databases need explicit isolation.
+See the [recovery runbook](docs/recovery.md) for these procedures and upgrading
+legacy provider mounts or Kubernetes host identity.
+
+File restoration does not activate the service. Review and apply the deployment,
+then verify health, the trusted host keys and an authenticated SFTP transfer:
 
 ```bash
 sftpwarden deploy --dry-run
@@ -693,11 +700,11 @@ for released versions and the longer future roadmap.
 - Add commands for listing, tailing, filtering, and exporting audit events.
 - Add transfer visibility and richer runtime status.
 
-### v1.5 - Security Hardening
+### v1.5 - Security and Client Trust
 
 - Add production-oriented security check profiles and strict mode.
 - Add secret-file support for DSNs and sensitive provider settings.
-- Add assisted host key rotation workflows.
+- Add host key fingerprints, assisted rotation and safe client onboarding.
 
 ## Contributing
 

@@ -7,6 +7,8 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
+import sftpwarden.cli_commands.core as core_commands
+import sftpwarden.utils.state_transactions as transactions
 import sftpwarden.watcher.backends.docker as docker_backend
 import sftpwarden.watcher.core as watcher_module
 from sftpwarden.cli import app
@@ -41,6 +43,30 @@ from sftpwarden.watcher.core import (
     watcher_uninstall_plan,
 )
 from sftpwarden.watcher.registry import registered_watchers
+
+
+@pytest.mark.parametrize("registered", [False, True])
+def test_watch_initialization_does_not_write_to_the_context_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registered: bool
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path)
+    entry = local_context("project", tmp_path / "project", ProviderType.YAML)
+    save_registry(ContextRegistry(contexts={"project": entry} if registered else {}))
+    before = {path: path.read_bytes() for path in (tmp_path / "home").rglob("*") if path.is_file()}
+    monkeypatch.setattr(
+        transactions,
+        "file_lock",
+        lambda *_args, **_kwargs: pytest.fail("Watcher startup attempted a registry write lock"),
+    )
+    calls = []
+    monkeypatch.setattr(core_commands, "poll_watch", lambda **kwargs: calls.append(kwargs))
+    result = CliRunner().invoke(app, ["watch", "--dry-run"])
+    assert result.exit_code == (0 if registered else 1), result.output
+    assert bool(calls) == registered
+    assert {
+        path: path.read_bytes() for path in (tmp_path / "home").rglob("*") if path.is_file()
+    } == before
 
 
 def test_watcher_install_is_idempotent_and_can_replace(
@@ -333,9 +359,14 @@ def test_poll_watch_syncs_changed_targets_once(
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     project = tmp_path / "project"
     project.mkdir()
+    from sftpwarden.utils.constants import CONTAINER_PROVIDER_DATA_DIR
+    from sftpwarden.watcher import polling
+
     config = default_project_config("prod")
+    config.provider.path = f"{CONTAINER_PROVIDER_DATA_DIR}/users.yaml"
     write_config(project / "sftpwarden.yaml", config)
-    users_file = project / "users.yaml"
+    users_file = project / "provider" / "users.yaml"
+    users_file.parent.mkdir()
     users_file.write_text(empty_provider_text(config.provider.type), encoding="utf-8")
     entry = remote_context(
         name="prod",
@@ -350,22 +381,26 @@ def test_poll_watch_syncs_changed_targets_once(
     save_registry(ContextRegistry(default="prod", contexts={"prod": entry}))
     calls: list[tuple[str, Path, str, bool]] = []
 
-    def stop_after_first_sleep(_interval: int) -> None:
-        raise KeyboardInterrupt
+    sleeps = []
+
+    def stop_after_second_sleep(_interval: int) -> None:
+        sleeps.append(_interval)
+        if len(sleeps) == 2:
+            raise KeyboardInterrupt
 
     monkeypatch.setattr(
-        watcher_module,
-        "sync_target",
-        lambda context, local_path, remote_path, *, dry_run=False: calls.append(
-            (context.name, local_path, remote_path, dry_run)
+        polling,
+        "deliver_snapshot",
+        lambda context, config, remote_path, snapshot, *, dry_run=False: calls.append(
+            (context.name, users_file, remote_path, dry_run)
         ),
     )
-    monkeypatch.setattr(watcher_module.time, "sleep", stop_after_first_sleep)
+    monkeypatch.setattr(watcher_module.time, "sleep", stop_after_second_sleep)
 
     with pytest.raises(KeyboardInterrupt):
         poll_watch(interval_seconds=1, dry_run=True)
 
-    assert calls == [("prod", users_file, "/opt/sftpwarden/users.yaml", True)]
+    assert calls == [("prod", users_file, "/opt/sftpwarden/provider/users.yaml", True)]
 
 
 def test_docker_watcher_mounts_only_explicit_ssh_key(
@@ -377,7 +412,13 @@ def test_docker_watcher_mounts_only_explicit_ssh_key(
     known_hosts = user_home / ".ssh" / "known_hosts"
     key_path.parent.mkdir(parents=True)
     key_path.write_text("private-key", encoding="utf-8")
-    known_hosts.write_text("example.com ssh-ed25519 AAAA\n", encoding="utf-8")
+    known_hosts.write_text(
+        (
+            "example.com ssh-ed25519 "
+            "AAAAC3NzaC1lZDI1NTE5AAAAIFMsDFmvcbuEKKQ2nRx6M4jxyJuS9KoOesN7GyrXw+d+\\n"
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("SFTPWARDEN_HOME", str(home))
     monkeypatch.setenv("HOME", str(user_home))
     project = tmp_path / "prod-project"
@@ -584,11 +625,17 @@ def test_sync_target_escapes_ssh_key_transport(
 ) -> None:
     import shlex
 
+    from sftpwarden.utils.constants import CONTAINER_PROVIDER_DATA_DIR
+
     monkeypatch.setattr(watcher_module, "system_is", lambda name: name == "Linux")
     key_path = tmp_path / "id deploy;rm"
     key_path.write_text("private-key", encoding="utf-8")
-    local_file = tmp_path / "sftpwarden.yaml"
-    local_file.write_text("version: 1\n", encoding="utf-8")
+    config = default_project_config("prod")
+    config.provider.path = f"{CONTAINER_PROVIDER_DATA_DIR}/users.yaml"
+    write_config(tmp_path / "sftpwarden.yaml", config)
+    local_file = tmp_path / "provider" / "users.yaml"
+    local_file.parent.mkdir()
+    local_file.write_text("schema_version: 2\nusers: []\n", encoding="utf-8")
     entry = remote_context(
         name="prod",
         provider=ProviderType.YAML,
@@ -600,13 +647,11 @@ def test_sync_target_escapes_ssh_key_transport(
         critical=True,
     )
 
-    rendered = sync_target(entry, local_file, "/opt/sftpwarden/sftpwarden.yaml", dry_run=True)
+    rendered = sync_target(entry, local_file, "/opt/sftpwarden/provider/users.yaml", dry_run=True)
     args = shlex.split(rendered)
-    transport = shlex.split(args[4])
-
-    assert args[:4] == ["rsync", "-az", "--protect-args", "-e"]
-    assert transport[0] == "ssh"
-    assert transport[transport.index("-i") + 1] == str(key_path)
+    assert args[0] == "ssh"
+    assert args[args.index("-i") + 1] == str(key_path)
+    assert 'mv -f -- "$temporary" "$target"' in args[-1]
 
 
 def test_sync_target_requires_remote_settings(tmp_path: Path) -> None:
@@ -616,12 +661,18 @@ def test_sync_target_requires_remote_settings(tmp_path: Path) -> None:
         sync_target(entry, tmp_path / "users.yaml", "/opt/sftpwarden/users.yaml")
 
 
-def test_sync_target_runs_rsync_and_returns_stdout(
+def test_sync_target_streams_only_validated_provider_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(watcher_module, "system_is", lambda name: name == "Linux")
-    local_file = tmp_path / "users.yaml"
-    local_file.write_text("users: []\n", encoding="utf-8")
+    from sftpwarden.utils.constants import CONTAINER_PROVIDER_DATA_DIR
+    from sftpwarden.watcher import delivery
+
+    config = default_project_config("prod")
+    config.provider.path = f"{CONTAINER_PROVIDER_DATA_DIR}/users.yaml"
+    write_config(tmp_path / "sftpwarden.yaml", config)
+    local_file = tmp_path / "provider" / "users.yaml"
+    local_file.parent.mkdir()
+    local_file.write_text("schema_version: 2\nusers: []\n", encoding="utf-8")
     entry = remote_context(
         name="prod",
         provider=ProviderType.YAML,
@@ -635,33 +686,34 @@ def test_sync_target_runs_rsync_and_returns_stdout(
     calls: list[list[str]] = []
 
     class Result:
-        stdout = "sent users\n"
+        returncode = 0
 
     def fake_run_checked(command: list[str], **_kwargs: object) -> Result:
         calls.append(command)
+        assert _kwargs["input"] == local_file.read_bytes()
+        assert _kwargs["timeout"] == 60
         return Result()
 
-    monkeypatch.setattr(watcher_module, "run_checked", fake_run_checked)
+    monkeypatch.setattr(delivery.subprocess, "run", fake_run_checked)
 
-    output = sync_target(entry, local_file, "/opt/sftpwarden/users.yaml")
+    output = sync_target(entry, local_file, "/opt/sftpwarden/provider/users.yaml")
 
-    assert output == "sent users"
-    assert calls == [
-        [
-            "rsync",
-            "-az",
-            "--protect-args",
-            "-e",
-            "ssh -p 22 -o BatchMode=yes -o ConnectTimeout=10",
-            str(local_file),
-            "deploy@example.com:/opt/sftpwarden/users.yaml",
-        ]
-    ]
+    assert output == "Delivered validated provider bytes."
+    assert len(calls) == 1
+    assert calls[0][0] == "ssh"
 
 
-def test_sync_target_uses_scp_on_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    local_file = tmp_path / "users.yaml"
-    local_file.write_text("users: []\n", encoding="utf-8")
+def test_sync_target_uses_native_ssh_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sftpwarden.utils.constants import CONTAINER_PROVIDER_DATA_DIR
+
+    config = default_project_config("prod")
+    config.provider.path = f"{CONTAINER_PROVIDER_DATA_DIR}/users.yaml"
+    write_config(tmp_path / "sftpwarden.yaml", config)
+    local_file = tmp_path / "provider" / "users.yaml"
+    local_file.parent.mkdir()
+    local_file.write_text("schema_version: 2\nusers: []\n", encoding="utf-8")
     entry = remote_context(
         name="prod",
         provider=ProviderType.YAML,
@@ -674,10 +726,10 @@ def test_sync_target_uses_scp_on_windows(tmp_path: Path, monkeypatch: pytest.Mon
     )
     monkeypatch.setattr(watcher_module, "system_is", lambda name: name == "Windows")
 
-    rendered = sync_target(entry, local_file, "/opt/sftpwarden/users.yaml", dry_run=True)
+    rendered = sync_target(entry, local_file, "/opt/sftpwarden/provider/users.yaml", dry_run=True)
 
-    assert rendered.startswith("scp ")
-    assert " -P 22 " in rendered
+    assert rendered.startswith("ssh ")
+    assert " -p 22 " in rendered
     assert "rsync" not in rendered
 
 

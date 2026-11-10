@@ -18,7 +18,7 @@ from sftpwarden.services.provider_schema import (
 from sftpwarden.users import ProviderUsers, SFTPUser
 from sftpwarden.utils.errors import ProviderError
 
-TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests"
+TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFMsDFmvcbuEKKQ2nRx6M4jxyJuS9KoOesN7GyrXw+d+"
 
 
 def test_provider_schema_reconciliation_migrates_sqlite_v1_storage(

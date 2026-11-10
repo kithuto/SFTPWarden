@@ -174,6 +174,7 @@ def test_reconcile_paths_and_context_resolution(
         },
     )
 
+    save_registry(registry)
     reconciled = reconcile_registered_paths(registry, "dev")
     assert reconciled.config == str(root / "sftpwarden.yaml")
     renamed = reconcile_registered_context(registry, "dev")
@@ -210,6 +211,7 @@ def test_context_reconcile_additional_edges(
     )
     registry.contexts["missing"].config = str(missing_config_root / "missing.yaml")
 
+    save_registry(registry)
     updated_provider = reconcile_registered_context(registry, "dev")
     same_missing = reconcile_registered_context(registry, "missing")
     save_registry(registry)
@@ -226,6 +228,7 @@ def test_context_reconcile_additional_edges(
         }
     )
     write_config(root / "sftpwarden.yaml", default_project_config("other", ProviderType.CSV))
+    save_registry(registry)
     with pytest.raises(ContextError, match="already exists"):
         reconcile_registered_context(registry, "dev")
 
@@ -240,6 +243,7 @@ def test_context_reconcile_additional_edges(
             )
         }
     )
+    save_registry(registry)
     assert reconcile_registered_paths(registry, "manual").name == "manual"
 
     cwd_root = tmp_path / "cwd-project"
@@ -249,7 +253,10 @@ def test_context_reconcile_additional_edges(
     assert resolve_context(cwd=cwd_root).name == "cwd-dev"
 
 
-def test_reconcile_paths_reports_manual_inconsistent_config(tmp_path: Path) -> None:
+def test_reconcile_paths_reports_manual_inconsistent_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     root = tmp_path / "project"
     other = tmp_path / "other"
     root.mkdir()
@@ -265,5 +272,6 @@ def test_reconcile_paths_reports_manual_inconsistent_config(tmp_path: Path) -> N
         },
     )
 
+    save_registry(registry)
     with pytest.raises(ContextError, match="inconsistent root/config paths"):
         reconcile_registered_paths(registry, "dev")

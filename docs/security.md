@@ -72,6 +72,9 @@ auth:
 ```
 
 In schema v2, disabled or expired keys are not written to `authorized_keys`.
+Expiring keys include OpenSSH's UTC `expiry-time` option. A disabled user has no
+installed key authorizations. Revocation applies to new authentications; see
+[existing-session handling](named-keys.md#revocation-and-expiry).
 The runtime writes only active keys and keeps OpenSSH `restrict` options on every
 line. Schema v1 `public_keys` remains supported for simple key-only deployments.
 
@@ -82,6 +85,37 @@ Named key controls in schema v2 are operator-facing and auditable:
 - duplicate key names and duplicate fingerprints are rejected per user;
 - `sftpwarden user key rotate`, `expire`, `disable`, and `enable` update one key
   without copying raw keys between commands.
+
+Privileged chroot/upload creation opens each directory relative to an already
+open directory descriptor and refuses symlinks or non-directory replacements.
+Ownership and permission changes operate on those descriptors. If an existing
+upload path contains a symlink, refresh fails; move its content into a real
+directory inside the chroot and retry. SFTPWarden does not follow that link and
+change an outside directory's ownership. These are Linux container operations;
+the operator CLI does not perform privileged account/filesystem changes on a
+macOS or Windows workstation.
+
+The runtime refuses to modify an existing account unless its name and UID/GID
+match managed state. System-account collisions, primary-group GID conflicts and
+duplicate identity mappings fail before user changes. Retiring a provider user
+does not release its UID/GID while its state/data are retained. New allocations
+also avoid installed system users/groups. Changing a retained identity requires
+an explicit maintenance/data-ownership procedure; refresh refuses to silently
+renumber it.
+
+Keep `state.json` with the corresponding data when restarting or recovering.
+If data contains an identity absent from state, restore the matching state
+before refreshing. Do not delete state to force startup. New identity reservations
+are saved before account creation so a failed provisioning pass can retry with
+the same IDs; the applied fingerprint advances only after the complete pass.
+
+New accounts are provisioned together with Shadow's database locks. The runtime
+image gives the root-only `newusers` tool a PAM password stage that leaves its
+new shadow entries locked; it does not change SSH authentication. Reconciliation
+verifies those locks before adding SFTP group membership, then applies the final
+encrypted credentials with `chpasswd`. Chroot directories and authorized keys
+are prepared before account creation. An interrupted batch remains pending and
+reuses its reserved identities on retry.
 
 ## Remote Watcher SSH
 

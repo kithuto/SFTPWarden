@@ -29,12 +29,11 @@ from sftpwarden.services.backup import (
     default_backup_path,
     remote_backup_candidates,
     restore_backup,
-    restore_remote_backup,
     safe_extract,
     write_backup_archive,
 )
 from sftpwarden.users import ProviderUsers, SFTPUser
-from sftpwarden.utils.errors import ContextError, RuntimeError
+from sftpwarden.utils.errors import ProviderError, RuntimeError
 
 
 def add_tar_text(archive: tarfile.TarFile, name: str, text: str) -> None:
@@ -52,6 +51,7 @@ def tar_bytes(files: dict[str, str], directories: list[str] | None = None) -> by
         for directory in directories or []:
             info = tarfile.TarInfo(directory)
             info.type = tarfile.DIRTYPE
+            info.mode = 0o700
             archive.addfile(info)
         for name, text in files.items():
             add_tar_text(archive, name, text)
@@ -106,16 +106,16 @@ def test_backup_archive_entries_and_provider_snapshot(
     missing_provider.mkdir()
     write_config(missing_provider / "sftpwarden.yaml", default_project_config("dev"))
     error_archive = root.parent / "error.tar.gz"
-    write_backup_archive(
-        output_path=error_archive,
-        root=missing_provider,
-        entries=["sftpwarden.yaml"],
-        context_name="dev",
-        provider_type="yaml",
-        include_data=False,
-    )
-    with tarfile.open(error_archive, "r:gz") as archive:
-        assert "provider/users-error.txt" in archive.getnames()
+    with pytest.raises(ProviderError, match="Provider file not found"):
+        write_backup_archive(
+            output_path=error_archive,
+            root=missing_provider,
+            entries=["sftpwarden.yaml"],
+            context_name="dev",
+            provider_type="yaml",
+            include_data=False,
+        )
+    assert not error_archive.exists()
 
 
 def test_backup_restore_sqlite_round_trip(
@@ -154,13 +154,35 @@ def test_backup_restore_sqlite_round_trip(
     assert "provider/users.json" in names
     assert manifest["provider"] == "sqlite"
 
-    (root / "users.sqlite").unlink()
+    changed = runner.invoke(
+        app,
+        [
+            "user",
+            "add",
+            "bob",
+            "--password-hash",
+            test_password_hash,
+            "--context",
+            "dev",
+            "--no-refresh",
+        ],
+    )
+    assert changed.exit_code == 0, changed.output
     restore_result = runner.invoke(app, ["restore", str(backup), "--yes"])
     users_result = runner.invoke(app, ["users", "--context", "dev", "--json"])
 
     assert restore_result.exit_code == 0, restore_result.output
     assert users_result.exit_code == 0, users_result.output
     assert json.loads(users_result.output)["users"][0]["username"] == "alice"
+    assert len(json.loads(users_result.output)["users"]) == 1
+    # A damaged installation cannot authorize overwrite using an incomplete safety copy.
+    original_config = (root / "sftpwarden.yaml").read_bytes()
+    (root / "users.sqlite").unlink()
+    refused = runner.invoke(app, ["restore", str(backup), "--yes"])
+    assert refused.exit_code == 1
+    assert not (root / "users.sqlite").exists()
+    assert (root / "sftpwarden.yaml").read_bytes() == original_config
+    assert backup.exists()
 
 
 def test_backup_includes_external_provider_user_snapshot(
@@ -211,10 +233,12 @@ def test_remote_backup_restore_and_dry_run(
     monkeypatch: pytest.MonkeyPatch,
     local_project_factory: Callable[..., tuple[Path, ContextEntry]],
 ) -> None:
-    """Remote backup and restore support dry-run and SSH/tar flows."""
+    """Remote backup plans maintenance; restore validates archives before transport."""
+    from sftpwarden.services import restore_remote
+
     _root, entry = local_project_factory()
     no_remote = entry.model_copy(update={"root": "", "config": ""})
-    with pytest.raises(ContextError, match="no local root or remote settings"):
+    with pytest.raises(RuntimeError, match="SSH endpoint"):
         create_remote_backup(entry=no_remote, output=None, include_data=False, dry_run=False)
 
     remote = remote_context(
@@ -228,77 +252,45 @@ def test_remote_backup_restore_and_dry_run(
         critical=True,
     )
     save_registry(ContextRegistry(default="archive", contexts={"archive": remote}))
-    checked_remote_roots: list[str] = []
-    monkeypatch.setattr(
-        backup_services,
-        "ensure_remote_only_root_available",
-        lambda entry: checked_remote_roots.append(entry.name),
-    )
 
     backup_result = create_backup(
         context_name="archive",
         output=str(tmp_path / "remote-plan.tar.gz"),
         include_data=False,
         dry_run=True,
+        maintenance=True,
     )
     assert backup_result.entries[0].startswith("remote:")
-    assert checked_remote_roots == []
 
     remote_config = default_project_config("archive")
-    remote_tar = tar_bytes(
-        {
-            "sftpwarden.yaml": dump_config(remote_config),
-            "docker-compose.yml": "services: {}\n",
-            "users.yaml": "users: []\n",
-        },
-        directories=["state"],
-    )
-
-    class Completed:
-        returncode = 0
-        stdout = remote_tar
-        stderr = b""
-
-    monkeypatch.setattr(backup_services.subprocess, "run", lambda *_args, **_kwargs: Completed())
-    remote_result = create_remote_backup(
-        entry=remote,
-        output=str(tmp_path / "remote-backup.tar.gz"),
-        include_data=False,
-        dry_run=False,
-    )
-    assert "sftpwarden.yaml" in remote_result.entries
-    assert checked_remote_roots == ["archive"]
-
-    class Failed:
-        returncode = 2
-        stdout = b""
-        stderr = b"permission denied"
-
-    monkeypatch.setattr(backup_services.subprocess, "run", lambda *_args, **_kwargs: Failed())
-    with pytest.raises(RuntimeError, match="Remote backup failed"):
-        create_remote_backup(
-            entry=remote, output=str(tmp_path / "bad.tar.gz"), include_data=False, dry_run=False
-        )
-    assert checked_remote_roots == ["archive", "archive"]
-
     remote_restore_archive = tmp_path / "remote-restore.tar.gz"
     with tarfile.open(remote_restore_archive, "w:gz") as archive:
-        add_tar_text(archive, "manifest.json", json.dumps({"entries": ["sftpwarden.yaml"]}))
+        add_tar_text(
+            archive,
+            "manifest.json",
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "entries": ["sftpwarden.yaml", "users.yaml"],
+                }
+            ),
+        )
         add_tar_text(archive, "sftpwarden.yaml", dump_config(remote_config))
-    restored_remote: list[tuple[ContextEntry, list[str]]] = []
+        add_tar_text(archive, "users.yaml", "schema_version: 2\nusers: []\n")
+        add_tar_text(archive, "provider/users.json", '{"schema_version": 2, "users": []}')
+    restored_remote: list[tuple[ContextEntry, Path, bool]] = []
     monkeypatch.setattr(
-        backup_services,
-        "create_backup",
-        lambda **_kwargs: BackupResult(path=tmp_path / "safety.tar.gz", entries=[]),
-    )
-    monkeypatch.setattr(
-        backup_services,
-        "restore_remote_backup",
-        lambda entry, extracted, entries: restored_remote.append((entry, entries)),
+        restore_remote,
+        "restore_fresh_remote",
+        lambda entry, archive, **kwargs: restored_remote.append(
+            (entry, archive, kwargs["dry_run"])
+        ),
     )
     result = restore_backup(context_name="archive", backup_path=str(remote_restore_archive))
-    assert result.entries == ["sftpwarden.yaml"]
-    assert restored_remote == [(remote, ["sftpwarden.yaml"])]
+    assert result.entries == ["sftpwarden.yaml", "users.yaml"]
+    assert restored_remote == [(remote, remote_restore_archive, False)]
+    assert result.safety_backup is None
+    assert result.target_state == "empty"
 
     dry_archive = tmp_path / "remote-dry-run.tar.gz"
     with tarfile.open(dry_archive, "w:gz") as archive:
@@ -307,101 +299,101 @@ def test_remote_backup_restore_and_dry_run(
             "manifest.json",
             json.dumps({"schema_version": 1, "entries": ["sftpwarden.yaml"]}),
         )
-    dry_result = restore_backup(
-        context_name="archive",
-        backup_path=str(dry_archive),
-        include_data=False,
-        dry_run=True,
-    )
-    assert dry_result.safety_backup is not None
-
-    extracted = tmp_path / "restore"
-    (extracted / "dir").mkdir(parents=True)
-    (extracted / "dir" / "file.txt").write_text("data", encoding="utf-8")
-    (extracted / "sftpwarden.yaml").write_text("config", encoding="utf-8")
-    calls: list[list[str]] = []
-    monkeypatch.setattr(
-        backup_services,
-        "run_checked",
-        lambda command, **_kwargs: calls.append(command),
-    )
-    restore_remote_backup(
-        entry=remote,
-        extracted=extracted,
-        entries=["missing", "dir", "sftpwarden.yaml"],
-    )
-    assert len(calls) == 2
+    with pytest.raises(RuntimeError, match="missing a member"):
+        restore_backup(
+            context_name="archive",
+            backup_path=str(dry_archive),
+            include_data=False,
+            dry_run=True,
+        )
 
     broken_remote = remote.model_copy(update={"remote": None})
-    with pytest.raises(ContextError, match="missing remote settings"):
-        restore_remote_backup(entry=broken_remote, extracted=extracted, entries=[])
+    with pytest.raises(RuntimeError, match="SSH endpoint"):
+        restore_remote.fresh_restore_script(broken_remote, include_data=False, dry_run=True)
 
 
-def test_restore_external_provider_snapshot_and_directory_replacement(
+def test_restore_external_provider_snapshot_and_reject_incomplete_runtime_material(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     memory_provider_factory: Callable[[ProviderUsers], object],
     user_factory: Callable[..., SFTPUser],
 ) -> None:
-    """Restore imports provider snapshots and replaces restored directories."""
+    """Restore uses checked provider replacement and rejects unverifiable runtime material."""
+    from sftpwarden.render.compose import write_compose
+    from sftpwarden.services import restore_existing
+
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     root = tmp_path / "external"
     root.mkdir()
     config = default_project_config("dev", ProviderType.MYSQL, dsn="mysql://db/sftp")
     write_config(root / "sftpwarden.yaml", config)
+    write_compose(config, root, allow_local_build=False)
     entry = local_context("dev", root, ProviderType.MYSQL)
     save_registry(ContextRegistry(default="dev", contexts={"dev": entry}))
 
     archive_path = tmp_path / "external.tar.gz"
     manifest = {
         "schema_version": 1,
-        "entries": ["sftpwarden.yaml", "data/file.txt", "missing.txt"],
+        "entries": ["sftpwarden.yaml", "data/file.txt"],
     }
     with tarfile.open(archive_path, "w:gz") as archive:
         add_tar_text(archive, "manifest.json", json.dumps(manifest))
         add_tar_text(archive, "sftpwarden.yaml", dump_config(config))
+        add_tar_text(archive, "data/file.txt", "restorable data")
         add_tar_text(
             archive,
             "provider/users.json",
             json.dumps(
-                {"users": [user_factory("alice").model_dump(mode="json", exclude_none=True)]}
+                {
+                    "schema_version": 2,
+                    "users": [user_factory("alice").model_dump(mode="json", exclude_none=True)],
+                }
             ),
         )
 
     provider = memory_provider_factory(ProviderUsers(users=[]))
     monkeypatch.setattr(backup_services, "provider_from_config", lambda *_args: provider)
-    monkeypatch.setattr(
-        backup_services,
-        "create_backup",
-        lambda **_kwargs: BackupResult(path=tmp_path / "safety.tar.gz", entries=[]),
-    )
+    monkeypatch.setattr(restore_existing, "provider_from_config", lambda *_args: provider)
     result = restore_backup(
         context_name="dev",
         backup_path=str(archive_path),
         include_data=False,
         dry_run=False,
     )
-    assert result.entries == ["sftpwarden.yaml", "missing.txt"]
+    assert result.entries == ["sftpwarden.yaml"]
     assert provider.writes[0].users[0].username == "alice"  # type: ignore
 
     directory_archive = tmp_path / "directory.tar.gz"
     with tarfile.open(directory_archive, "w:gz") as archive:
-        add_tar_text(archive, "manifest.json", json.dumps({"entries": ["host_keys"]}))
+        add_tar_text(
+            archive,
+            "manifest.json",
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "entries": ["sftpwarden.yaml", "host_keys"],
+                }
+            ),
+        )
+        add_tar_text(archive, "sftpwarden.yaml", dump_config(config))
+        add_tar_text(archive, "provider/users.json", '{"schema_version": 2, "users": []}')
         directory = tarfile.TarInfo("host_keys")
         directory.type = tarfile.DIRTYPE
+        directory.mode = 0o700
         archive.addfile(directory)
         add_tar_text(archive, "host_keys/ssh_host_ed25519_key", "new-key")
     (root / "host_keys").mkdir()
     (root / "host_keys" / "old").write_text("old", encoding="utf-8")
-    result = restore_backup(
-        context_name="dev",
-        backup_path=str(directory_archive),
-        include_data=False,
-        dry_run=False,
-    )
-    assert result.entries == ["host_keys"]
-    assert not (root / "host_keys" / "old").exists()
-    assert (root / "host_keys" / "ssh_host_ed25519_key").read_text(encoding="utf-8") == "new-key"
+    with pytest.raises(RuntimeError, match="identity"):
+        restore_backup(
+            context_name="dev",
+            backup_path=str(directory_archive),
+            include_data=False,
+            dry_run=False,
+        )
+    assert (root / "host_keys" / "old").read_text(encoding="utf-8") == "old"
+    assert not (root / "host_keys" / "ssh_host_ed25519_key").exists()
 
 
 def test_safe_extract_rejects_unsafe_members(tmp_path: Path) -> None:
@@ -423,20 +415,11 @@ def test_safe_extract_rejects_unsafe_members(tmp_path: Path) -> None:
     ):
         safe_extract(archive, tmp_path / "out")
 
-    class FakeMember:
-        name = "file.txt"
-
-        def isdir(self) -> bool:
-            return False
-
-        def isfile(self) -> bool:
-            return True
-
     class FakeArchive:
-        def getmembers(self) -> list[FakeMember]:
-            return [FakeMember()]
+        def __iter__(self):
+            return iter([tarfile.TarInfo("file.txt")])
 
-        def extractfile(self, _member: FakeMember) -> None:
+        def extractfile(self, _member: tarfile.TarInfo) -> None:
             return None
 
     with pytest.raises(RuntimeError, match="Cannot read"):

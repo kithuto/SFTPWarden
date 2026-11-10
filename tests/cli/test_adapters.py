@@ -281,6 +281,8 @@ def test_context_field_aliases_and_remote_root_update(
             str(root),
             "--critical",
             "--skip-checks",
+            "--watcher",
+            "systemd",
             "--yes",
         ],
     )
@@ -372,6 +374,8 @@ def test_context_dynamic_field_commands_read_update_and_report_errors(
             str(root),
             "--critical",
             "--skip-checks",
+            "--watcher",
+            "systemd",
             "--yes",
         ],
     )
@@ -424,6 +428,8 @@ def test_context_add_local_remote_and_confirmation_paths(
             "--root",
             str(other_root),
             "--critical",
+            "--watcher",
+            "systemd",
             "--yes",
         ],
     )
@@ -924,7 +930,7 @@ def test_init_direct_helpers_cover_prompts_sql_and_remote_checks(
         port=None,
         remote_root=None,
         ssh_key=None,
-        watcher_mode=None,
+        watcher_mode="systemd",
         remote_only=False,
         skip_checks=False,
         critical=False,
@@ -1162,6 +1168,7 @@ def test_runtime_commands_render_and_report_errors(
 ) -> None:
     runner = CliRunner()
     monkeypatch.setattr(runtime_commands, "apply_once", lambda config, *, force: "applied")
+    monkeypatch.setattr(runtime_commands, "check_desired_provider", lambda _config: True)
     monkeypatch.setattr(
         runtime_commands,
         "load_runtime_inputs",

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+from typing import Any
 
 import yaml
 
@@ -82,6 +83,26 @@ def find_user(users: ProviderUsers, username: str) -> SFTPUser:
     raise ProviderError(f"Unknown user: {username}", suggestion="Run `sftpwarden users`.")
 
 
+def runtime_user_data(user: SFTPUser) -> dict[str, Any]:
+    """Return canonical policy fields shared by inventory and per-user fingerprints."""
+    data = user.model_dump(
+        mode="json",
+        exclude_none=True,
+        exclude={"comment", "keys", "public_keys"},
+    )
+    data["keys"] = [
+        {
+            "name": key.name,
+            "public_key": key.public_key,
+            "fingerprint": key.fingerprint,
+            "disabled": key.disabled,
+            "expires_at": key.expires_at.isoformat() if key.expires_at else None,
+        }
+        for key in user.key_objects()
+    ]
+    return data
+
+
 def users_fingerprint(users: ProviderUsers) -> str:
     """Build a stable runtime fingerprint for provider users.
 
@@ -95,23 +116,6 @@ def users_fingerprint(users: ProviderUsers) -> str:
     str
         SHA-256 fingerprint that ignores non-runtime metadata.
     """
-    canonical_users = []
-    for user in users.users:
-        data = user.model_dump(
-            mode="json",
-            exclude_none=True,
-            exclude={"comment", "keys", "public_keys"},
-        )
-        data["keys"] = [
-            {
-                "name": key.name,
-                "public_key": key.public_key,
-                "fingerprint": key.fingerprint,
-                "disabled": key.disabled,
-                "expires_at": key.expires_at.isoformat() if key.expires_at else None,
-            }
-            for key in user.key_objects()
-        ]
-        canonical_users.append(data)
+    canonical_users = [runtime_user_data(user) for user in users.users]
     canonical = yaml.safe_dump({"users": canonical_users}, sort_keys=True)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

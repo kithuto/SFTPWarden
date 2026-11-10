@@ -1,5 +1,22 @@
 # Named Keys
 
+## Public-key validation
+
+SFTPWarden checks the SSH wire structure and type of RSA, Ed25519, NIST P-256,
+P-384 and P-521 ECDSA keys, including the supported OpenSSH security-key formats.
+It rejects truncated or extra fields, type/blob mismatches, malformed lengths and
+multiple key lines. Optional comments and a trailing file newline are accepted.
+ECDSA points must use the uncompressed encoding accepted by OpenSSH.
+
+These checks validate the encoding; they do not establish possession of the
+private key or guarantee acceptance by a server's algorithm policy. Verify access
+with a real connection before removing an existing working credential. The
+`AAAA...` values below are placeholders; replace them with actual public keys.
+The YAML/CSV examples in the repository contain public-only sample keys whose
+private keys were discarded. Replace those sample keys before using the examples.
+
+## User schemas
+
 SFTPWarden v1.3 supports two user schemas.
 
 Schema v1 is the simple format:
@@ -36,6 +53,10 @@ need per-key control, rotation, expiry, disable/enable, import, or metadata.
 Key names must match `^[a-z][a-z0-9._-]{0,63}$`. Fingerprints are derived from
 the public key when omitted and are validated when present.
 
+In schema v2, an explicit `keys` list takes precedence over legacy `public_keys`.
+An empty list means no key authorization. Omitting `keys` still converts legacy
+`public_keys` for compatibility; `keys: null` and other non-list values are invalid.
+
 ## Commands
 
 ```bash
@@ -53,6 +74,28 @@ sftpwarden user key import alice --from-dir ./keys
 
 `key import --from-dir` uses each `.pub` file name as the key name. When the
 directory contains one key, `--name <key_name>` can override that file name.
+
+## Revocation and expiry
+
+Removing or disabling the last key is valid. A user with no usable credentials
+cannot establish a new session; its declared `disabled` flag is not changed
+automatically. Creating a new user through the CLI still requires a credential.
+Disabling a user removes its key authorization as well as password access.
+
+Expiry is evaluated in UTC, including when provider content has not changed.
+Installed expiring keys also carry an OpenSSH `expiry-time` restriction, so the
+deadline does not depend on a later refresh. OpenSSH's option identifies the last
+valid second; SFTPWarden renders the preceding second so access is denied at the
+declared deadline. Subsecond deadlines are rounded down. See the
+[OpenSSH authorized-key options](https://man.openbsd.org/sshd.8#expiry-time).
+
+These changes govern **new authentications**. Existing sessions and transfers
+are not terminated by replacing `authorized_keys`. For immediate termination,
+first apply the revocation successfully, then have the runtime administrator
+terminate that user's processes inside the selected Linux container (for
+example, `pkill -TERM -u alice` after checking the username/UID). This interrupts
+that user's transfers. Do not execute runtime account/process commands on the
+operator's host.
 
 ## Migration
 

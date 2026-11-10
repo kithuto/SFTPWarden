@@ -355,7 +355,7 @@ def watch(
         Whether to report changes without syncing files.
     """
     try:
-        require_initialized_context()
+        require_initialized_context(read_only=True)
         print_info("Watching remote local-sync contexts.")
         poll_watch(interval_seconds=interval, dry_run=dry_run)
     except SFTPWardenError as exc:
@@ -383,7 +383,7 @@ def deploy(
         Whether to skip critical-context confirmation.
     """
     try:
-        entry = resolve_context(context_name=context, reconcile_config=True)
+        entry = resolve_context(context_name=context, reconcile_config=True, read_only=dry_run)
         if (
             not dry_run
             and entry.critical
@@ -447,7 +447,7 @@ def doctor(json_output: Annotated[bool, typer.Option("--json")] = False) -> None
     json_output
         Whether to emit machine-readable JSON.
     """
-    sync_binary = "scp" if system_is("Windows") else "rsync"
+    sync_binary = "scp" if system_is("Windows") or system_is("Darwin") else "rsync"
     checks = [
         {
             "name": binary,
@@ -523,6 +523,16 @@ def backup(
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
     json_output: Annotated[bool, typer.Option("--json")] = False,
     yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
+    maintenance: Annotated[
+        bool,
+        typer.Option(
+            "--maintenance",
+            help=(
+                "Confirm external writers are paused; "
+                "capture runtime mounts during explicit downtime."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Create a project backup.
 
@@ -557,6 +567,7 @@ def backup(
             output=output,
             include_data=include_data,
             dry_run=dry_run,
+            maintenance=maintenance,
         )
         data = {
             "path": str(result.path),
@@ -580,10 +591,30 @@ def backup(
 def restore(
     backup_path: Annotated[str, typer.Argument(help="Backup archive path.")],
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
+    root: Annotated[
+        str | None, typer.Option("--root", help="Fresh recovery into an empty local directory.")
+    ] = None,
+    provider_context: Annotated[
+        str | None,
+        typer.Option(
+            "--provider-context",
+            help=(
+                "With --root, select an empty external database; with remote --context, "
+                "select its separately recovered local project."
+            ),
+        ),
+    ] = None,
     include_data: Annotated[bool, typer.Option("--include-data")] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
     json_output: Annotated[bool, typer.Option("--json")] = False,
     yes: Annotated[bool, typer.Option("--yes", "-y")] = False,
+    maintenance: Annotated[
+        bool,
+        typer.Option(
+            "--maintenance",
+            help="Confirm external writers are paused; leave the local runtime stopped for deploy.",
+        ),
+    ] = False,
 ) -> None:
     """Restore a project backup.
 
@@ -627,20 +658,32 @@ def restore(
             backup_path=backup_path,
             include_data=include_data,
             dry_run=dry_run,
+            target_root=root,
+            provider_context=provider_context,
+            maintenance=maintenance,
         )
         data = {
             "path": str(result.path),
             "entries": result.entries,
             "safety_backup": str(result.safety_backup) if result.safety_backup else None,
             "dry_run": dry_run,
+            "status": "planned" if dry_run else "files_restored",
+            "activation_required": True,
+            "target_root": str(result.target_root) if result.target_root else None,
+            "target_state": result.target_state,
         }
         if json_output:
             print_json(data)
             return
         if dry_run:
-            print_info(f"Backup [bold]{result.path}[/bold] can be restored.")
+            print_info(f"Validated file restoration plan for [bold]{result.path}[/bold].")
         else:
-            print_success(f"Restored backup [bold]{result.path}[/bold].")
+            print_success(f"Restored files from [bold]{result.path}[/bold].")
+            print_info(
+                "Deployment activation and service recovery verification are still required."
+            )
+            if result.target_root:
+                print_info(f"Recovery directory: [bold]{result.target_root}[/bold]")
             if result.safety_backup:
                 print_info(f"Safety backup: [bold]{result.safety_backup}[/bold]")
         for entry in result.entries:

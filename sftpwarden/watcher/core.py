@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -13,13 +14,11 @@ from sftpwarden.config import (
 )
 from sftpwarden.config.global_config import load_global_config, save_global_config
 from sftpwarden.contexts import ContextEntry, ContextType, load_registry
-from sftpwarden.remote.ssh import (
-    rsync_ssh_transport,
-    scp_upload_command,
-)
-from sftpwarden.system.commands import command_text, run_checked
+from sftpwarden.system.commands import run_checked
 from sftpwarden.utils.errors import ContextError
+from sftpwarden.utils.paths import contexts_path, global_config_path
 from sftpwarden.utils.platform import system_is
+from sftpwarden.utils.state_transactions import state_transaction
 from sftpwarden.watcher import backends as watcher_backends
 from sftpwarden.watcher.backends.docker import DockerComposeMount
 from sftpwarden.watcher.base import (
@@ -29,6 +28,8 @@ from sftpwarden.watcher.base import (
     WatcherInstallPlan,
     WatcherUninstallPlan,
 )
+from sftpwarden.watcher.delivery import deliver_snapshot, read_snapshot
+from sftpwarden.watcher.polling import WatchPoller, checkpoint_path, load_checkpoint
 from sftpwarden.watcher.registry import (
     registered_watchers,
     watcher_class,
@@ -90,8 +91,6 @@ def editable_sync_target(context: ContextEntry, config: SFTPWardenConfig) -> Wat
     if not context.remote or config.provider.type not in WATCHER_SYNC_PROVIDER_TYPES:
         return None
     provider_path = provider_local_path(context.root, config)
-    if not provider_path.exists():
-        return None
     return WatchTarget(
         context=context.name,
         local_path=provider_path,
@@ -101,8 +100,14 @@ def editable_sync_target(context: ContextEntry, config: SFTPWardenConfig) -> Wat
 
 def derive_watch_targets() -> list[WatchTarget]:
     """Derive watch targets from the context registry."""
+    return _watch_targets_and_errors()[0]
+
+
+def _watch_targets_and_errors() -> tuple[list[WatchTarget], list[dict[str, str]]]:
+    """Retain independent targets when a different project's input is broken."""
     registry = load_registry()
     targets: list[WatchTarget] = []
+    errors: list[dict[str, str]] = []
     for context in registry.contexts.values():
         if (
             context.type != ContextType.REMOTE
@@ -114,12 +119,28 @@ def derive_watch_targets() -> list[WatchTarget]:
             continue
         config_path = Path(context.config)
         if not config_path.exists():
+            errors.append(
+                {
+                    "context": context.name,
+                    "phase": "input_failed",
+                    "error": "Watcher input configuration is missing.",
+                }
+            )
             continue
-        config = load_config(config_path)
-        target = editable_sync_target(context, config)
-        if target:
-            targets.append(target)
-    return sorted(targets, key=lambda target: (target.context, str(target.local_path)))
+        try:
+            config = load_config(config_path)
+            target = editable_sync_target(context, config)
+            if target:
+                targets.append(target)
+        except Exception:  # noqa: BLE001
+            errors.append(
+                {
+                    "context": context.name,
+                    "phase": "input_failed",
+                    "error": "Watcher input configuration could not be read.",
+                }
+            )
+    return sorted(targets, key=lambda target: (target.context, str(target.local_path))), errors
 
 
 def watcher_status_text() -> str:
@@ -132,18 +153,46 @@ def watcher_status_text() -> str:
         f"Remote local-sync targets: {len(data['targets'])}",
     ]
     lines.extend(f"- {target['context']}: {target['local_path']}" for target in data["targets"])
+    lines.extend(
+        f"- {item['context']} delivery: {item['phase']}"
+        + (f" ({item['error']})" if item.get("error") else "")
+        for item in data["delivery"]
+    )
     return "\n".join(lines)
 
 
 def watcher_status_data() -> dict[str, Any]:
     """Return watcher status as structured data."""
     state = load_global_config().watcher
-    targets = derive_watch_targets()
+    targets, errors = _watch_targets_and_errors()
+    progress: list[dict[str, Any]] = list(errors)
+    registry = load_registry()
+    for target in targets:
+        try:
+            checkpoint = load_checkpoint(
+                checkpoint_path(
+                    registry.contexts[target.context],
+                    target.local_path,
+                )
+            )
+            if not target.local_path.is_file():
+                checkpoint.phase = "input_failed"
+                checkpoint.error = "Provider input is missing or inaccessible."
+            progress.append({"context": target.context, **checkpoint.model_dump()})
+        except Exception:  # noqa: BLE001
+            progress.append(
+                {
+                    "context": target.context,
+                    "phase": "unreadable",
+                    "error": "Delivery checkpoint could not be read.",
+                }
+            )
     return {
         "installed": state.installed,
         "mode": state.mode,
         "path": state.path,
         "activated": state.activated,
+        "delivery": progress,
         "targets": [
             {
                 "context": target.context,
@@ -228,6 +277,30 @@ def install_watcher(
     allow_docker_fallback: bool = False,
 ) -> str:
     """Install watcher files and optionally activate them."""
+    with ExitStack() as stack:
+        if not dry_run:
+            stack.enter_context(state_transaction(contexts_path()))
+            stack.enter_context(state_transaction(global_config_path()))
+        return _install_watcher(
+            mode=mode,
+            yes=yes,
+            dry_run=dry_run,
+            image=image,
+            activate=activate,
+            allow_docker_fallback=allow_docker_fallback,
+        )
+
+
+def _install_watcher(
+    *,
+    mode: str | WatcherInstallMode | None,
+    yes: bool,
+    dry_run: bool,
+    image: str | None,
+    activate: bool,
+    allow_docker_fallback: bool,
+) -> str:
+    """Prepare and install while holding both host-state transactions."""
     selected_mode = resolve_watcher_mode(
         mode,
         allow_docker_fallback=allow_docker_fallback,
@@ -307,6 +380,15 @@ def run_watcher_commands(commands: list[list[str]]) -> None:
 
 def uninstall_watcher(*, dry_run: bool = False, deactivate: bool | None = None) -> str:
     """Uninstall watcher metadata and generated files."""
+    with ExitStack() as stack:
+        if not dry_run:
+            stack.enter_context(state_transaction(contexts_path()))
+            stack.enter_context(state_transaction(global_config_path()))
+        return _uninstall_watcher(dry_run=dry_run, deactivate=deactivate)
+
+
+def _uninstall_watcher(*, dry_run: bool, deactivate: bool | None) -> str:
+    """Uninstall while holding both host-state transactions."""
     config = load_global_config()
     state = config.watcher
     if not state.installed:
@@ -389,38 +471,20 @@ def use_scp_for_sync() -> bool:
 def sync_target(
     context: ContextEntry, local_path: Path, remote_path: str, *, dry_run: bool = False
 ) -> str:
-    """Sync one local file to its remote target."""
+    """Validate and atomically publish the configured user provider over SSH."""
     if not context.remote:
         raise ContextError(f"Context {context.name} is missing remote settings.")
-    destination = f"{context.remote.user}@{context.remote.host}:{remote_path}"
-    if use_scp_for_sync():
-        command = scp_upload_command(context.remote, local_path, remote_path)
-    else:
-        command = ["rsync", "-az", "--protect-args", "-e", rsync_ssh_transport(context.remote)]
-        command.extend([str(local_path), destination])
-    if dry_run:
-        return command_text(command)
-    result = run_checked(
-        command,
-        error_type=ContextError,
-        message=f"Sync failed for {local_path}",
-        fallback_suggestion="Inspect sync command output.",
+    config = load_config(context.config)
+    if local_path.absolute() != provider_local_path(context.root, config).absolute():
+        raise ContextError("Only the configured user provider can be synchronized.")
+    return deliver_snapshot(
+        context, config, remote_path, read_snapshot(context, config), dry_run=dry_run
     )
-    return result.stdout.strip()
 
 
 def poll_watch(*, interval_seconds: int = 2, dry_run: bool = False) -> None:
-    """Poll watch targets and sync changed files forever."""
-    seen: dict[tuple[str, Path, str], float] = {}
+    """Retry independently with durable acknowledgements after delivery and required refresh."""
+    poller = WatchPoller(dry_run=dry_run)
     while True:
-        registry = load_registry()
-        by_name = registry.contexts
-        for target in derive_watch_targets():
-            mtime = target.local_path.stat().st_mtime
-            key = (target.context, target.local_path, target.remote_path)
-            if seen.get(key) != mtime:
-                seen[key] = mtime
-                sync_target(
-                    by_name[target.context], target.local_path, target.remote_path, dry_run=dry_run
-                )
+        poller.poll()
         time.sleep(interval_seconds)

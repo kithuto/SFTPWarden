@@ -18,13 +18,21 @@ from sftpwarden.config import (
 )
 from sftpwarden.contexts import ContextEntry, ContextType, resolve_context
 from sftpwarden.providers import BaseProvider, provider_from_config
+from sftpwarden.providers.documents import parse_provider_document
+from sftpwarden.providers.schema import require_configured_schema
 from sftpwarden.refresh import refresh_context
+from sftpwarden.services.provider_schema import write_provider_schema_backup
+from sftpwarden.services.schema_transition import (
+    publish_schema_transition,
+    require_no_pending_transition,
+)
 from sftpwarden.users import ProviderUsers, users_fingerprint
-from sftpwarden.users.schemas import detect_csv_schema, users_from_mapping
+from sftpwarden.users.schemas import migrate_provider_users
 from sftpwarden.users.schemas import user_schema as user_schema_for
 from sftpwarden.users.service import upsert_user
 from sftpwarden.utils.errors import ProviderError
 from sftpwarden.utils.files import write_private_text
+from sftpwarden.utils.state_transactions import state_transaction
 from sftpwarden.watcher import editable_sync_target, sync_target
 
 ProviderFormat = Literal["yaml", "csv", "json"]
@@ -93,7 +101,8 @@ def read_context_users(
         context_name=context_name,
         config_path=config_path,
     )
-    return entry, provider.read()
+    require_no_pending_transition(entry)
+    return entry, require_configured_schema(provider)
 
 
 def serialize_users(users: ProviderUsers, fmt: ProviderFormat) -> str:
@@ -141,16 +150,7 @@ def deserialize_users(text: str, fmt: ProviderFormat) -> ProviderUsers:
     ProviderUsers
         Parsed users.
     """
-    if fmt == "json":
-        return users_from_mapping(json.loads(text), fallback_schema=1)
-    if fmt == "yaml":
-        return users_from_mapping(yaml.safe_load(text) or {"users": []}, fallback_schema=1)
-    rows = []
-    reader = csv.DictReader(io.StringIO(text))
-    schema = detect_csv_schema(list(reader.fieldnames or []), fallback_schema=1)
-    for row in reader:
-        rows.append(schema.user_from_csv_row(row))
-    return ProviderUsers(schema_version=schema.version, users=rows)
+    return parse_provider_document(text, fmt)
 
 
 def infer_format(path: str | Path | None, explicit: str | None = None) -> ProviderFormat:
@@ -331,11 +331,13 @@ def write_provider_users(
     ProviderMutationResult
         Mutation result.
     """
-    current = provider.read()
-    next_users = source_users
+    require_no_pending_transition(entry)
+    current = require_configured_schema(provider)
+    target_schema = max(current.schema_version, source_users.schema_version)
+    next_users = migrate_provider_users(source_users, to_version=target_schema)
     if mode == "merge":
-        merged = current
-        for user in source_users.users:
+        merged = migrate_provider_users(current, to_version=target_schema)
+        for user in next_users.users:
             merged = upsert_user(merged, user)
         next_users = merged
 
@@ -346,9 +348,31 @@ def write_provider_users(
     deploy_required = False
     manual_action = None
     if not dry_run and changed:
-        provider.write(next_users)
-        sync_output = sync_provider_file_if_needed(entry, config)
-        if config.deploy.target == DeployTarget.KUBERNETES and config.provider.type in {
+        schema_changed = current.schema_version != next_users.schema_version
+        with state_transaction(Path(entry.config)):
+            require_no_pending_transition(entry)
+            if load_config(entry.config).provider != config.provider:
+                raise ProviderError("Provider configuration changed before import.")
+            if schema_changed:
+                backup = write_provider_schema_backup(entry.root, current)
+                publish_schema_transition(
+                    entry,
+                    config,
+                    current,
+                    next_users,
+                    provider=provider,
+                    backup_path=str(backup),
+                )
+            else:
+                provider.replace_if_unchanged(current, next_users)
+        if not schema_changed:
+            sync_output = sync_provider_file_if_needed(entry, config)
+        if schema_changed:
+            deploy_required = True
+            manual_action = (
+                "Provider schema and config changed. Run `sftpwarden deploy` to apply them."
+            )
+        elif config.deploy.target == DeployTarget.KUBERNETES and config.provider.type in {
             ProviderType.YAML,
             ProviderType.CSV,
         }:
