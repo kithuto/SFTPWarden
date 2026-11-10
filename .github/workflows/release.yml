@@ -21,37 +21,62 @@ concurrency:
 jobs:
   version:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read
     outputs:
       changed: ${{ steps.version.outputs.changed }}
       version: ${{ steps.version.outputs.version }}
+      mode: ${{ steps.version.outputs.mode }}
+      tree: ${{ steps.version.outputs.tree }}
+      candidate_commit: ${{ steps.version.outputs.candidate_commit }}
+      source_run_id: ${{ steps.version.outputs.source_run_id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - id: version
-        name: Identify this exact promotion commit
+        name: Route changes and identify a verified candidate
         env:
-          BEFORE_SHA: ${{ github.event.before }}
-        run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          import os, subprocess, tomllib
-          from pathlib import Path
-          version = tomllib.loads(Path("pyproject.toml").read_text())["project"]["version"]
-          before = os.environ.get("BEFORE_SHA", "")
-          previous = None
-          if before and before != "0" * 40:
-              result = subprocess.run(["git", "show", f"{before}:pyproject.toml"], capture_output=True, text=True)
-              if result.returncode == 0:
-                  previous = tomllib.loads(result.stdout)["project"]["version"]
-          print(f"version={version}")
-          print(f"changed={str(previous is not None and previous != version).lower()}")
-          PY
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python tools/ci_candidate.py plan
 
   ordinary:
+    needs: version
+    if: needs.version.outputs.mode == 'full'
     uses: ./.github/workflows/ci.yml
+
+  documentation:
+    name: Documentation only
+    needs: version
+    if: needs.version.outputs.mode == 'docs'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: python -m pip install -e ".[docs]"
+      - run: python -m sphinx -W --keep-going -b html docs docs/_build/html
+
+  reuse:
+    needs: version
+    if: needs.version.outputs.mode == 'reuse'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/reuse.yml
+    with:
+      source-run-id: ${{ needs.version.outputs.source_run_id }}
+      candidate-commit: ${{ needs.version.outputs.candidate_commit }}
+      tree: ${{ needs.version.outputs.tree }}
+      version: ${{ needs.version.outputs.version }}
 
   packages:
     needs: [version]
+    if: needs.version.outputs.mode == 'full'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -138,6 +163,18 @@ jobs:
   external:
     needs: [packages, images]
     uses: ./.github/workflows/external.yml
+
+  security:
+    needs: [version, images, reuse]
+    if: always() && needs.version.result == 'success' && ((needs.version.outputs.mode == 'full' && needs.images.result == 'success') || (needs.version.outputs.mode == 'reuse' && needs.reuse.result == 'success'))
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    uses: ./.github/workflows/security.yml
+    with:
+      candidate-commit: ${{ needs.version.outputs.candidate_commit }}
+      audit-python: ${{ needs.version.outputs.mode == 'reuse' }}
 
   cluster:
     name: Kubernetes / ${{ matrix.group }} / ${{ matrix.arch }}
@@ -241,23 +278,27 @@ jobs:
 
   gate:
     name: Release aggregate
-    needs: [ordinary, packages, images, contracts, external, cluster]
+    needs: [version, ordinary, packages, images, contracts, external, cluster, documentation, reuse, security]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Require every ordinary and external candidate gate
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Require the complete validation or verified promotion route
         env:
           RESULTS: ${{ toJSON(needs) }}
-        run: |
-          python - <<'PY'
-          import json, os
-          results = json.loads(os.environ["RESULTS"])
-          failures = [name for name, item in results.items() if item["result"] != "success"]
-          if failures:
-              raise SystemExit("Release is blocked by: " + ", ".join(failures))
-          PY
+          CI_MODE: ${{ needs.version.outputs.mode }}
+          CI_TREE: ${{ needs.version.outputs.tree }}
+        run: python tools/ci_candidate.py gate
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: needs.version.outputs.mode == 'full'
+        with:
+          name: candidate-validation
+          path: candidate-validation.json
+          if-no-files-found: error
 
   publication-preflight:
+    env:
+      CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
     needs: [version, gate]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.version.outputs.changed == 'true'
     runs-on: ubuntu-latest
@@ -272,10 +313,12 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          python tools/release_artifacts.py verify dist --commit "$GITHUB_SHA"
+          python tools/release_artifacts.py verify dist --commit "$CANDIDATE_COMMIT"
           python tools/github_candidate.py dist --repository "$GITHUB_REPOSITORY" --version "$VERSION" --commit "$GITHUB_SHA"
 
   publish-python:
+    env:
+      CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
     needs: [version, publication-preflight]
     runs-on: ubuntu-latest
     environment: pypi
@@ -296,7 +339,7 @@ jobs:
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          python tools/release_artifacts.py verify dist --commit "$GITHUB_SHA"
+          python tools/release_artifacts.py verify dist --commit "$CANDIDATE_COMMIT"
           python tools/pypi_candidate.py dist --version "$VERSION" --stage publish-dist --github-output "$GITHUB_OUTPUT"
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         if: steps.pypi.outputs.missing != '0'
@@ -308,6 +351,8 @@ jobs:
         run: python tools/pypi_candidate.py dist --version "$VERSION" --wait-seconds 120
 
   publish-images:
+    env:
+      CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
     needs: [version, publication-preflight]
     runs-on: ubuntu-latest
     permissions:
@@ -334,14 +379,16 @@ jobs:
           ARCH: ${{ matrix.arch }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          python tools/release_artifacts.py verify candidate-images --commit "$GITHUB_SHA"
+          python tools/release_artifacts.py verify candidate-images --commit "$CANDIDATE_COMMIT"
           docker load --input "candidate-images/runtime-$ARCH.tar.gz"
           docker load --input "candidate-images/watcher-$ARCH.tar.gz"
           repository="ghcr.io/${GITHUB_REPOSITORY,,}"
-          python tools/promote_image.py "sftpwarden-candidate:$GITHUB_SHA-$ARCH" "$repository:$VERSION-$ARCH"
-          python tools/promote_image.py "sftpwarden-watcher-candidate:$GITHUB_SHA-$ARCH" "$repository-watcher:$VERSION-$ARCH"
+          python tools/promote_image.py "sftpwarden-candidate:$CANDIDATE_COMMIT-$ARCH" "$repository:$VERSION-$ARCH"
+          python tools/promote_image.py "sftpwarden-watcher-candidate:$CANDIDATE_COMMIT-$ARCH" "$repository-watcher:$VERSION-$ARCH"
 
   publish-chart:
+    env:
+      CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
     needs: [version, publication-preflight]
     runs-on: ubuntu-latest
     permissions:
@@ -359,7 +406,7 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          python tools/release_artifacts.py verify dist --commit "$GITHUB_SHA"
+          python tools/release_artifacts.py verify dist --commit "$CANDIDATE_COMMIT"
           printf '%s' "$REGISTRY_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           python tools/promote_chart.py "dist/chart/sftpwarden-$VERSION.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts" "$VERSION"
 
@@ -387,6 +434,8 @@ jobs:
           python tools/promote_index.py "$repository-watcher" "$VERSION"
 
   published-smoke:
+    env:
+      CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
     needs: [version, publish-python, publish-chart, publish-indexes]
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -411,7 +460,7 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           ARCH: ${{ matrix.arch }}
         run: |
-          python tools/release_artifacts.py verify dist --commit "$GITHUB_SHA"
+          python tools/release_artifacts.py verify dist --commit "$CANDIDATE_COMMIT"
           python tools/pypi_candidate.py dist --version "$VERSION"
           python -m pip install --no-cache-dir "sftpwarden==$VERSION"
           python -I -m sftpwarden --version
@@ -423,6 +472,8 @@ jobs:
           docker run --rm --entrypoint sftpwarden "$repository-watcher:$VERSION-$ARCH" --version
 
   complete-release:
+    env:
+      CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
     needs: [version, published-smoke]
     runs-on: ubuntu-latest
     permissions:
@@ -445,7 +496,7 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
-          python tools/release_artifacts.py verify dist --commit "$GITHUB_SHA"
+          python tools/release_artifacts.py verify dist --commit "$CANDIDATE_COMMIT"
           python tools/github_candidate.py dist --repository "$GITHUB_REPOSITORY" --version "$VERSION" --commit "$GITHUB_SHA"
           repository="ghcr.io/${GITHUB_REPOSITORY,,}"
           python tools/promote_index.py "$repository" "$VERSION" --latest

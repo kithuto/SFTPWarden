@@ -131,6 +131,11 @@ these scheduled deliveries.
 
 ### Changed
 
+- Route documentation-only CI changes to Sphinx without code or infrastructure
+  tests. Reuse complete, identical dev candidates during main promotion, verify
+  their original artifacts and refresh security scans without rebuilding images.
+  Missing or expired evidence requires full validation; failed candidates block
+  promotion. Keep scheduled security and repository checks independent of PRs.
 - Reduce reconciliation overhead for large YAML inventories while retaining strict
   input validation and the existing provider fingerprint format.
 - Release packages, chart and native images pass one artifact-based promotion gate.

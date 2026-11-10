@@ -1,8 +1,14 @@
 name: Security
 
 on:
-  pull_request:
-    branches: [dev, main]
+  workflow_call:
+    inputs:
+      candidate-commit:
+        required: true
+        type: string
+      audit-python:
+        default: true
+        type: boolean
   schedule:
     - cron: "23 4 * * 1"
   workflow_dispatch:
@@ -12,6 +18,7 @@ permissions:
 
 jobs:
   python-scan:
+    if: inputs.candidate-commit == '' || inputs.audit-python
     runs-on: ubuntu-latest
 
     steps:
@@ -33,19 +40,48 @@ jobs:
         run: pip-audit
 
   container-scan:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build runtime image
+        if: inputs.candidate-commit == ''
         run: docker build -t sftpwarden:security -f docker/runtime/Dockerfile .
 
       - name: Build watcher image
+        if: inputs.candidate-commit == ''
         run: docker build -t sftpwarden-watcher:security -f docker/watcher/Dockerfile .
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: inputs.candidate-commit != ''
+        with:
+          name: candidate-images-${{ matrix.arch }}
+          path: candidate-images
+      - name: Verify and scan the tested images without rebuilding
+        if: inputs.candidate-commit != ''
+        env:
+          CANDIDATE_COMMIT: ${{ inputs.candidate-commit }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          python tools/release_artifacts.py verify candidate-images --commit "$CANDIDATE_COMMIT"
+          docker load --input "candidate-images/runtime-$ARCH.tar.gz"
+          docker load --input "candidate-images/watcher-$ARCH.tar.gz"
+          docker tag "sftpwarden-candidate:$CANDIDATE_COMMIT-$ARCH" sftpwarden:security
+          docker tag "sftpwarden-watcher-candidate:$CANDIDATE_COMMIT-$ARCH" sftpwarden-watcher:security
+          cp candidate-images/runtime-sbom.spdx.json candidate-images/watcher-sbom.spdx.json .
 
       - name: Scan runtime image
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -69,12 +105,14 @@ jobs:
           ignore-unfixed: false
 
       - name: Generate runtime SBOM
+        if: inputs.candidate-commit == ''
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           image: sftpwarden:security
           output-file: runtime-sbom.spdx.json
 
       - name: Generate watcher SBOM
+        if: inputs.candidate-commit == ''
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           image: sftpwarden-watcher:security
@@ -100,7 +138,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: security-reports
+          name: security-reports-${{ matrix.arch }}
           path: |
             runtime-sbom.spdx.json
             watcher-sbom.spdx.json
@@ -113,6 +151,10 @@ jobs:
     needs: container-scan
     if: always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
     permissions:
       contents: read
       security-events: write
@@ -120,42 +162,15 @@ jobs:
       - name: Download reports without executing contributor code
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: security-reports
+          name: security-reports-${{ matrix.arch }}
           path: reports
       - name: Upload runtime scan
         uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
           sarif_file: reports/trivy-runtime.sarif
-          category: trivy-runtime
+          category: trivy-runtime-${{ matrix.arch }}
       - name: Upload watcher scan
         uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
         with:
           sarif_file: reports/trivy-watcher.sarif
-          category: trivy-watcher
-
-  scorecard:
-    runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
-      id-token: write
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Run OpenSSF Scorecard
-        uses: ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc # v2.4.4
-        with:
-          results_file: scorecard.sarif
-          results_format: sarif
-          publish_results: true
-
-      - name: Upload Scorecard results
-        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
-        with:
-          sarif_file: scorecard.sarif
+          category: trivy-watcher-${{ matrix.arch }}

@@ -195,12 +195,25 @@ publication. Promotion must use those same artifacts and recorded hashes.
 Do not rebuild a validated candidate during publication or overwrite a conflicting
 versioned artifact.
 
+Documentation-only diffs run Sphinx without the Python or infrastructure test
+matrix. Code, dependency, test and workflow changes require full validation.
+For a `dev` → `main` PR or the subsequent main push, CI can reuse a successful
+dev push candidate whose complete Git tree matches. It checks the validation
+receipt and artifact hashes, then refreshes the security scans without rebuilding
+the images. Missing or expired evidence requires full validation; a matching
+failed candidate blocks promotion. Manual release-workflow runs force full
+validation. Require `Release aggregate` in branch protection, since individual
+jobs intentionally skip when another validation route applies.
+
+See the root [contribution guide](https://github.com/kithuto/sftpwarden/blob/dev/CONTRIBUTING.md)
+for the exact routing, wait limits and trusted-candidate requirements.
+
 The deployment release group rehearses image/index and chart publication in a
 disposable registry, including safe retries and conflicting-artifact rejection.
 If production publication fails partway through, rerun the failed jobs from that
-same workflow run so they reuse its verified artifacts. Starting a new run
-rebuilds candidates and may correctly reject bytes that differ from files already
-published under that version.
+same workflow run so they reuse its verified artifacts. Starting a new run may
+rebuild candidates if trusted dev artifacts are unavailable, and may correctly
+reject bytes that differ from files already published under that version.
 
 Review dependency and container scans, SBOM results and required platform gates.
 Missing infrastructure or skipped checks are unverified scope, not passing

@@ -59,24 +59,6 @@ jobs:
           python -I tools/run_release_gates.py load --junitxml=load-results.xml -o junit_family=xunit1 -vv --tb=short
       - name: Verify watcher artifact
         run: docker run --rm --entrypoint sftpwarden "$SFTPWARDEN_RELEASE_WATCHER_IMAGE" --version
-      - name: Scan the tested runtime image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ${{ env.SFTPWARDEN_RELEASE_RUNTIME_IMAGE }}
-          format: json
-          output: runtime-scan.json
-          severity: HIGH,CRITICAL
-          ignore-unfixed: false
-          exit-code: "1"
-      - name: Scan the tested watcher image
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ${{ env.SFTPWARDEN_RELEASE_WATCHER_IMAGE }}
-          format: json
-          output: watcher-scan.json
-          severity: HIGH,CRITICAL
-          ignore-unfixed: false
-          exit-code: "1"
       - name: Record the tested runtime dependency inventory
         uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
@@ -100,7 +82,7 @@ jobs:
           docker save "$SFTPWARDEN_RELEASE_RUNTIME_IMAGE" | gzip -n > "candidate-images/runtime-$ARCH.tar.gz"
           docker save "$SFTPWARDEN_RELEASE_WATCHER_IMAGE" | gzip -n > "candidate-images/watcher-$ARCH.tar.gz"
           docker image inspect "$SFTPWARDEN_RELEASE_RUNTIME_IMAGE" "$SFTPWARDEN_RELEASE_WATCHER_IMAGE" > candidate-images/image-identities.json
-          cp runtime-scan.json watcher-scan.json runtime-sbom.spdx.json watcher-sbom.spdx.json load-results.xml candidate-images/
+          cp runtime-sbom.spdx.json watcher-sbom.spdx.json load-results.xml candidate-images/
           python tools/release_artifacts.py record candidate-images --commit "$GITHUB_SHA" --version "$VERSION"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -114,5 +96,3 @@ jobs:
           name: candidate-failure-${{ matrix.arch }}
           path: |
             load-results.xml
-            runtime-scan.json
-            watcher-scan.json

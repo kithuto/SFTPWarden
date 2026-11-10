@@ -112,20 +112,48 @@ The ordinary coverage gate requires at least 95% line coverage, with a project
 target above 97%. Add meaningful behavior and failure-path tests; do not
 exclude executable code to meet the gate.
 
-The release workflow runs on pushes and pull requests to `dev` and `main`. It
-builds candidate packages, chart and native images, records their hashes and
-validates those artifacts before publication. Configure branch protection to
-require the `Release aggregate` check before promotion. Failed or missing gates
-block publication. Versioned artifact conflicts are errors, not permission
-to overwrite an existing release. Publishing is restricted to the gated `main`
-release path; contributor PRs target `dev`. Never include local planning files,
-temporary credentials, backup archives or unredacted diagnostics in commits.
+The release workflow runs on pushes and pull requests to `dev` and `main`, but
+selects the work from the complete Git diff:
 
-The security workflow scans each container image once and retains findings of
-every severity in JSON and SARIF reports. A separate check blocks HIGH/CRITICAL
+- Documentation-only changes build Sphinx without running Python tests, building
+  images or starting Docker/Kubernetes environments. This covers `docs/`, the
+  root documentation files. For a PR, the complete diff against its target must
+  be documentation-only, not just its latest commit. Unknown paths require full
+  validation; changing dependencies, tests or workflows does too.
+- Code changes build candidate packages, chart and native images, record their
+  hashes and validate those artifacts. The matrix covers Linux, macOS and Windows
+  with Python 3.11–3.14, plus the applicable external release gates.
+- A same-repository `dev` → `main` PR, and the subsequent push to `main`, can reuse
+  a successful `dev` push candidate with an identical Git tree. This compares
+  all tracked files, including documentation, tests and workflows. The source
+  run must retain its full-validation receipt and all candidate artifacts.
+  Checksums and provenance are verified again; Python dependencies and both
+  architectures' container images receive fresh security scans.
+
+If an identical dev candidate is still running, promotion waits up to 35 minutes
+instead of repeating its tests. A failed/cancelled candidate blocks promotion;
+an absent candidate or missing/expired artifacts require full validation.
+Manual release-workflow runs always force full validation. PR results and fork
+artifacts are never used as trusted promotion evidence. The first run after
+changing this workflow must establish a new fully validated candidate.
+
+Configure branch protection to require the `Release aggregate` check rather than
+individual jobs that intentionally skip on other routes. Failed or missing
+required gates block publication. Versioned artifact conflicts are errors, not
+permission to overwrite an existing release. Publishing is restricted to the
+gated `main` release path; contributor PRs target `dev`. Reused artifacts retain
+their original source commit and bytes; the release tag targets the main commit.
+Never include local planning files, temporary credentials, backup archives or
+unredacted diagnostics in commits.
+
+The security workflow scans the tested image archives without rebuilding them
+and retains findings of every severity in JSON and SARIF reports. A separate check blocks HIGH/CRITICAL
 findings, including those without a fix; missing or unreadable reports also fail.
 Lower-severity findings remain visible for remediation. Do not suppress an
 advisory to make CI pass: update the affected dependency when a fix is available.
+Scheduled/manual security scans build current source images independently.
+Scorecard runs on a schedule or manually, not on every PR. Pages publishes only
+from `main` when its documentation inputs change.
 
 The deployment release group rehearses image, multi-architecture index and Helm
 chart publication against a disposable loopback registry. It verifies readback,
@@ -133,8 +161,9 @@ safe retries and refusal to overwrite conflicting artifacts. Actual publishing
 still requires the repository's GHCR permissions, the PyPI trusted publisher
 for `release.yml` with environment `pypi`, and Pages access for `main`.
 If publication fails partway through, rerun only the failed jobs in the same
-workflow run to reuse its verified candidate artifacts. A new run rebuilds the
-candidates and may correctly refuse to replace already published bytes.
+workflow run to reuse its verified candidate artifacts. A new run may have to
+rebuild if the trusted dev artifacts are unavailable, and may correctly refuse
+to replace already published bytes.
 
 Build docs:
 

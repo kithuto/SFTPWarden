@@ -93,18 +93,20 @@ def test_docs_workflow_only_builds_and_deploys_from_main() -> None:
     assert "branches: [dev]" not in text
     assert "README.md" in text
     assert "docs/**" in text
-    assert ".github/workflows/docs.yml" not in text
+    assert ".github/workflows/docs.yml" in text
+    assert "CHANGELOG.md" in text
     assert_uses_action(text, "actions/upload-pages-artifact")
     assert_uses_action(text, "actions/deploy-pages")
 
 
 def test_security_scans_contributors_without_write_credentials() -> None:
     workflow = workflow_data("security.yml")
-    assert set(workflow["on"]["pull_request"]["branches"]) == {"dev", "main"}
+    assert "pull_request" not in workflow["on"]
+    assert "workflow_call" in workflow["on"]
     assert {"schedule", "workflow_dispatch"} <= workflow["on"].keys()
     assert "pull_request_target" not in workflow["on"]
     scan = workflow["jobs"]["container-scan"]
-    assert scan["permissions"] == {"contents": "read"}
+    assert scan["permissions"] == {"contents": "read", "actions": "read"}
     scans = [step for step in scan["steps"] if "trivy-action@" in step.get("uses", "")]
     assert len(scans) == 2
     # Scan once without discarding lower-severity findings. The separate gate
@@ -131,6 +133,64 @@ def test_security_scans_contributors_without_write_credentials() -> None:
     assert not any(
         "run" in step or "checkout@" in step.get("uses", "") for step in publisher["steps"]
     )
+
+
+def test_docs_and_promotion_routes_do_not_repeat_the_full_candidate_graph() -> None:
+    jobs = workflow_data("release.yml")["jobs"]
+    for name in ("ordinary", "packages"):
+        assert jobs[name]["if"] == "needs.version.outputs.mode == 'full'"
+        assert "version" in jobs[name]["needs"]
+    assert jobs["documentation"]["if"] == "needs.version.outputs.mode == 'docs'"
+    docs_commands = str(jobs["documentation"]["steps"])
+    assert "sphinx" in docs_commands
+    assert all(command not in docs_commands for command in ("pytest", "docker", "kind", "tox"))
+    assert jobs["reuse"]["if"] == "needs.version.outputs.mode == 'reuse'"
+    assert jobs["reuse"]["uses"] == "./.github/workflows/reuse.yml"
+    assert jobs["security"]["needs"] == ["version", "images", "reuse"]
+    assert jobs["security"]["uses"] == "./.github/workflows/security.yml"
+    assert (
+        jobs["security"]["with"]["candidate-commit"]
+        == "${{ needs.version.outputs.candidate_commit }}"
+    )
+    assert jobs["version"]["permissions"] == {"contents": "read", "actions": "read"}
+    assert "ci_candidate.py plan" in str(jobs["version"]["steps"])
+    assert "candidate-validation" in str(jobs["gate"]["steps"])
+    for name in (
+        "publication-preflight",
+        "publish-python",
+        "publish-images",
+        "publish-chart",
+        "published-smoke",
+        "complete-release",
+    ):
+        assert (
+            jobs[name]["env"]["CANDIDATE_COMMIT"] == "${{ needs.version.outputs.candidate_commit }}"
+        )
+        assert 'verify dist --commit "$GITHUB_SHA"' not in str(jobs[name])
+    assert "sftpwarden-candidate:$CANDIDATE_COMMIT-$ARCH" in str(jobs["publish-images"])
+    assert '"$GITHUB_SHA"' in str(jobs["complete-release"])
+
+
+def test_reused_artifacts_keep_original_provenance_and_are_rescanned_once() -> None:
+    job = workflow_data("reuse.yml")["jobs"]["artifacts"]
+    assert set(job["strategy"]["matrix"]["artifact"]) == {
+        "candidate-packages",
+        "candidate-images-amd64",
+        "candidate-images-arm64",
+    }
+    downloads = [s for s in job["steps"] if "download-artifact@" in s.get("uses", "")]
+    assert all(s["with"]["run-id"] == "${{ inputs.source-run-id }}" for s in downloads)
+    commands = str(job["steps"])
+    assert "ci_candidate.py verify" in commands
+    assert 'release_artifacts.py verify candidate --commit "$CANDIDATE_COMMIT"' in commands
+    assert "docker build" not in commands and "python -m build" not in commands
+    scans = workflow_data("security.yml")["jobs"]["container-scan"]
+    assert {m["arch"] for m in scans["strategy"]["matrix"]["include"]} == {"amd64", "arm64"}
+    builds = [s for s in scans["steps"] if "docker build" in s.get("run", "")]
+    assert len(builds) == 2 and all(s["if"] == "inputs.candidate-commit == ''" for s in builds)
+    assert "docker load" in str(scans["steps"])
+    assert "trivy-action@" not in workflow_text("docker.yml")
+    assert set(workflow_data("scorecard.yml")["on"]) == {"schedule", "workflow_dispatch"}
 
 
 def test_candidate_images_are_built_once_and_tested_on_native_platforms() -> None:
@@ -182,15 +242,19 @@ def test_publication_depends_on_complete_candidate_graph_and_never_rebuilds() ->
     assert "dist/sftpwarden-$VERSION.tar.gz[mysql,postgres,mongodb]" in sdist["run"]
     assert "-I -m pytest tests/release_validation/test_local_user_workflows.py" in sdist["run"]
     assert set(jobs["gate"]["needs"]) == {
+        "version",
         "ordinary",
         "packages",
         "images",
         "contracts",
         "external",
         "cluster",
+        "documentation",
+        "reuse",
+        "security",
     }
     assert jobs["gate"]["if"] == "always()"
-    assert 'item["result"] != "success"' in jobs["gate"]["steps"][0]["run"]
+    assert "ci_candidate.py gate" in str(jobs["gate"]["steps"])
     preflight = jobs["publication-preflight"]
     assert set(preflight["needs"]) == {"version", "gate"}
     assert "github.ref == 'refs/heads/main'" in preflight["if"]

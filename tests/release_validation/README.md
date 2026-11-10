@@ -22,6 +22,16 @@ variables documented in `conftest.py` and the watcher SSH module.
 The package gate also installs the candidate sdist in an isolated environment and
 exercises local user, provider and recovery workflows through that installation.
 
+CI runs these gates when a full candidate needs validation. Documentation-only
+changes run Sphinx instead. Promotion from `dev` to `main` can reuse a completed,
+successful dev push with an identical Git tree, including tests and workflows.
+It verifies the full-validation receipt, source run, original artifact hashes
+and version, then scans the same images again with current vulnerability data.
+Missing or expired evidence requires full validation; a matching failed or
+cancelled candidate blocks promotion. No external test is reported as newly run
+when its result was reused. See [CONTRIBUTING.md](../../CONTRIBUTING.md) for routing,
+branch protection and retry behavior.
+
 The infrastructure-free deployment-preview contract substitutes deterministic
 read-only version and cluster probes while exercising the installed CLI. It checks
 the reported source version, generated operations and unchanged input files.

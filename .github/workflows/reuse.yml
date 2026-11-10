@@ -1,0 +1,65 @@
+name: Reuse validated candidate
+
+on:
+  workflow_call:
+    inputs:
+      source-run-id:
+        required: true
+        type: string
+      candidate-commit:
+        required: true
+        type: string
+      tree:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  artifacts:
+    name: Verify and reuse ${{ matrix.artifact }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        artifact: [candidate-packages, candidate-images-amd64, candidate-images-arm64]
+    env:
+      CANDIDATE_COMMIT: ${{ inputs.candidate-commit }}
+      CI_TREE: ${{ inputs.tree }}
+      SOURCE_RUN_ID: ${{ inputs.source-run-id }}
+      CANDIDATE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-validation
+          path: candidate-proof
+          run-id: ${{ inputs.source-run-id }}
+          github-token: ${{ github.token }}
+      - name: Verify full-validation provenance
+        run: python tools/ci_candidate.py verify
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.artifact }}
+          path: candidate
+          run-id: ${{ inputs.source-run-id }}
+          github-token: ${{ github.token }}
+      - name: Verify original bytes and version without rebuilding
+        run: |
+          python tools/release_artifacts.py verify candidate --commit "$CANDIDATE_COMMIT"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          manifest = json.loads(Path("candidate/artifact-manifest.json").read_text())
+          assert manifest["version"] == os.environ["CANDIDATE_VERSION"], "Candidate version changed"
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.artifact }}
+          path: candidate/*
+          if-no-files-found: error
