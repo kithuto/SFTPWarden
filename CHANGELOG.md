@@ -130,6 +130,9 @@ these scheduled deliveries.
   input validation and the existing provider fingerprint format.
 - Release packages, chart and native images pass one artifact-based promotion gate.
   Existing conflicting versioned artifacts cannot be silently overwritten.
+  Rehearse image, multi-architecture index and chart publication in a disposable
+  registry; recognize missing GHCR versions and verify image identity with both
+  classic and containerd Docker stores.
 - Check bounded load before expensive release checks, reuse candidate builds and
   run independent external groups concurrently without duplicating CLI contracts.
   Disposable container cleanup removes anonymous test volumes and preserves

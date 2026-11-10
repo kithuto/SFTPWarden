@@ -29,6 +29,7 @@ EXTERNAL_GROUPS = {
         "test_upgrade_recovery.py",
         "test_context_cleanup.py",
         "test_management_updates.py",
+        "test_publication.py",
     },
     "delivery": {
         "test_watcher_ssh.py",

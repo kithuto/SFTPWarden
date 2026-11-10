@@ -195,6 +195,13 @@ publication. Promotion must use those same artifacts and recorded hashes.
 Do not rebuild a validated candidate during publication or overwrite a conflicting
 versioned artifact.
 
+The deployment release group rehearses image/index and chart publication in a
+disposable registry, including safe retries and conflicting-artifact rejection.
+If production publication fails partway through, rerun the failed jobs from that
+same workflow run so they reuse its verified artifacts. Starting a new run
+rebuilds candidates and may correctly reject bytes that differ from files already
+published under that version.
+
 Review dependency and container scans, SBOM results and required platform gates.
 Missing infrastructure or skipped checks are unverified scope, not passing
 evidence. Keep release-specific results in the active release plan.

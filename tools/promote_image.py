@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
+import tarfile
+import tempfile
+from pathlib import Path
+
+from registry_errors import manifest_missing
 
 
 def run(command: list[str]) -> str:
@@ -25,18 +31,40 @@ def remote_manifest(reference: str) -> dict | None:
         check=False,
     )
     if result.returncode:
-        diagnostic = result.stderr.lower()
-        if not any(word in diagnostic for word in ("denied", "unauthorized", "forbidden")) and (
-            "manifest unknown" in diagnostic or "manifest_unknown" in diagnostic
-        ):
+        if manifest_missing(result.stderr, reference):
             return None
         raise RuntimeError("Registry manifest inspection failed; absence was not established.")
     return json.loads(result.stdout)
 
 
+def local_config_digest(source: str) -> str:
+    """Resolve config identity for classic and containerd Docker image stores."""
+    inspected = json.loads(run(["docker", "image", "inspect", "--format", "{{json .}}", source]))
+    identity = inspected["Id"]
+    # Containerd-backed stores can report the manifest digest as the image ID.
+    # Compare the config bytes, which survive registry layer compression.
+    if (inspected.get("Descriptor") or {}).get("digest") != identity:
+        return identity
+    with tempfile.TemporaryDirectory(prefix="sftpwarden-image-identity-") as directory:
+        archive = Path(directory) / "image.tar"
+        run(["docker", "image", "save", "--output", str(archive), source])
+        with tarfile.open(archive) as saved:
+            manifest = saved.extractfile("manifest.json")
+            if manifest is None:
+                raise RuntimeError("Saved candidate image has no manifest.")
+            entries = json.load(manifest)
+            if len(entries) != 1:
+                raise RuntimeError("Expected exactly one candidate image in the saved archive.")
+            config = saved.extractfile(entries[0]["Config"])
+            if config is None:
+                raise RuntimeError("Saved candidate image has no configuration.")
+            with config:
+                return "sha256:" + hashlib.file_digest(config, "sha256").hexdigest()
+
+
 def promote(source: str, destination: str) -> None:
     """Publish only a missing architecture tag, then compare its config identity."""
-    identity = run(["docker", "image", "inspect", "--format", "{{.Id}}", source]).strip()
+    identity = local_config_digest(source)
     previous = remote_manifest(destination)
     if previous is not None:
         if previous.get("config", {}).get("digest") != identity:

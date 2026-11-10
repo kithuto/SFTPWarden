@@ -76,6 +76,12 @@ convergence budget is 25 seconds with a 10-second sync interval. It records timi
 environment and process/resource samples. These are reference workloads, not
 universal capacity guarantees. All test resources are removed afterwards.
 
+The deployment group also rehearses publication against an owned loopback OCI
+registry: native image manifests, a two-platform index, `latest`, and the Helm
+chart. It checks readback, retries and conflicting-byte rejection without writing
+to GHCR or PyPI. Registry containers, anonymous volumes and temporary image tags
+are removed afterward; existing registry images are preserved.
+
 This folder contains opt-in end-to-end tests for major release validation. These
 tests run SFTPWarden like a real operator: subprocess CLI calls, isolated
 `SFTPWARDEN_HOME`, temporary project roots, real files, real Docker Compose,

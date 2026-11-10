@@ -121,6 +121,15 @@ to overwrite an existing release. Publishing is restricted to the gated `main`
 release path; contributor PRs target `dev`. Never include local planning files,
 temporary credentials, backup archives or unredacted diagnostics in commits.
 
+The deployment release group rehearses image, multi-architecture index and Helm
+chart publication against a disposable loopback registry. It verifies readback,
+safe retries and refusal to overwrite conflicting artifacts. Actual publishing
+still requires the repository's GHCR permissions, the PyPI trusted publisher
+for `release.yml` with environment `pypi`, and Pages access for `main`.
+If publication fails partway through, rerun only the failed jobs in the same
+workflow run to reuse its verified candidate artifacts. A new run rebuilds the
+candidates and may correctly refuse to replace already published bytes.
+
 Build docs:
 
 ```bash

@@ -8,6 +8,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from registry_errors import manifest_missing
+
 
 def digest(path: Path) -> str:
     """Hash the complete compressed chart bytes, not merely its version metadata."""
@@ -25,10 +27,7 @@ def pull(reference: str, version: str, root: Path) -> Path | None:
         check=False,
     )
     if result.returncode:
-        diagnostic = result.stderr.lower()
-        if not any(word in diagnostic for word in ("unauthorized", "denied", "forbidden")) and any(
-            word in diagnostic for word in ("manifest unknown", "manifest_unknown", "404 not found")
-        ):
+        if manifest_missing(result.stderr, f"{reference}:{version}"):
             return None
         raise RuntimeError("Chart registry inspection failed; absence was not established.")
     return root / f"sftpwarden-{version}.tgz"

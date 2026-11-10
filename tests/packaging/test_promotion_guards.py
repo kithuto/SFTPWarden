@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import io
 import json
 import subprocess
+import tarfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,6 +39,8 @@ def promotion_tools(monkeypatch):
         "forbidden",
         "DNS host not found",
         "connection refused",
+        "ERROR: registry.invalid/another:1.4.0: not found",
+        "ERROR: registry.invalid/test:1.4.0: not found\nunauthorized",
     ],
 )
 def test_registry_failure_is_not_absence(promotion_tools, monkeypatch, diagnostic):
@@ -48,6 +52,35 @@ def test_registry_failure_is_not_absence(promotion_tools, monkeypatch, diagnosti
         module.remote_manifest("registry.invalid/test:1.4.0")
 
 
+@pytest.mark.parametrize("kind", ["image", "chart"])
+@pytest.mark.parametrize("missing", [True, False])
+def test_real_registry_not_found_diagnostics(promotion_tools, monkeypatch, tmp_path, kind, missing):
+    reference = "ghcr.io/kithuto/sftpwarden:1.4.0"
+    diagnostic = (
+        f"ERROR: {reference}: not found\n"
+        if kind == "image"
+        else f'Error: failed to perform "FetchReference" on source: {reference}: not found\n'
+    )
+    if not missing:
+        diagnostic = "failed to authorize: " + diagnostic
+    monkeypatch.setattr(
+        subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 1, "", diagnostic)
+    )
+
+    def inspect():
+        if kind == "image":
+            return promotion_tools.promote_image.remote_manifest(reference)
+        return promotion_tools.promote_chart.pull(
+            "oci://ghcr.io/kithuto/sftpwarden", "1.4.0", tmp_path
+        )
+
+    if missing:
+        assert inspect() is None
+    else:
+        with pytest.raises(RuntimeError, match="absence was not established"):
+            inspect()
+
+
 @pytest.mark.parametrize("existing", ["same", "different", "missing", "bad-readback"])
 def test_versioned_image_conflicts_and_partial_publication(promotion_tools, monkeypatch, existing):
     module = promotion_tools.promote_image
@@ -55,7 +88,9 @@ def test_versioned_image_conflicts_and_partial_publication(promotion_tools, monk
 
     def run(command):
         commands.append(command)
-        return "sha256:candidate" if command[1:3] == ["image", "inspect"] else ""
+        return (
+            json.dumps({"Id": "sha256:candidate"}) if command[1:3] == ["image", "inspect"] else ""
+        )
 
     manifests = {
         "same": [{"config": {"digest": "sha256:candidate"}}],
@@ -73,6 +108,40 @@ def test_versioned_image_conflicts_and_partial_publication(promotion_tools, monk
     assert any(command[1] == "push" for command in commands) == (
         existing in {"missing", "bad-readback"}
     )
+
+
+@pytest.mark.parametrize("containerd", [False, True])
+def test_config_identity_supports_both_docker_stores_and_removes_archive(
+    promotion_tools, monkeypatch, containerd
+):
+    config = b'{"architecture":"arm64","os":"linux"}'
+    expected = "sha256:" + hashlib.sha256(config).hexdigest()
+    archives = []
+
+    def run(command):
+        if command[2] == "inspect":
+            return json.dumps(
+                {"Id": "sha256:manifest", "Descriptor": {"digest": "sha256:manifest"}}
+                if containerd
+                else {"Id": expected}
+            )
+        assert containerd and command[2] == "save"
+        archive = Path(command[command.index("--output") + 1])
+        archives.append(archive)
+        with tarfile.open(archive, "w") as saved:
+            for name, data in (
+                ("manifest.json", b'[{"Config":"config.json"}]'),
+                ("config.json", config),
+            ):
+                member = tarfile.TarInfo(name)
+                member.size = len(data)
+                saved.addfile(member, io.BytesIO(data))
+        return ""
+
+    monkeypatch.setattr(promotion_tools.promote_image, "run", run)
+    assert promotion_tools.promote_image.local_config_digest("candidate") == expected
+    assert len(archives) == int(containerd)
+    assert all(not archive.parent.exists() for archive in archives)
 
 
 @pytest.mark.parametrize(
