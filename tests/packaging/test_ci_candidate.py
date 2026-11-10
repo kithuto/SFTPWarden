@@ -108,12 +108,18 @@ def install_api(monkeypatch, routing, runs, *, expired=None, missing=None):
                     if name != missing
                 ]
             }
+        if "event=push&" in path:
+            return {"workflow_runs": [run for run in runs if run["event"] == "push"]}
         return {"workflow_runs": runs}
 
     monkeypatch.setattr(routing, "request", request)
 
 
-def test_only_complete_identical_dev_candidate_can_be_reused(routing, candidate, monkeypatch):
+@pytest.mark.parametrize("event", ["push", "workflow_dispatch"])
+def test_only_complete_identical_dev_candidate_can_be_reused(
+    routing, candidate, monkeypatch, event
+):
+    candidate["event"] = event
     install_api(monkeypatch, routing, [candidate])
     assert routing.reusable_run("test/repo", "b" * 40, 99) == candidate
     assert routing.reusable_run("test/repo", "c" * 40, 99) is None

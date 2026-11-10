@@ -124,7 +124,8 @@ selects the work from the complete Git diff:
   hashes and validate those artifacts. The matrix covers Linux, macOS and Windows
   with Python 3.11–3.14, plus the applicable external release gates.
 - A same-repository `dev` → `main` PR, and the subsequent push to `main`, can reuse
-  a successful `dev` push candidate with an identical Git tree. This compares
+  a successful `dev` push or manual validation candidate with an identical Git
+  tree. This compares
   all tracked files, including documentation, tests and workflows. The source
   run must retain its full-validation receipt and all candidate artifacts.
   Checksums and provenance are verified again; Python dependencies and both
@@ -133,7 +134,10 @@ selects the work from the complete Git diff:
 If an identical dev candidate is still running, promotion waits up to 35 minutes
 instead of repeating its tests. A failed/cancelled candidate blocks promotion;
 an absent candidate or missing/expired artifacts require full validation.
-Manual validation runs force full validation. PR results and fork
+Manual validation runs force full validation. A successful manual run on `dev`
+can establish a reusable candidate after documentation changes supersede an
+in-progress code validation. Its complete receipt and artifacts are still required.
+PR results and fork
 artifacts are never used as trusted promotion evidence. The first run after
 changing this workflow must establish a new fully validated candidate.
 

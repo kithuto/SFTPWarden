@@ -198,7 +198,8 @@ versioned artifact.
 Documentation-only diffs run Sphinx without the Python or infrastructure test
 matrix. Code, dependency, test and workflow changes require full validation.
 For a `dev` → `main` PR or the subsequent main push, CI can reuse a successful
-dev push candidate whose complete Git tree matches. It checks the validation
+dev push or manual validation candidate whose complete Git tree matches. It checks
+the validation
 receipt and artifact hashes, then refreshes the security scans without rebuilding
 the images. Missing or expired evidence requires full validation; a matching
 failed candidate blocks promotion. Manual validation runs force full

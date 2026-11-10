@@ -97,16 +97,16 @@ def request(repository: str, path: str) -> dict:
 
 
 def reusable_run(repository: str, tree: str, current_run: int) -> dict | None:
-    """Trust only this repository's dev push workflow, never fork/PR artifacts."""
+    """Trust complete dev push/manual validations, never fork/PR artifacts."""
     for page in range(1, 6):
         runs = request(
             repository,
-            f"actions/workflows/release.yml/runs?branch=dev&event=push&per_page=100&page={page}",
+            f"actions/workflows/release.yml/runs?branch=dev&per_page=100&page={page}",
         )["workflow_runs"]
         for run in runs:
             if (
                 run["id"] == current_run
-                or run.get("event") != "push"
+                or run.get("event") not in {"push", "workflow_dispatch"}
                 or run.get("head_branch") != "dev"
                 or run.get("path") != ".github/workflows/release.yml"
                 or run.get("head_repository", {}).get("full_name", "").lower() != repository.lower()
