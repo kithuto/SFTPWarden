@@ -12,8 +12,10 @@ from sftpwarden.cli_commands.deploy_schema import (
     apply_provider_schema_before_deploy,
     provider_schema_deploy_text,
 )
+from sftpwarden.cli_commands.deploy_upgrade import prepare_upgrade
 from sftpwarden.cli_commands.errors import handle_error
 from sftpwarden.cli_commands.output import print_json
+from sftpwarden.cli_commands.update_notice import notify_update
 from sftpwarden.config import KubernetesMode, SFTPWardenConfig, load_config
 from sftpwarden.contexts import ContextEntry, resolve_context
 from sftpwarden.render.kubernetes import (
@@ -26,9 +28,12 @@ from sftpwarden.services.deploy import (
     kubernetes_deployment_plan,
     translate_command_failure,
 )
+from sftpwarden.services.deployment_upgrade import begin_upgrade, complete_upgrade
 from sftpwarden.system.commands import run
 from sftpwarden.utils.console import console, print_info, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
+from sftpwarden.utils.paths import contexts_path
+from sftpwarden.utils.state_transactions import serialized_state
 
 
 class KubernetesCheck(TypedDict):
@@ -56,6 +61,7 @@ def kube_render(
 
 
 @kube_app.command("apply")
+@serialized_state(contexts_path)
 def kube_apply(
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
@@ -73,7 +79,19 @@ def kube_apply(
                 f"Context {entry.name} has no local sftpwarden.yaml.",
                 suggestion="Use a local or remote local-sync context.",
             )
-        schema_result = apply_provider_schema_before_deploy(entry, loaded, dry_run=dry_run, yes=yes)
+        upgrade = prepare_upgrade(
+            entry,
+            dry_run=dry_run,
+            yes=yes,
+            json_output=json_output,
+            kubernetes_mode=KubernetesMode.MANIFESTS,
+        )
+        if not dry_run:
+            begin_upgrade(entry, upgrade)
+            loaded = load_config(entry.config)
+        schema_result = apply_provider_schema_before_deploy(
+            entry, loaded, dry_run=dry_run, yes=True
+        )
         plan = kubernetes_deployment_plan(entry, loaded)
         if dry_run:
             if json_output:
@@ -81,6 +99,7 @@ def kube_apply(
                     {
                         "dry_run": True,
                         "plan": plan.as_dict(),
+                        "upgrade": upgrade.as_dict(),
                         "provider_schema": (
                             schema_result.as_dict() if schema_result is not None else None
                         ),
@@ -97,7 +116,7 @@ def kube_apply(
                 f"Context {entry.name} has no local root.",
                 suggestion="Use a local or remote local-sync context.",
             )
-        if schema_result and schema_result.changed:
+        if schema_result and schema_result.changed and not json_output:
             print_success(provider_schema_deploy_text(schema_result))
             if schema_result.backup_path:
                 console.print(f"Backup: {schema_result.backup_path}")
@@ -105,16 +124,19 @@ def kube_apply(
             result = apply_kubernetes_deployment(
                 entry, loaded, mode=KubernetesMode.MANIFESTS, runner=run
             )
+            upgraded = complete_upgrade(entry, upgrade)
         if json_output:
             print_json(
                 {
                     "dry_run": False,
                     "plan": plan.as_dict(),
                     "result": result,
+                    "upgrade": upgraded,
                 }
             )
             return
         print_success("Applied Kubernetes manifests.")
+        notify_update()
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -221,9 +243,13 @@ def kube_doctor(
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
     json_output: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    """Validate kubectl access, namespace, storage, secrets, probes and provider configuration."""
+    """Check kubectl access, namespace, host-key storage and configured storage class."""
     try:
         loaded = _load_config(context, None)
+        identity_kind = "secret" if loaded.kubernetes.host_keys_secret else "pvc"
+        identity_name = loaded.kubernetes.host_keys_secret or (
+            f"{kubernetes_resource_name(loaded.kubernetes.release)}-host-keys"
+        )
         checks = [
             _command_status(
                 kubectl_command(loaded, ["version", "--client"]), name="kubectl client"
@@ -235,10 +261,10 @@ def kube_doctor(
             _command_status(
                 kubectl_command(
                     loaded,
-                    ["get", "secret", f"{loaded.kubernetes.release}-host-keys"],
+                    ["get", identity_kind, identity_name],
                     namespace=loaded.kubernetes.namespace,
                 ),
-                name="host-keys secret",
+                name="host-keys secret" if identity_kind == "secret" else "host-keys PVC",
             ),
         ]
         if loaded.kubernetes.storage_class:

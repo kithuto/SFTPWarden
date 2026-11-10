@@ -1,47 +1,60 @@
 # SFTPWarden Examples
 
-These examples are guides for common SFTPWarden providers and deployment shapes.
-They are CLI-first on purpose: deployment artifacts are produced by
-`sftpwarden init`, `sftpwarden deploy`, or the dedicated Kubernetes and Helm
-commands, not maintained by hand in provider example folders.
+Choose one example and follow its steps in a new project directory. These guides
+target SFTPWarden 1.3.1 and use the CLI to generate deployment files.
 
-| Directory | Shows | Best fit |
-| --- | --- | --- |
-| `yaml/` | YAML file provider | Quick starts and small GitOps-style deployments |
-| `csv/` | CSV file provider | Spreadsheet-friendly user handoff |
-| `sqlite/` | SQLite provider | Small single-host deployments |
-| `mysql/` | MySQL provider | Existing MySQL-backed platforms |
-| `mariadb/` | MariaDB provider | MySQL-compatible MariaDB deployments |
-| `postgres/` | PostgreSQL provider | Production database-backed deployments |
-| `mongodb/` | MongoDB provider | Existing document databases |
-| `kubernetes/` | Kubernetes and Helm examples | Cluster deployments |
-| `remote-local-sync/` | Remote context with local source files | Managed remote Docker hosts |
-| `remote-only/` | Remote-only context | Existing remote projects |
-| `watcher-docker/` | Docker watcher installation | Hosts without a native watcher scheduler |
+If this is your first SFTP server, start with
+[Getting Started](../docs/getting-started.md). It installs the CLI, creates Alice
+with a password and then explains the recommended SSH key setup.
 
-Start new projects with `sftpwarden init`; it writes the right project config and
-generated deployment files for the selected provider. New projects use user
-schema v2 unless you pass `--user-schema 1` explicitly:
+## Choose an example
+
+| Directory | Use it for |
+| --- | --- |
+| [yaml](yaml/README.md) | The simplest file-based setup; YAML is the default. |
+| [csv](csv/README.md) | Account lists exchanged through spreadsheets. |
+| [sqlite](sqlite/README.md) | A small single-host database without an external server. |
+| [mysql](mysql/README.md) | An existing MySQL database. |
+| [mariadb](mariadb/README.md) | An existing MariaDB database. |
+| [postgres](postgres/README.md) | An existing PostgreSQL database. |
+| [mongodb](mongodb/README.md) | Accounts stored as MongoDB documents. |
+| [kubernetes](kubernetes/README.md) | Kubernetes manifests or Helm. |
+| [remote-local-sync](remote-local-sync/README.md) | Local project files and a remote Docker server. |
+| [remote-only](remote-only/README.md) | A project maintained on the remote server. |
+| [watcher-docker](watcher-docker/README.md) | Provider delivery through a Docker watcher. |
+
+## Start a project
+
+YAML needs no optional database package:
 
 ```bash
 mkdir -p ~/sftpwarden-yaml
 cd ~/sftpwarden-yaml
-sftpwarden init yaml-example --provider yaml --yes
-sftpwarden deploy --dry-run
+sftpwarden init yaml-example --yes
+sftpwarden config server.host 127.0.0.1
+sftpwarden user create alice --no-refresh
 sftpwarden deploy
 ```
 
-Use checked-out example folders as reference material. YAML and CSV examples can
-also be registered and dry-run directly:
+Init uses schema v2 with named keys. Use `--provider TYPE` to override the
+provider for one project or `sftpwarden config default-provider TYPE` to change
+the default for future projects.
+
+## Use checked-out files as references
+
+The YAML and CSV files illustrate storage formats. Their sample credentials
+must be replaced before use; the public-only example keys have no available
+private keys. Validate a configuration from the repository root with:
 
 ```bash
-cd examples/yaml
-sftpwarden validate --config sftpwarden.yaml
-sftpwarden context add yaml-example --root . --yes
-sftpwarden deploy --context yaml-example --dry-run
+sftpwarden validate --config examples/yaml/sftpwarden.yaml
 ```
 
-Database examples require the matching optional dependency and a real DSN
-environment variable. SQLite projects should normally be created with
-`sftpwarden init --provider sqlite` so SFTPWarden creates the SQLite provider
-database for you.
+Validation checks configuration and paths. It does not prove database
+connectivity, valid credentials or a running SFTP service. Database examples need
+real infrastructure and the matching extra. Use `init --provider sqlite` to
+create a real SQLite database before attempting provider operations.
+
+For verification, each deployment should pass health and an authenticated file
+transfer. See [Providers](../docs/providers.md) for formats and
+[Operations](../docs/operations.md) for activation rules.

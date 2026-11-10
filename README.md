@@ -7,727 +7,270 @@
 </p>
 
 <p align="center">
-  Container-native SFTP for teams that want a small, auditable OpenSSH runtime with
-  declarative users, predictable Compose/Kubernetes deployment, and a CLI that
-  works the same locally, on remote hosts, and in clusters.
+  Run an SFTP server in a container and manage its users from the command line.
 </p>
 
-<p align="center">
-  <a href="#key-features">Key Features</a>
-  &nbsp;·&nbsp;
-  <a href="#installation">Installation</a>
-  &nbsp;·&nbsp;
-  <a href="#5-minute-quick-start">Quick Start</a>
-  &nbsp;·&nbsp;
-  <a href="#deployment-choices">Deployment</a>
-  &nbsp;·&nbsp;
-  <a href="#providers">Providers</a>
-  &nbsp;·&nbsp;
-  <a href="#documentation">Docs</a>
-  &nbsp;·&nbsp;
-  <a href="#contributing">Contributing</a>
-</p>
+SFTPWarden helps you set up a server for transferring files over SSH, control who
+can connect and keep user files and server identity across container
+replacements. OpenSSH handles the file transfers; SFTPWarden manages the users,
+configuration and deployment.
 
----
+**Keep SFTP users in sync automatically.** Add or update accounts through the CLI
+or directly in your YAML file, database or other configured provider. SFTPWarden
+applies the user changes available to the running server, so you can grant access
+whenever it is needed without rebuilding the image or restarting the server.
+See [automatic user synchronization](docs/operations.md#automatic-user-synchronization)
+for timing and deployment-specific delivery.
 
-SFTPWarden runs OpenSSH in a container and keeps users, host keys, data, and runtime
-state outside the image. You manage environments with `sftpwarden`, and the runtime
-keeps Linux users synchronized from YAML, CSV, SQLite, MySQL, MariaDB,
-PostgreSQL, or MongoDB.
+Use it for a team upload server, an automated file exchange or a local SFTP
+environment for development. Start with Docker Compose and a YAML file of users.
+Remote servers, database-backed users and Kubernetes are available when your
+environment needs them.
+
+This documentation covers **SFTPWarden 1.3.1**. If you are upgrading an existing
+installation, read the [recovery and upgrade guide](docs/recovery.md) first.
 
 ## Table of Contents
 
 - [Key Features](#key-features)
 - [Installation](#installation)
 - [Shell Autocomplete](#shell-autocomplete)
-- [5-Minute Quick Start](#5-minute-quick-start)
+- [Quick Start](#quick-start)
 - [Deployment Choices](#deployment-choices)
 - [Project Files](#project-files)
 - [User Management](#user-management)
 - [Providers](#providers)
 - [Operations](#operations)
+- [Updating](#updating)
 - [Backup and Restore](#backup-and-restore)
 - [Security](#security)
 - [Documentation](#documentation)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
 
----
-
 ## Key Features
 
-- **Fast adoption for real SFTP needs:** create a local, remote, or Kubernetes
-  SFTP environment with `sftpwarden init`, add users, and deploy without
-  hand-writing OpenSSH container plumbing.
-- **Declarative user sources:** manage accounts from YAML, CSV, SQLite, MySQL,
-  MariaDB, PostgreSQL, or MongoDB, so small teams can start with files and larger
-  systems can use databases.
-- **Safe user isolation:** every SFTP user is forced into OpenSSH `internal-sftp`
-  and isolated under `/data/<username>` with chroot-oriented defaults.
-- **Container-native operations:** generated Compose files, Kubernetes manifests,
-  Helm values, `sftpwarden deploy`, `plan`, `refresh`, `watch`, `--dry-run`, and
-  `--json` make it practical for local development, CI, and production runbooks.
-- **First-class Kubernetes and Helm support:** generate manifests or Helm values,
-  manage namespaces, PVCs, runtime probes, and declarative YAML/CSV provider
-  syncs while keeping database providers recommended for production clusters.
-- **Context-based workflow:** use Docker-style active contexts for `dev`, `prod`,
-  remote local-sync, and remote-only deployments instead of repeating long flags
-  on every command.
-- **Remote deployment built in:** deploy through SSH, rsync/scp, and Docker
-  Compose, with auto-detected watcher backends for syncing user-provider changes.
-- **Portable operations:** copy users between providers, export/import user
-  snapshots, create backups, restore safely, and run project/runtime healthchecks.
-- **Operationally conservative defaults:** secrets are not baked into images,
-  plaintext provider passwords are rejected, host keys and state are persisted,
-  and user data is never deleted unless explicitly requested.
+- **Synchronize users automatically:** keep server accounts aligned with your
+  provider, whether changes come from a command, a manual edit or another system.
+- **Manage access:** add users, use passwords or SSH keys and revoke access.
+- **Keep user files:** store uploads, server keys and operational state outside
+  the container image.
+- **Choose where users live:** use a file or connect to a supported database.
+- **Manage several environments:** select a named context instead of repeating
+  connection settings.
+- **Deploy where you need it:** use local or remote Docker Compose, Kubernetes
+  manifests or Helm.
 
-SFTPWarden is intentionally lightweight. It is not a full identity platform, a file
-sharing suite, or VM-grade isolation. It gives you a conservative OpenSSH-based SFTP
-runtime that is easy to understand, deploy, and operate.
+The server provides SFTP access within each user's restricted directory. It does
+not provide an end-user web portal, FTP/FTPS or a general-purpose SSH shell.
 
 ## Installation
 
-Install the CLI:
+You need Python **3.11 or newer**. The quick start also needs a running Docker
+engine with **Compose v2**, plus the OpenSSH `sftp` and `ssh-keygen` clients.
+
+Install SFTPWarden:
 
 ```bash
-pip install sftpwarden
-sftpwarden --version
+python -m pip install sftpwarden
 ```
 
-Optional extras:
+For development from source, see
+[Contributing](docs/contributing.md#install-from-source).
 
-| Need | Install |
-| --- | --- |
-| SQLite provider | Included, no extra |
-| MySQL provider | `pip install "sftpwarden[mysql]"` |
-| MariaDB provider | `pip install "sftpwarden[mariadb]"` |
-| PostgreSQL provider | `pip install "sftpwarden[postgres]"` |
-| MongoDB provider | `pip install "sftpwarden[mongodb]"` |
-| Documentation/development | `pip install -e ".[dev,docs,mysql,postgres,mongodb]"` |
-
-`mariadb` is an alias of the MySQL extra. Installing either
-`sftpwarden[mysql]` or `sftpwarden[mariadb]` enables both MySQL and MariaDB
-providers because they share PyMySQL.
+YAML, CSV and SQLite need no additional provider dependencies. For an external
+database, see the [provider guide](docs/providers.md).
 
 ## Shell Autocomplete
 
-SFTPWarden can install shell autocomplete through the Typer/Click helpers included
-in the CLI:
+Run `sftpwarden --install-completion`, then open a new terminal. Shell completion
+helps you find commands and options as you type.
+
+<a id="5-minute-quick-start"></a>
+
+## Quick Start
+
+This example creates a local server accessible only from your own machine.
+Use a new directory and context name. Choose and confirm Alice's password when
+prompted:
 
 ```bash
-sftpwarden --install-completion
-```
-
-Open a new terminal, then use `<TAB>` to complete commands and options:
-
-```bash
-sftpwarden con<TAB>
-sftpwarden user create --<TAB>
-```
-
-To inspect the generated completion script without installing it:
-
-```bash
-sftpwarden --show-completion
-```
-
-## 5-Minute Quick Start
-
-Create a local SFTP project:
-
-```bash
-sftpwarden config default-provider yaml
-mkdir -p ~/sftpwarden-dev
-cd ~/sftpwarden-dev
-sftpwarden init dev --user-schema 1 --yes
-sftpwarden validate
+mkdir ~/sftpwarden-demo
+cd ~/sftpwarden-demo
+sftpwarden init demo --yes
+sftpwarden config server.host 127.0.0.1
+sftpwarden user create alice --no-refresh
 sftpwarden deploy
 ```
 
-The quick start uses **user schema v1**, the simplest provider format:
-users store anonymous `public_keys` directly on each user. New projects default
-to schema v2 when `--user-schema` is omitted; v2 adds named keys, metadata,
-expiry, disable/enable, rotation, and migrations.
-
-Add a user:
+Connect with Alice's password:
 
 ```bash
-sftpwarden user create alice \
-  --password "correct horse battery staple" \
-  --comment "Main upload account"
+sftp -P 2222 alice@127.0.0.1
 ```
 
-Connect with any SFTP client:
+On your first connection, [verify the server fingerprint](docs/getting-started.md#connect-and-transfer-a-file)
+before accepting it. Use the `upload/` directory for files and `bye` to disconnect.
 
-```bash
-sftp -P 2222 alice@localhost
-```
-
-Preview and apply runtime changes:
-
-```bash
-sftpwarden plan
-sftpwarden refresh
-```
-
-`sftpwarden init` makes the created context active, so day-to-day commands do not
-need `--context`. This follows the same friendly idea people know from Docker:
-work in a project directory, keep an active context, and pass an explicit context
-only when you need to override it. To switch later, run `sftpwarden context use dev`.
-
-Read or update project settings without opening YAML:
-
-```bash
-sftpwarden config project.name dev2
-sftpwarden config server.port 2200
-sftpwarden context root ~/sftpwarden-dev2 --yes
-```
+YAML is the default user provider. You can choose another with `--provider` or
+change the [global default](docs/getting-started.md#create-a-first-project).
+For a complete first transfer and the recommended SSH key setup, follow
+[Getting Started](docs/getting-started.md).
 
 ## Deployment Choices
 
-Pick the model that matches how your team works.
+Choose where the server runs independently of where you store user accounts.
+Docker Compose is the default; Kubernetes is optional.
 
-| Model | Best for | Source of truth | Watcher |
-| --- | --- | --- | --- |
-| Local | Development, demos, single-host testing | Local project folder | No |
-| Remote local-sync | Production managed from a workstation or CI runner | Local project folder synced to remote host | Yes |
-| Remote-only | Existing remote deployments managed in-place | Remote project folder | No |
-| Kubernetes | Platform/SRE teams using `kubectl` or Helm | Project config plus generated manifests or Helm values | No |
-
-Compose is the default when `--deploy` is omitted. Choose the deployment target
-explicitly during `init` when you already know where the project will run:
-
-```bash
-sftpwarden init dev --deploy compose --yes
-sftpwarden init prod --deploy kube --yes
-sftpwarden init prod --deploy helm --yes
-```
-
-If a project was initialized with the default and you want to change it before
-deploying, update the project config and preview the generated deployment:
-
-```bash
-sftpwarden config deploy.target kubernetes
-sftpwarden config kubernetes.mode helm
-sftpwarden deploy --dry-run
-```
-
-Local:
-
-```bash
-mkdir -p ~/sftpwarden-dev
-cd ~/sftpwarden-dev
-sftpwarden init dev --yes
-sftpwarden deploy
-```
-
-Remote local-sync:
-
-```bash
-mkdir -p ~/sftpwarden-prod
-cd ~/sftpwarden-prod
-sftpwarden init prod --remote deploy@sftp-prod.example.com:/opt/sftpwarden \
-  --critical
-
-sftpwarden deploy --dry-run
-sftpwarden deploy --yes
-```
-
-Remote-only:
-
-```bash
-sftpwarden init archive --remote deploy@sftp-archive.example.com:/opt/sftpwarden \
-  --remote-only \
-  --critical
-
-sftpwarden deploy --dry-run
-```
-
-Remote-only init registers an existing remote project without creating local
-project files. Use `sftpwarden deploy --dry-run` to preview the in-place remote
-Compose commands; use `sftpwarden refresh --dry-run` only when you want to
-preview a runtime user reload.
-
-Kubernetes manifests:
-
-```bash
-sftpwarden init prod --deploy kube --yes
-sftpwarden deploy
-```
-
-Optional preview before deploying:
-
-```bash
-sftpwarden kube render
-sftpwarden deploy --dry-run
-```
-
-Helm:
-
-```bash
-sftpwarden init prod --deploy helm --yes
-sftpwarden deploy
-```
-
-Optional preview before deploying:
-
-```bash
-sftpwarden helm values --write
-sftpwarden helm template
-sftpwarden deploy --dry-run
-```
-
-Preview commands are optional. Use them when you want to inspect the manifests,
-Helm values or template output, or deployment plan before applying changes.
-
-During Kubernetes or Helm init, SFTPWarden checks the namespace. If it does not
-exist, interactive init asks whether to create it; `--yes` creates it
-automatically. The default namespace is `sftpwarden`; use `--namespace <name>`
-for an existing or custom namespace, or `--no-create-namespace` to require it to
-exist already.
-
-For Kubernetes projects that use YAML or CSV providers, the local provider file
-is declarative: `sftpwarden deploy`, `sftpwarden kube apply`, and
-`sftpwarden helm upgrade` render its current contents and copy them into the
-provider PVC during the runtime rollout. `refresh` reloads users already visible
-inside the runtime; it does not copy local YAML/CSV files into a cluster by
-itself. Treat Kubernetes YAML/CSV provider files as deployment material because
-the rendered manifests or Helm values include their user entries. For production
-Kubernetes, prefer database providers when user state must change outside deploy
-cycles or when provider data should not be carried in manifests.
-
-Kubernetes and Helm projects reserve `10Gi` for SFTP user uploads by default.
-Increase that PVC before deploying with:
-
-```bash
-sftpwarden config kubernetes.data_storage_size 50Gi
-sftpwarden deploy --dry-run
-sftpwarden deploy --yes
-```
-
-Compose healthcheck timing and Kubernetes probe timing are configurable too:
-use `healthcheck.*` for Compose and `kubernetes.*_probe.*` for generated
-manifests or Helm values.
-
-Source checkouts use the local chart. Python package installations use the
-published GHCR OCI chart with the same version as the installed CLI.
-
-Use `sftpwarden context add` when a SFTPWarden project already exists and you only
-want to register it on this machine:
-
-```bash
-sftpwarden context add prod deploy@sftp-prod.example.com:/opt/sftpwarden --critical
-sftpwarden context use prod
-```
-
-Production-like names such as `prod`, `production`, `prd`, `live`, and `main`
-require confirmation unless marked with `--critical` or accepted with `--yes`.
+| Model | Choose it when | Guide |
+| --- | --- | --- |
+| Local Compose | You administer Docker on the same machine as the CLI. Useful for learning and single-host installations. | [Local runtime](docs/operations.md#local-runtime) |
+| Remote local-sync | You keep project files on your workstation and deploy to a server over SSH. | [Remote deployment](docs/operations.md#remote-deploy) |
+| Remote-only | A project already exists on the server and you want to administer it in place. | [Remote deployment](docs/operations.md#remote-deploy) |
+| Kubernetes / Helm | You already operate a cluster and want to deploy through manifests or a chart. | [Kubernetes deployment](docs/operations.md#kubernetes-deploy) |
 
 ## Project Files
 
-By default, `sftpwarden init` creates a Compose-backed project directory:
+The project directory holds `sftpwarden.yaml` (settings), a user provider and
+generated deployment files. For local Compose, `data/` holds uploads,
+`host_keys/` preserves server identity and `state/` preserves runtime state.
 
-```text
-sftpwarden.yaml
-users.yaml              # or users.csv / users.sqlite
-docker-compose.yml
-data/
-state/
-host_keys/
-```
-
-Kubernetes-targeted projects use the same `sftpwarden.yaml`, plus generated
-`kubernetes.yml` or `values.yaml` when you render/apply manifests or Helm values;
-they do not require `docker-compose.yml`.
-
-The container always listens on port `22` internally. Configure the host-facing
-port with `server.port` in `sftpwarden.yaml`.
-
-Runtime state is stored in `/var/lib/sftpwarden/state.json` inside the container
-and should be backed by the `state/` volume. Host keys are stored in `host_keys/`
-to keep SSH fingerprints stable across restarts.
+These files have different roles. A user provider stores accounts and
+credentials; it does not store uploaded documents.
+[Getting Started](docs/getting-started.md#create-a-first-project) explains the
+layout before and after the first deploy.
 
 ## User Management
 
-List and inspect users:
+With the demo running:
 
 ```bash
+sftpwarden user create bob
 sftpwarden users
-sftpwarden user show alice
+sftpwarden user show bob
 ```
 
-Add users:
+The create command asks for Bob's password and normally applies his access
+immediately. You can also edit the active provider directly: automatic
+synchronization is enabled by default and its periodic interval is 60 seconds.
+Use the provider's supported format; passwords stored there must be hashes.
 
-```bash
-sftpwarden user create alice --password "correct horse battery staple"
-sftpwarden user create bob --password-hash '$6$rounds=500000$...'
-sftpwarden user create carol --public-key "ssh-ed25519 AAAA..."
-```
-
-Update users:
-
-```bash
-sftpwarden user update alice --upload-dir inbound
-sftpwarden user update alice --uid 12001 --gid 12001
-sftpwarden user update alice --comment "Finance inbox"
-sftpwarden user disable alice
-sftpwarden user enable alice
-```
-
-Removing a user disables access but does not delete user data:
-
-```bash
-sftpwarden user remove alice --yes
-```
-
-To permanently remove the user's data directory too:
-
-```bash
-sftpwarden user remove alice --delete-files --yes
-```
-
-Updating only `comment` does not refresh the runtime because comments are metadata.
+Removing a user does not delete their uploaded files unless you explicitly request that.
+See the [user command reference](docs/cli/users.md) for updates, disablement,
+removal and deployment-specific behavior.
 
 ### User Schemas and Named Keys
 
-SFTPWarden supports two user schemas:
+New projects use schema v2, which supports named keys, rotation and expiry.
+Schema v1 remains supported for existing projects. You do not need to choose a
+schema to complete the quick start.
 
-- **Schema v1** keeps simple `public_keys` on each user. It is supported for
-  small setups and quick starts.
-- **Schema v2** stores named `keys` with fingerprint, comment, disabled state,
-  timestamps, expiry, source, and metadata. It is the default for new projects.
-
-Choose explicitly during init:
-
-```bash
-sftpwarden init demo --user-schema 1 --yes
-sftpwarden init prod --user-schema 2 --yes
-```
-
-Named key lifecycle commands:
-
-```bash
-sftpwarden user key list alice
-sftpwarden user key show alice prod-ci
-sftpwarden user key add alice prod-ci --public-key ./prod-ci.pub
-sftpwarden user key rotate alice prod-ci --public-key ./prod-ci-new.pub
-sftpwarden user key expire alice prod-ci --at 2027-01-01
-sftpwarden user key disable alice prod-ci
-sftpwarden user key enable alice prod-ci
-sftpwarden user key rename alice prod-ci ci-prod
-sftpwarden user key remove alice ci-prod --yes
-sftpwarden user key import alice --from-dir ./keys
-```
-
-Schema v1 can still list, show, add, and remove anonymous keys using
-deterministic names/fingerprints. Advanced key operations prompt to migrate that
-provider to schema v2; non-interactive use requires `--yes`.
-
-Inspect or migrate provider data explicitly:
-
-```bash
-sftpwarden provider schema show
-sftpwarden provider keys migrate --dry-run
-sftpwarden provider schema migrate --to 2 --backup --yes
-```
+See [Named Keys](docs/named-keys.md) when you need to manage several credentials
+for one account or migrate an existing provider.
 
 ## Providers
 
-| Provider | Runtime reads | CLI mutations | Good fit |
-| --- | ---: | ---: | --- |
-| YAML | Yes | Yes | Quick start, GitOps-style small deployments |
-| CSV | Yes | Yes | Spreadsheet-friendly user handoff |
-| SQLite | Yes | Yes | Single-host/self-hosted deployments without an external database |
-| MySQL | Yes | Yes | Existing application databases |
-| MariaDB | Yes | Yes | MySQL-compatible MariaDB deployments |
-| PostgreSQL | Yes | Yes | Existing platform or product databases |
-| MongoDB | Yes | Yes | Existing document databases |
+A provider is the file or database that stores the SFTP accounts.
 
-For production Kubernetes environments, prefer PostgreSQL, MariaDB/MySQL, or
-MongoDB. The runtime reads those providers directly, so external provider changes
-can be picked up by the runtime sync loop or an explicit `sftpwarden refresh`.
-YAML/CSV remain useful for GitOps-style Kubernetes deployments where deploy is
-the synchronization point. If you use YAML/CSV in Kubernetes, keep the provider
-file in the same review and secret-handling process as the generated manifests.
+| Need | Provider options |
+| --- | --- |
+| Start with an editable file | YAML |
+| Exchange tabular user records | CSV |
+| Keep accounts in a local database file | SQLite |
+| Connect to an existing database service | MySQL, MariaDB, PostgreSQL, MongoDB |
 
-SQL providers read from `sftp_users` by default. Schema v1 uses only the users
-table:
-
-```text
-username, public_keys, password_hash, uid, gid, upload_dir, comment, disabled
-```
-
-Schema v2 keeps the users table and adds `sftp_user_keys` for named key rows.
-CSV v2 uses a `keys` JSON column; MongoDB v2 embeds `keys` in each document.
-
-See `examples/mysql/schema.sql`, `examples/mariadb/schema.sql`, and
-`examples/postgres/schema.sql` for schema v2 SQL tables.
-
-SQLite is built in:
-
-```bash
-sftpwarden init dev --provider sqlite --yes
-```
-
-SQLite is a good lightweight option for one host and one writer. Avoid it for NFS,
-high-concurrency, or multi-writer deployments.
-
-During `init`, SFTPWarden checks whether external provider storage exists. For
-MySQL, MariaDB, and PostgreSQL that means the configured SQL table. For MongoDB
-that means the configured collection and username index. If storage is missing,
-interactive init asks whether to create it or abort so you can create it manually:
-
-```bash
-sftpwarden init prod \
-  --provider postgresql \
-  --dsn 'postgresql://sftpwarden:change-me@db.example.com:5432/sftpwarden' \
-  --create-table
-```
-
-MariaDB uses the same compatible implementation as MySQL:
-
-```bash
-sftpwarden init prod \
-  --provider mariadb \
-  --dsn 'mariadb://sftpwarden:change-me@db.example.com:3306/sftpwarden' \
-  --create-table
-```
-
-MongoDB stores one document per user with `_id = username`:
-
-```bash
-sftpwarden init prod \
-  --provider mongodb \
-  --dsn 'mongodb://mongo.example.com:27017/sftpwarden' \
-  --collection sftp_users
-```
-
-`--dsn` uses the standard database URL/DSN convention:
-
-```text
-postgresql://user:password@host:5432/database
-mysql://user:password@host:3306/database
-mariadb://user:password@host:3306/database
-mongodb://user:password@host:27017/database
-```
-
-For real environments, prefer an environment variable so the secret is not typed
-directly in shell history or committed in project files:
-
-```bash
-export SFTPWARDEN_POSTGRES_DSN='postgresql://sftpwarden:change-me@db.example.com:5432/sftpwarden'
-
-sftpwarden init prod \
-  --provider postgresql \
-  --dsn '${SFTPWARDEN_POSTGRES_DSN}' \
-  --create-table
-```
-
-If you run interactive `init` with MySQL, MariaDB, or PostgreSQL and omit
-`--dsn`, SFTPWarden asks for host, port, database, username, and password, then
-writes the equivalent DSN for you. For MongoDB, interactive init asks for the
-MongoDB DSN directly.
+Start with YAML if you have no existing database requirement. The
+[provider guide](docs/providers.md) covers dependencies, formats, capabilities,
+concurrent edits and migration.
 
 ## Operations
 
-Common operational commands:
+User synchronization runs automatically by default. Deploy applies project
+settings; refresh lets you request a user update without waiting:
 
-```bash
-sftpwarden doctor
-sftpwarden validate --config sftpwarden.yaml
-sftpwarden compose --write
-sftpwarden deploy --dry-run
-sftpwarden deploy --json --dry-run
-sftpwarden kube status --json
-sftpwarden helm lint
-sftpwarden plan --json
-sftpwarden refresh --dry-run
-sftpwarden watcher status --json
-sftpwarden health --json
-sftpwarden backup --maintenance --output sftpwarden-dev.tar.gz --yes
-sftpwarden provider export --format json > users.json
-```
+| Change | Apply it with |
+| --- | --- |
+| Project settings, such as the published port | `sftpwarden deploy` |
+| User data already visible to the running server | Automatic synchronization or `sftpwarden refresh` to apply it now |
 
-`watch` and `refresh` are different on purpose:
+The remote watcher delivers editable user provider files; it does not deploy
+project configuration. Kubernetes YAML/CSV user changes need a deploy to deliver
+the file to the cluster.
 
-- `sftpwarden watch` syncs YAML/CSV/SQLite user provider files for remote
-  `local-sync` contexts.
-- `sftpwarden refresh` tells a running runtime to reload users immediately.
-- Configuration, Docker Compose, Kubernetes, and Helm changes require
-  `sftpwarden deploy`; Kubernetes YAML/CSV provider files are also copied to the
-  provider PVC by deploy/apply/upgrade.
-- `sftpwarden.yaml` is desired state. Changes made with `sftpwarden config` and
-  manual edits are applied by the next deploy/apply/upgrade step.
-- `sftpwarden health` validates config, provider readability, Compose drift, and
-  runtime health where available.
-- `sftpwarden backup` stores config, a provider user snapshot, host keys, and
-  runtime state. It excludes `data/` unless `--include-data` is explicitly used.
-- `sftpwarden provider copy` moves users between contexts/providers with explicit
-  `--merge` or `--replace` semantics.
+Follow [Configuration](docs/configuration.md#change-the-local-sftp-port) for a
+complete port-change example or [Operations](docs/operations.md) for deployment,
+synchronization, health and troubleshooting.
 
-`sftpwarden deploy` uses the configured deployment target. Compose remains the
-default. Kubernetes manifest mode uses `kubectl`, and Helm mode uses `helm`.
-Missing tools are reported with actionable messages.
+## Updating
 
-Watcher installs default to `auto`. SFTPWarden detects the host scheduler and
-uses Windows Task Scheduler, macOS launchd, or Linux systemd, OpenRC, runit, or
-supervisord when available. You can force a backend with `--watcher systemd`,
-`--watcher openrc`, `--watcher runit`, `--watcher supervisord`,
-`--watcher launchd`, `--watcher windows-task`, or `--watcher docker`.
+Check releases with `sftpwarden upgrade --check`, preview with `--dry-run`, then
+run `sftpwarden upgrade` to update the CLI and installed watcher. Servers keep
+their current version until `sftpwarden deploy --context NAME` applies the update.
+Take a verified backup before maintenance.
 
-Native watcher modes use the host's normal SSH identity, agent, `~/.ssh/config`,
-known hosts, bastions, and `ProxyJump` settings. Docker watcher mode is stricter
-and requires explicit dedicated deployment keys. It mounts watched project
-folders read-only and copies mounted keys inside the container with private
-permissions before syncing. Source checkouts use `sftpwarden-watcher:local`;
-Python package installations use
-`ghcr.io/kithuto/sftpwarden-watcher:<installed-version>` unless `--image` is set.
+If the new watcher is incompatible with a deployment, upgrade warns before making
+changes and asks permission to deploy **all contexts**, which may interrupt
+transfers. See the [update guide](docs/cli/upgrade.md), including the one-time
+installer update needed by CLIs older than 1.3.1.
 
 ## Backup and Restore
 
-Back up the active context before upgrades, provider migrations, or risky
-configuration changes:
+Backups can preserve configuration, users, server identity and runtime state.
+Uploaded files require an explicit `--include-data` option. Archives may contain
+secrets and must be protected accordingly.
 
-```bash
-sftpwarden backup --maintenance --output sftpwarden-prod.tar.gz --yes
-```
-
-The default backup includes `sftpwarden.yaml`, generated deployment files,
-available file-backed provider data, `provider/users.json` with the current
-users read from the provider, host keys, and runtime state. That user snapshot is
-also created for SQL and MongoDB providers when the CLI can reach the configured
-database. The backup does not include uploaded SFTP user files under `data/`
-unless you ask for that explicitly:
-
-```bash
-sftpwarden backup --maintenance --include-data --output sftpwarden-prod-full.tar.gz
-```
-
-Preview backup contents in automation with:
-
-```bash
-sftpwarden backup --dry-run --json
-```
-
-Restore into an existing local runtime with:
-
-```bash
-sftpwarden restore sftpwarden-prod.tar.gz --maintenance --yes
-```
-
-Use `--include-data` only when the archive was created with user data and you
-intend to overwrite the current `data/` tree:
-
-```bash
-sftpwarden restore sftpwarden-prod-full.tar.gz --maintenance --include-data --yes
-```
-
-Pause external writers before maintenance capture. Existing readable local targets
-require a verified safety backup before replacement. For damaged targets, recover
-into a separate empty destination with `--root`; remote and Kubernetes recovery
-also require separate destinations. External databases need explicit isolation.
-See the [recovery runbook](docs/recovery.md) for these procedures and upgrading
-legacy provider mounts or Kubernetes host identity.
-
-File restoration does not activate the service. Review and apply the deployment,
-then verify health, the trusted host keys and an authenticated SFTP transfer:
-
-```bash
-sftpwarden deploy --dry-run
-sftpwarden deploy --yes
-```
-
-Backup archives can contain DSNs, provider snapshots, host keys, and uploaded
-user files when `--include-data` is used. Store them like infrastructure secrets.
+Follow the [recovery guide](docs/recovery.md) to choose a capture and restore
+procedure for your deployment. A usable recovery includes checking access,
+uploaded files and server identity after activation.
 
 ## Security
 
-SFTPWarden follows conservative defaults:
+The quick start binds to `127.0.0.1` for local access. Before making a server
+available to other machines, review authentication, network exposure, host keys
+and backups in the [security guide](docs/security.md).
 
-- users and secrets are not baked into images;
-- plaintext passwords are rejected in provider data;
-- `sftpwarden user create --password` stores only a system password hash;
-- SFTP users are forced into `internal-sftp`;
-- root login, empty passwords, forwarding, tunneling, X11, and user environments
-  are disabled;
-- user data is not deleted automatically;
-- `sftpwarden user remove --delete-files` is explicit and irreversible;
-- `.env`, `data/`, `state/`, `host_keys/`, Git metadata, and Python caches are not
-  watched or synced.
-
-Key-only deployment:
-
-```yaml
-auth:
-  allow_public_key: true
-  allow_password: false
-  recommended: public_key
-```
-
-Read the [security guide](docs/security.md) before exposing a deployment to a
-public or customer-facing network.
+SFTP users have restricted directories, but you remain responsible for the
+Docker host, credentials and persistent storage. Keep private keys and backups
+out of source control.
 
 ## Documentation
 
-The README is the adoption path. Detailed guides live in:
+| I want to… | Read |
+| --- | --- |
+| Set up a server and transfer my first file | [Getting Started](docs/getting-started.md) |
+| Understand and change settings | [Configuration](docs/configuration.md) |
+| Know how a change becomes active | [Configuration Effects](docs/configuration-effects.md) |
+| Choose account storage | [Providers](docs/providers.md) |
+| Rotate or expire SSH keys | [Named Keys](docs/named-keys.md) |
+| Deploy and administer an environment | [Operations](docs/operations.md) |
+| Recover or upgrade an installation | [Recovery](docs/recovery.md) |
+| Review security responsibilities | [Security](docs/security.md) |
+| Look up commands and options | [CLI Reference](docs/cli-reference.md) |
 
-- [Getting Started](docs/getting-started.md)
-- [Configuration](docs/configuration.md)
-- [Providers](docs/providers.md)
-- [Named Keys](docs/named-keys.md)
-- [Operations](docs/operations.md)
-- [Security](docs/security.md)
-- [CLI Reference](docs/cli-reference.md)
-- [Contributing, development, and testing](docs/contributing.md)
-
-The Sphinx documentation is built from `docs/` and published to GitHub Pages.
-
-Build it locally:
-
-```bash
-python -m pip install -e ".[docs]"
-sphinx-build -b html docs docs/_build/html
-```
+The documentation uses Sphinx. Build instructions are in
+[Contributing](docs/contributing.md#documentation).
 
 ## Roadmap
 
-See the [changelog](https://github.com/kithuto/sftpwarden/blob/main/CHANGELOG.md)
-for released versions and the longer future roadmap.
+These are planned capabilities. See the [changelog](CHANGELOG.md) for release
+history and the longer future roadmap.
 
 ### v1.4 - Audit and Transfer Visibility
 
-- Add audit logging for CLI and runtime operations.
-- Add commands for listing, tailing, filtering, and exporting audit events.
-- Add transfer visibility and richer runtime status.
+Audit events, transfer visibility and richer runtime status.
 
 ### v1.5 - Security and Client Trust
 
-- Add production-oriented security check profiles and strict mode.
-- Add secret-file support for DSNs and sensitive provider settings.
-- Add host key fingerprints, assisted rotation and safe client onboarding.
+Security check profiles, secret-file support and assisted host-key management.
 
 ## Contributing
 
-Contributions are welcome: bug reports, docs fixes, examples, tests, provider work,
-and operational feedback are all useful.
+Bug reports, documentation improvements, examples and code contributions are
+welcome. Create a branch from `dev` and open normal pull requests against `dev`.
 
-Contribution workflow:
+- [Contribution workflow](CONTRIBUTING.md)
+- [Development setup and validation](docs/contributing.md)
+- [Report a vulnerability](SECURITY.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
 
-1. Fork the repository.
-2. Create your own branch from `dev`.
-3. Develop and validate your change in that branch.
-4. Open a Pull Request from your branch to `dev`.
-
-Normal contribution PRs should target `dev`, not `main`. The maintainer promotes
-accepted changes from `dev` to `main` for production and release work.
-
-Start here:
-
-- [CONTRIBUTING.md](https://github.com/kithuto/sftpwarden/blob/dev/CONTRIBUTING.md)
-  for the GitHub workflow.
-- [docs/contributing.md](docs/contributing.md) for install, development, testing,
-  docs, and release checks.
-- [SECURITY.md](https://github.com/kithuto/sftpwarden/blob/dev/SECURITY.md) for
-  responsible vulnerability reporting.
-- [CODE_OF_CONDUCT.md](https://github.com/kithuto/sftpwarden/blob/dev/CODE_OF_CONDUCT.md)
-  for participation expectations.
+SFTPWarden is licensed under the [MIT License](LICENSE).

@@ -1,7 +1,7 @@
 # Security Policy
 
 SFTPWarden is infrastructure software. Please treat vulnerabilities, accidental
-secret exposure, and unsafe deployment patterns seriously.
+secret exposure and unsafe deployment patterns seriously.
 
 ## Supported Versions
 
@@ -19,7 +19,7 @@ available. Otherwise, contact the project owner privately.
 Please include:
 
 - affected version or commit;
-- affected component: CLI, runtime, watcher, provider, Docker image, docs, or CI;
+- affected component: CLI, runtime, watcher, provider, Docker image, docs or CI;
 - steps to reproduce;
 - expected impact;
 - logs or screenshots with secrets redacted;
@@ -30,9 +30,9 @@ Please include:
 Examples:
 
 - plaintext secrets written to disk or logs;
-- private keys or DSNs included in examples, tests, images, or docs;
+- private keys or DSNs included in examples, tests, images or docs;
 - remote command injection;
-- unsafe SSH, rsync, or scp command construction;
+- unsafe SSH, rsync or scp command construction;
 - Docker watcher mounting broad host credentials;
 - broken chroot permissions;
 - provider mutations that bypass validation;
@@ -51,4 +51,4 @@ SFTPWarden provides OpenSSH chroot isolation inside a container. It does not rep
 - an independent review before internet-facing production use.
 
 Do not expose experimental deployments to the public internet without a review of
-the host, firewall, Docker configuration, SSH settings, and provider data.
+the host, firewall, Docker configuration, SSH settings and provider data.

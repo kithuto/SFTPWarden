@@ -327,3 +327,108 @@ def test_real_130_remote_upgrade_uses_explicit_ssh_deployment(
     )
     assert identities() == before
     assert not (remote / ".sftpwarden-operation.lock").exists()
+
+
+def test_incompatible_upgrade_requires_consent_then_deploys_all_contexts(
+    tmp_path,
+    monkeypatch,
+    cleanup_stack,
+    policy_image,
+    legacy_image,
+):
+    """Use real old runtime evidence, then migrate only after expanded consent."""
+    from typer.testing import CliRunner
+
+    from sftpwarden.cli import app
+    from sftpwarden.services import deploy as deployment
+    from sftpwarden.services import update_artifacts, upgrade
+    from sftpwarden.system.commands import CommandResult
+    from sftpwarden.utils._version import get_version
+    from sftpwarden.watcher.core import install_watcher
+
+    from .conftest import docker_compose_down, docker_image_id, preserve_or_remove_image
+
+    context, config, server, remote, local = build_ssh_delivery_project(
+        tmp_path, monkeypatch, legacy_image, cleanup_stack
+    )
+    official = f"ghcr.io/kithuto/sftpwarden:{get_version()}"
+    previous_tag = docker_image_id(official)
+    cleanup_stack.add(lambda: preserve_or_remove_image(official, previous_tag))
+    run_external(["docker", "tag", policy_image, official])
+    config.docker.image = official
+    provider = provider_from_config(local, config)
+    users = provider.read()
+    old_path = provider.path
+    config.provider.path = "/etc/sftpwarden/users.yaml"
+    old_path.replace(local / "users.yaml")
+    write_config(context.config, config)
+    second_root = tmp_path / "second"
+    second_root.mkdir()
+    second_config = default_project_config("all-contexts-second")
+    second_config.docker.image = official
+    second_config.docker.container_name = "sftpwarden-second-" + server.name.rsplit("-", 1)[-1]
+    second_config.server.host = "127.0.0.1"
+    second_config.server.port = free_tcp_port()
+    second_config.healthcheck.interval_seconds = 1
+    second_config.sync.interval_seconds = 5
+    write_config(second_root / "sftpwarden.yaml", second_config)
+    provider_from_config(second_root, second_config).write(users)
+    second = local_context("second", second_root, second_config.provider.type)
+    cleanup_stack.add(lambda: docker_compose_down(second_root))
+    save_registry(ContextRegistry(contexts={context.name: context, second.name: second}))
+    install_watcher(mode="systemd", activate=False)
+    monkeypatch.setattr(
+        upgrade,
+        "discover_release",
+        lambda **kwargs: {"status": "available", "version": get_version()},
+    )
+
+    # All execution is real. Only pulling the unpublished candidate is replaced
+    # with verification of the exact image already loaded into this daemon.
+    def runner(command, *, cwd=None, **kwargs):
+        remote_command = command[0] == "ssh"
+        if (
+            (
+                remote_command
+                and (command[-1].endswith(" pull") or command[-1] == f"docker pull {official}")
+            )
+            or command[:3] == ["docker", "pull", official]
+            or (command[:2] == ["docker", "compose"] and command[-1] == "pull")
+        ):
+            assert docker_image_id(official) == docker_image_id(policy_image)
+            return CommandResult(command, 0, "candidate already loaded", "")
+        result = run_external(command, cwd=Path(cwd) if cwd else None, timeout=180, check=False)
+        return CommandResult(command, result.returncode, result.stdout, result.stderr)
+
+    original_apply = deployment.apply_deployment_plan
+    monkeypatch.setattr(
+        deployment, "apply_deployment_plan", lambda entry: original_apply(entry, runner=runner)
+    )
+    monkeypatch.setattr(update_artifacts, "run", runner)
+    before = run_external(["docker", "inspect", "--format", "{{.Id}}", server.name]).stdout
+    before_config = Path(context.config).read_bytes()
+    declined = CliRunner().invoke(app, ["upgrade", "--yes", "--json"])
+    assert declined.exit_code == 1, declined.output
+    assert json.loads(declined.output)["status"] == "deploy_all_confirmation_required"
+    assert Path(context.config).read_bytes() == before_config
+    assert run_external(["docker", "inspect", "--format", "{{.Id}}", server.name]).stdout == before
+    assert not (second_root / "docker-compose.yml").exists()
+    accepted = CliRunner().invoke(app, ["upgrade", "--yes", "--deploy-all", "--json"])
+    assert accepted.exit_code == 0, accepted.output
+    result = json.loads(accepted.output)
+    assert result["deployments"]["status"] == "complete"
+    assert {item["context"] for item in result["deployments"]["results"]} == {
+        context.name,
+        second.name,
+    }
+    assert all(
+        item["applied"] == get_version() and item["status"] == "complete"
+        for item in result["deployments"]["results"]
+    )
+    assert result["watcher"]["activated"] is False
+    assert run_external(["docker", "inspect", "--format", "{{.Id}}", server.name]).stdout != before
+    assert (local / "provider/users.yaml").is_file()
+    assert (second_root / "provider/users.yaml").is_file()
+    server.refresh_port()
+    assert server.connect("alice").returncode == 0
+    assert server.connect("control").returncode == 0

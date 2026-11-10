@@ -24,7 +24,7 @@ from sftpwarden.remote import environment as remote_environment
 from sftpwarden.remote import locking as remote_locking
 from sftpwarden.remote.ssh import ssh_base_command
 from sftpwarden.render.compose import write_compose
-from sftpwarden.services import backup_remote, restore_remote
+from sftpwarden.services import backup_remote, deployment_upgrade, restore_remote, update_artifacts
 from sftpwarden.services.backup import create_backup, restore_backup
 from sftpwarden.users import ProviderUsers, SFTPUser, SFTPUserKey
 from sftpwarden.utils.constants import CONTAINER_PROVIDER_DATA_DIR
@@ -32,7 +32,7 @@ from sftpwarden.watcher import delivery, polling
 from sftpwarden.watcher.backends import docker as docker_watcher
 from sftpwarden.watcher.backends import systemd as systemd_watcher
 
-from .conftest import REPO_ROOT, eventually, free_tcp_port, remove_docker_container, run_external
+from .conftest import REPO_ROOT, eventually, remove_docker_container, run_external
 from .test_auth_policy import PolicyRuntime
 from .test_auth_policy import policy_image as policy_image
 from .test_docker_compose_runtime import generate_keypair
@@ -102,7 +102,6 @@ def build_ssh_delivery_project(
     config.docker.container_name = server.name
     config.docker.image = policy_image
     config.server.host = "127.0.0.1"
-    config.server.port = free_tcp_port()
     config.auth.allow_password = False
     config.provider.path = f"{CONTAINER_PROVIDER_DATA_DIR}/users.yaml"
     config.healthcheck.interval_seconds = 1
@@ -125,6 +124,11 @@ def build_ssh_delivery_project(
     for name in ("data", "state", "host_keys"):
         (remote / name).mkdir(mode=0o700)
     compose = write_compose(config, remote, allow_local_build=False)
+    # Let Docker reserve the port atomically instead of racing another process
+    # between a host free-port probe and container creation.
+    initial_compose = yaml.safe_load(compose.read_text())
+    initial_compose["services"]["sftpwarden"]["ports"] = ["127.0.0.1:0:22"]
+    compose.write_text(yaml.safe_dump(initial_compose))
     cleanup_stack.add(
         lambda: run_external(
             ["docker", "compose", "-f", str(compose), "down", "--volumes"], timeout=60, check=False
@@ -135,6 +139,10 @@ def build_ssh_delivery_project(
         timeout=120,
     )
     server.refresh_port()
+    config.server.port = server.port
+    for root in (remote, local):
+        write_config(root / "sftpwarden.yaml", config)
+    write_compose(config, remote, allow_local_build=False)
     public = run_external(
         ["docker", "exec", server.name, "cat", "/etc/sftpwarden/host_keys/ssh_host_ed25519_key.pub"]
     ).stdout.strip()
@@ -158,9 +166,19 @@ def build_ssh_delivery_project(
     gateway_image = f"sftpwarden-ssh-gate:{uuid4().hex[:12]}"
     build = tmp_path / "gateway-image"
     build.mkdir()
+    base = f"FROM {policy_image}\n"
+    if os.environ.get("SFTPWARDEN_RELEASE_BUILDER"):
+        # An isolated BuildKit daemon cannot read Docker's host image store.
+        # Export only this owned image into its context; no registry publication
+        # or global builder cache is needed for the disposable SSH gateway.
+        exported = f"sftpwarden-gateway-export-{uuid4().hex[:12]}"
+        cleanup_stack.add(lambda: remove_docker_container(exported))
+        run_external(["docker", "create", "--name", exported, policy_image])
+        run_external(["docker", "export", "--output", str(build / "rootfs.tar"), exported])
+        remove_docker_container(exported)
+        base = "FROM scratch\nADD rootfs.tar /\n"
     (build / "Dockerfile").write_text(
-        f"FROM {policy_image}\n"
-        "RUN apk add --no-cache docker-cli docker-cli-compose openssh-client rsync\n"
+        base + "RUN apk add --no-cache docker-cli docker-cli-compose openssh-client rsync\n"
     )
     cleanup_stack.add(
         lambda: run_external(["docker", "image", "rm", gateway_image], timeout=60, check=False)
@@ -186,7 +204,7 @@ def build_ssh_delivery_project(
             "--name",
             gateway,
             "--publish",
-            f"127.0.0.1:{free_tcp_port()}:22",
+            "127.0.0.1:0:22",
             "--volume",
             f"{tmp_path}:{PurePosixPath(engine_root).parent}",
             "--volume",
@@ -250,6 +268,8 @@ def build_ssh_delivery_project(
     monkeypatch.setattr(remote_locking, "ssh_base_command", isolated_ssh)
     monkeypatch.setattr(remote_deploy, "ssh_base_command", isolated_ssh)
     monkeypatch.setattr(remote_checks, "ssh_base_command", isolated_ssh)
+    monkeypatch.setattr(deployment_upgrade, "ssh_base_command", isolated_ssh)
+    monkeypatch.setattr(update_artifacts, "ssh_base_command", isolated_ssh)
     original_scp = remote_deploy.scp_upload_command
 
     def isolated_scp(endpoint, local_path, remote_path):

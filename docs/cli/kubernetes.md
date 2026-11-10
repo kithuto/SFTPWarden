@@ -2,8 +2,12 @@
 
 `sftpwarden kube` is for projects configured for Kubernetes manifest mode. These
 commands use values from `sftpwarden.yaml`, especially `deploy.target`,
-`kubernetes.mode`, `kubernetes.namespace`, `kubernetes.release`, and
+`kubernetes.mode`, `kubernetes.namespace`, `kubernetes.release` and
 `kubernetes.kube_context`.
+
+Use [Operations](../operations.md#kubernetes-deploy) for a first cluster
+deployment. Examples below are alternative invocations. Rendering is a preview;
+apply can replace the Pod and interrupt transfers.
 
 ## `sftpwarden kube`
 
@@ -65,6 +69,10 @@ the ordered [upgrade procedure](../recovery.md) before using raw Kubernetes tool
 
 ## `sftpwarden kube apply`
 
+Shares deploy's version inspection, backup recommendation, migration confirmation
+and activated-version verification. Official images advance and custom images
+remain unchanged. See [deploy](core.md#sftpwarden-deploy) and [Upgrade](upgrade.md).
+
 Applies rendered Kubernetes manifests with `kubectl` and restarts the runtime
 StatefulSet so deployment changes are remounted or reloaded.
 
@@ -111,7 +119,7 @@ sftpwarden kube status --json
 | Flag | Value | Default | What it does |
 | --- | --- | --- | --- |
 | `--context`, `-c` | `TEXT` | active context | Selects a registered context. |
-| `--json` | flag | false | Prints namespace, release, and check results as JSON. |
+| `--json` | flag | false | Prints namespace, release and check results as JSON. |
 
 ### Checks
 
@@ -169,10 +177,21 @@ The command checks:
 
 - `kubectl version --client`;
 - configured namespace;
-- host-key secret for the release;
+- configured host-key Secret (`kubernetes.host_keys_secret`), or the
+  `<release>-host-keys` PVC when no Secret is configured;
 - configured storage class, when `kubernetes.storage_class` is set.
 
 Provider and probe configuration are validated during manifest rendering.
+
+The identity check uses the configured namespace and Kubernetes context. A missing
+or inaccessible resource produces a `warn` in text output and a nonzero
+`returncode` in that check's JSON result. The command itself retains its diagnostic
+exit status: inspect individual checks even when it exits successfully.
+
+This check confirms that the identity resource exists and can be queried. It does
+not validate Secret contents, PVC binding or the keys loaded by the running server.
+Use runtime health and trusted fingerprints to verify the active server identity;
+do not create an empty Secret to silence a warning.
 
 ## `sftpwarden kube delete`
 

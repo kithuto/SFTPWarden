@@ -1,5 +1,25 @@
 # Recovery and upgrades
 
+Use this guide to preserve an existing installation, restore it to a verified
+destination or upgrade from 1.3.0. A recovery includes account access, server
+identity and file ownership as well as file contents.
+
+| Your task | Start here |
+| --- | --- |
+| Create a recovery archive | [Capture the running installation](#capture-the-running-installation) |
+| Restore to another local directory | [Local recovery](#local-recovery) |
+| Recover database-backed accounts | [External database recovery](#external-database-recovery) |
+| Restore into a cluster | [Kubernetes and Helm recovery](#kubernetes-and-helm-recovery) |
+| Upgrade an existing 1.3.0 deployment | [Upgrade from 1.3.0](#upgrade-from-130) |
+
+Commands run from the administrator's CLI. Replace `prod` with the source
+context and use a separate destination name. Confirm both before maintenance.
+
+Runtime capture uses a helper image matching the installed CLI release. The
+Docker host or cluster must be able to obtain that image before maintenance.
+
+## Before maintenance
+
 Pause external provider editors, database writers, the watcher and uploads before
 maintenance. SFTPWarden coordinates its own operations; its locks cannot stop an
 unrelated database client or filesystem editor. Maintenance capture terminates
@@ -9,9 +29,18 @@ trusted host keys.
 
 ## Capture the running installation
 
+Check `sftpwarden context show prod` and arrange downtime. This example includes
+uploaded files; without `--include-data`, they are excluded:
+
 ```bash
 sftpwarden backup --context prod --maintenance --include-data --output recovery.tar.gz --yes
 ```
+
+Keep the reported archive in restricted storage. A command failure means the
+capture or resumption needs attention; do not treat a partially produced file as
+a successful backup.
+
+### What capture does
 
 For Compose, capture reads the selected container's applied configuration and
 actual mounts. Remote contexts capture the remote runtime, including local-sync
@@ -25,9 +54,11 @@ runtime state or host keys. Including nonempty `data/` also requires maintenance
 files without retained runtime identity cannot form a usable recovery archive.
 
 The command resumes only a previously running installation. It verifies resumed
-health, and cluster identity, before publishing the archive. Inspect reported
+health and cluster identity, before publishing the archive. Inspect reported
 cleanup or resumption failures before retrying. Do not remove an operation lock
 until its owning process has stopped and the target has been inspected.
+
+### Archive contents and limits
 
 Archives contain a logical provider snapshot, configuration, host keys, runtime
 state and optional user data, with file checksums and Linux ownership/modes.
@@ -60,11 +91,30 @@ Recreate required external mounts and network access before activation.
 sftpwarden restore recovery.tar.gz --root ./recovered --include-data --yes
 ```
 
-The result reports `files_restored` and `activation_required: true`. Register the
-recovered directory as a local context, inspect its configuration, provide any
-external secrets and deploy explicitly. Linux metadata is applied and verified
+The result reports `files_restored` and `activation_required: true`. Register
+the recovered directory and inspect the selected destination:
+
+```bash
+sftpwarden context add recovered --root ./recovered
+sftpwarden context use recovered
+sftpwarden context show
+cat ./recovered/sftpwarden.yaml
+```
+
+Provide external secrets and resolve any port or container-name conflict with
+the source before activation. Then preview and deploy:
+
+```bash
+sftpwarden deploy --dry-run
+sftpwarden deploy
+sftpwarden health
+```
+
+Check a real SFTP upload and download against the recovered server. Linux metadata is applied and verified
 inside the runtime, including when the CLI runs on macOS or Windows. Do not
 claim recovery from a successful host-side copy alone.
+
+### Replacing an existing local runtime
 
 For an existing local runtime, use `restore --context NAME --maintenance` only
 with matching provider settings, generated Compose and expected bind mounts.
@@ -79,16 +129,18 @@ for recovery without elevated host filesystem access. When an administrator rest
 an operator-owned project, its configuration, provider and journal retain the
 project owner's access.
 
+### Interrupted local recovery
+
 Before the first replacement effect, failure resumes a previously running
 runtime. After replacement starts, failure keeps it stopped and blocks startup
 with mixed contents. Retain the journal, source and safety archive. Recover the
-safety archive into a separate empty destination, or reconcile every recorded
+safety archive into a separate empty destination or reconcile every recorded
 step before explicit activation. Never delete a blocker merely to start SSH.
 
 ### External database recovery
 
 An empty directory does not isolate a database. Initialize a **separate empty
-database/table or collection**, with the same provider type and schema, and
+database/table or collection**, with the same provider type and schema and
 register a local context whose configuration selects it. Keep writers paused.
 
 ```bash
@@ -105,7 +157,9 @@ the database before retrying; filesystem rollback alone does not undo a committe
 database change.
 
 For remote recovery, first complete this local recovery and register the recovered
-project. Then use `restore --context EMPTY_REMOTE --provider-context RECOVERED_LOCAL`.
+project. Then use `sftpwarden restore recovery.tar.gz --context EMPTY_REMOTE
+--provider-context RECOVERED_LOCAL --include-data` (on one shell line). Replace
+both uppercase names with the registered destination contexts.
 The second step verifies the completed receipt and unchanged database contents,
 then restores runtime files; it does not replace the database again. Supply the
 new destination's credentials on the remote host before deploy.
@@ -114,7 +168,7 @@ new destination's credentials on the remote host before deploy.
 
 First restore into a separate local `--root` (including `--provider-context` for
 external databases). Register that recovered project, select Kubernetes mode and
-a separate namespace/release, and keep the archived runtime policy unchanged.
+a separate namespace/release and keep the archived runtime policy unchanged.
 Then restore the same archive with `--context RECOVERED_CLUSTER --include-data`.
 Only after file recovery succeeds, run `deploy` for that context.
 
@@ -125,15 +179,41 @@ the matching Secret privately in the new namespace before recovery. A missing or
 mismatched identity is refused. External providers use the separately recovered
 database and do not allocate a provider PVC.
 
-Verify health, every retained host-key fingerprint, account IDs, file hashes and
-SFTP upload/download against the recovered runtime before retiring the source.
+### Verify before retiring the source
 
+Complete these checks against the restored runtime:
+
+1. Health succeeds and the expected configuration is applied.
+2. Every retained host-key fingerprint matches the trusted source.
+3. Account UID/GID values and file ownership match the archive.
+4. File hashes match and an authenticated SFTP upload/download succeeds.
+
+Keep the source and archives until all checks pass. A health check alone does
+not verify restored file contents or client access.
+
+(upgrade-from-130)=
 ## Upgrade from 1.3.0
+
+The `upgrade` command is new in 1.3.1. First update the CLI with the manager that
+installed it, preserving the same environment and provider extras. For example,
+use `python -m pip install --upgrade 'sftpwarden[mysql]==1.3.1'` in the owning
+virtual environment, `pipx upgrade sftpwarden` for pipx, or
+`uv tool upgrade sftpwarden` for an unpinned uv tool. A pinned uv installation
+requires updating its explicit requirement with `uv tool install --force` and
+retaining its original extras/options. Source checkouts and container CLIs use
+their source/image update procedure instead.
+
+Stop an old active watcher before replacing its native CLI installation. After
+installing 1.3.1, preview `sftpwarden upgrade --dry-run`. A file-delivery watcher
+cannot remain on the legacy runtime protocol: confirm the proposed all-context
+deployment during the maintenance window, or deploy the contexts explicitly
+before replacing the watcher. Read [Upgrade](cli/upgrade.md) for the complete
+consent and recovery contract. Subsequent supported CLI updates can use `upgrade`.
 
 Take a verified recovery point before changing an existing deployment. Version
 1.3.0 does not record the applied configuration needed by the new maintenance
 capture. Preserve its actual mounted configuration, provider, state, host keys
-and data during a stopped maintenance window, and verify that recovery material
+and data during a stopped maintenance window and verify that recovery material
 independently. A project-only archive is insufficient evidence of runtime recovery.
 
 ### Compose provider layout
@@ -149,6 +229,11 @@ do not remove the preserved source until the deployed mount is verified.
 ### Kubernetes identity and storage
 
 Set the explicit cluster context, namespace and release before preparation:
+
+CLI deploy, `kube apply` and `helm upgrade` perform preparation automatically.
+The separate preparation commands below are useful for inspection and for direct
+external Helm/kubectl workflows; they are not an extra mandatory migration step
+before every CLI deploy.
 
 ```bash
 sftpwarden kube prepare --context prod --dry-run
@@ -167,7 +252,7 @@ already contain valid matching keys; it is never overwritten with an empty Secre
 If the old ephemeral keys are already lost, preservation cannot be claimed. Recover
 them from trusted material or perform an explicit client trust change.
 
-For direct Helm use, run `kube prepare` first, write the generated values, and then
+For direct Helm use, run `kube prepare` first, write the generated values and then
 upgrade the chart. An unprepared legacy upgrade is refused. The StatefulSet uses
 `OnDelete`: updating Helm resources does not itself replace the running Pod.
 Review the result and explicitly delete the selected `<release>-0` Pod to activate

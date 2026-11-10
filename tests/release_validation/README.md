@@ -1,5 +1,19 @@
 # SFTPWarden Release Validation Suite
 
+Management-update cases exercise real owning pip, pipx and uv installations in
+private temporary environments. Watcher-update cases replace actual Docker and
+Linux supervisord processes, retain checkpoints and verify their versions. The
+coordinated-upgrade case checks refusal without consent and actual deployment of
+every registered context after consent. Native Windows Task Scheduler and macOS
+launchd replacement require separate isolated hosts; mocked command ordering is
+not evidence that these native lifecycle checks passed.
+
+Local runs can set `SFTPWARDEN_RELEASE_BUILDER` to a disposable Buildx builder.
+Test image builds then use that builder and load their outputs. Register ownership
+before creating it and remove the builder and its cache after the run. Fixtures
+remove their own containers with anonymous volumes and preserve borrowed image
+tags; never use global Docker pruning as test cleanup.
+
 The candidate gate installs the built wheel and verifies that imports come from
 that installation, then exercises the exact image/chart artifacts recorded in the
 candidate inventory. `SFTPWARDEN_TEST_INSTALLED_ARTIFACT=1` enables the import

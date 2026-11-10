@@ -4,6 +4,7 @@ annotated-types==0.7.0
 dnspython==2.9.2
 markdown-it-py==4.2.0
 mdurl==0.1.2
+packaging==26.3
 passlib==1.7.4
 psycopg==3.3.4
 psycopg-binary==3.3.4

@@ -14,8 +14,10 @@ from sftpwarden.cli_commands.deploy_schema import (
     apply_provider_schema_before_deploy,
     provider_schema_deploy_text,
 )
+from sftpwarden.cli_commands.deploy_upgrade import prepare_upgrade
 from sftpwarden.cli_commands.errors import handle_error
 from sftpwarden.cli_commands.output import print_json
+from sftpwarden.cli_commands.update_notice import notify_update
 from sftpwarden.config import KubernetesMode, SFTPWardenConfig, load_config
 from sftpwarden.contexts import ContextEntry, resolve_context
 from sftpwarden.render.kubernetes import HELM_VALUES_FILE, helm_values_text, write_helm_values
@@ -28,9 +30,12 @@ from sftpwarden.services.deploy import (
     helm_deployment_plan,
     translate_command_failure,
 )
+from sftpwarden.services.deployment_upgrade import begin_upgrade, complete_upgrade
 from sftpwarden.system.commands import CommandResult, run
 from sftpwarden.utils.console import console, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
+from sftpwarden.utils.paths import contexts_path
+from sftpwarden.utils.state_transactions import serialized_state
 
 
 @helm_app.command("values")
@@ -114,6 +119,7 @@ def helm_lint(
 
 
 @helm_app.command("upgrade")
+@serialized_state(contexts_path)
 def helm_upgrade(
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
     install: Annotated[bool, typer.Option("--install")] = False,
@@ -124,7 +130,19 @@ def helm_upgrade(
     """Install or upgrade the Helm release."""
     try:
         entry, loaded = _load_context_config(context, None, read_only=dry_run)
-        schema_result = apply_provider_schema_before_deploy(entry, loaded, dry_run=dry_run, yes=yes)
+        upgrade = prepare_upgrade(
+            entry,
+            dry_run=dry_run,
+            yes=yes,
+            json_output=json_output,
+            kubernetes_mode=KubernetesMode.HELM,
+        )
+        if not dry_run:
+            begin_upgrade(entry, upgrade)
+            loaded = load_config(entry.config)
+        schema_result = apply_provider_schema_before_deploy(
+            entry, loaded, dry_run=dry_run, yes=True
+        )
         plan = helm_deployment_plan(entry, loaded)
         commands = _helm_upgrade_commands(plan, install=install)
         if not commands:
@@ -135,6 +153,7 @@ def helm_upgrade(
                     {
                         "dry_run": True,
                         "plan": plan.as_dict(),
+                        "upgrade": upgrade.as_dict(),
                         "command": commands[0],
                         "commands": commands,
                         "provider_schema": (
@@ -148,7 +167,7 @@ def helm_upgrade(
                 console.print(schema_text)
             console.print("\n".join(" ".join(command) for command in commands))
             return
-        if entry.root and schema_result and schema_result.changed:
+        if entry.root and schema_result and schema_result.changed and not json_output:
             print_success(provider_schema_deploy_text(schema_result))
             if schema_result.backup_path:
                 console.print(f"Backup: {schema_result.backup_path}")
@@ -156,16 +175,19 @@ def helm_upgrade(
             result = apply_kubernetes_deployment(
                 entry, loaded, mode=KubernetesMode.HELM, install=install, runner=run
             )
+            upgraded = complete_upgrade(entry, upgrade)
         if json_output:
             print_json(
                 {
                     "dry_run": False,
                     "plan": plan.as_dict(),
                     "result": result,
+                    "upgrade": upgraded,
                 }
             )
             return
         print_success("Helm release applied.")
+        notify_update()
     except SFTPWardenError as exc:
         handle_error(exc)
 

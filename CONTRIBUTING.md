@@ -1,7 +1,7 @@
 # Contributing to SFTPWarden
 
 Thanks for helping improve SFTPWarden. Bug reports, docs fixes, examples, tests,
-security hardening, provider improvements, and operational feedback are all welcome.
+security hardening, provider improvements and operational feedback are all welcome.
 
 SFTPWarden is infrastructure software, so small, clear, well-tested changes are
 preferred over large rewrites.
@@ -12,7 +12,7 @@ Found a bug? Open an issue with:
 
 - what you expected to happen;
 - what happened instead;
-- your OS, Python version, Docker version, and SFTPWarden version or commit;
+- your OS, Python version, Docker version and SFTPWarden version or commit;
 - the exact command you ran;
 - relevant logs or traceback with secrets redacted.
 
@@ -58,8 +58,6 @@ changes from `dev` to `main` when preparing production or release updates.
 git clone https://github.com/kithuto/sftpwarden.git
 cd sftpwarden
 git checkout dev
-python -m venv .venv
-source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev,docs,mysql,postgres,mongodb]"
 sftpwarden --version
@@ -68,18 +66,18 @@ sftpwarden --version
 The `mysql` extra also enables MariaDB because both providers use PyMySQL. The
 `mariadb` extra is an alias for the same dependency.
 
-Use Python 3.11, 3.12, 3.13, or 3.14. The full test matrix uses all four through
+Use Python 3.11, 3.12, 3.13 or 3.14. The full test matrix uses all four through
 `tox`.
 
 ## Daily Development Commands
 
-Run the full local validation:
+When the complete code change is ready, run the full ordinary validation:
 
 ```bash
 tox
 ```
 
-Run one environment:
+During development, select only the environment relevant to the change:
 
 ```bash
 tox -e py311
@@ -135,13 +133,13 @@ Build package artifacts:
 python -m build
 ```
 
-Clean local artifacts:
+Optional cleanup after inspecting its scope (not a validation step):
 
 ```bash
 tox -e clean
 ```
 
-This removes Python caches, coverage output, docs output, package artifacts, and
+This removes Python caches, coverage output, docs output, package artifacts and
 Docker smoke-test images created during local validation.
 
 ## Project Structure
@@ -151,12 +149,12 @@ sftpwarden/
   cli_commands/        # Typer command modules
   config/              # Project and global config models
   contexts/            # Context registry and resolution
-  providers/           # YAML, CSV, SQLite, SQL, and MongoDB providers
+  providers/           # YAML, CSV, SQLite, SQL and MongoDB providers
   refresh/             # Runtime refresh orchestration
-  remote/              # SSH, rsync/scp, and remote deploy support
+  remote/              # SSH, rsync/scp and remote deploy support
   render/              # Compose and Kubernetes rendering
   security/            # Password/hash helpers
-  services/            # Deploy, backup, health, and CLI-facing workflows
+  services/            # Deploy, backup, health and CLI-facing workflows
   system/              # Subprocess wrapper
   users/               # User models and provider mutation helpers
   utils/               # Small shared utilities
@@ -175,20 +173,25 @@ tools/                 # Local maintenance helpers
 
 ## Coding Guidelines
 
-- Keep code, CLI output, logs, examples, and docs in English.
+- Keep code, CLI output, logs, examples and docs in English.
 - Preserve the public CLI unless a change is explicitly planned.
 - Prefer small modules with clear ownership.
 - Keep runtime dependencies minimal.
 - Use type hints for public functions.
 - Use NumPy-style docstrings for public classes and functions.
 - Do not print secrets.
-- Do not commit generated output such as `.tox/`, `dist/`, or `docs/_build/`.
+- Do not commit generated output such as `.tox/`, `dist/` or `docs/_build/`.
 - Preserve unrelated user changes when working in a dirty tree.
 
 ## Documentation Guidelines
 
 The README should stay focused on adoption: what the project does, when to use it,
-how to install it, and the shortest safe path to a running deployment.
+how to install it and the shortest safe path to a running deployment.
+
+Use clear English and avoid serial commas before `and` or `or`. Start with the
+simplest working procedure, explain how to verify it and link to advanced detail.
+The current documentation targets 1.3.1; basic installation follows the latest
+release without a version pin or required virtual environment.
 
 Use `docs/` for detail:
 
@@ -196,7 +199,7 @@ Use `docs/` for detail:
 - operations and remote deployment workflows;
 - security model and limitations;
 - CLI reference;
-- contribution, development, and testing workflow.
+- contribution, development and testing workflow.
 
 ## Pull Request Checklist
 
@@ -205,11 +208,21 @@ Before opening a PR:
 - target `dev`, not `main`;
 - for docs-only changes, run `tox -e docs`;
 - for code changes, run `tox`;
-- for Docker/runtime changes, build the affected Docker image locally;
+- verify runtime or deployment changes in disposable real environments;
 - update docs and examples when behavior changes;
 - add or update tests for code changes;
-- keep secrets out of logs, screenshots, and fixtures;
+- keep secrets out of logs, screenshots and fixtures;
 - explain the user-facing impact in the PR description.
+
+## Upgrade Changes
+
+When changing upgrades, keep `sftpwarden/release_compatibility.json` aligned with
+the release and tested runtime bounds. Verify owning-manager updates in disposable
+pip, pipx and uv installations, and watcher replacement against real supported
+runtimes. Preserve checkpoints and prove that compatible management updates do
+not deploy servers. Incompatible updates must require explicit all-context consent.
+Scheduler command tests do not establish native platform support: identify any
+unavailable Windows or macOS scheduler checks separately from passing Linux tests.
 
 ## Security Issues
 

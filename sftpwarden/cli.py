@@ -11,6 +11,7 @@ from sftpwarden.cli_commands import init as _init  # noqa: F401
 from sftpwarden.cli_commands import kubernetes as _kubernetes  # noqa: F401
 from sftpwarden.cli_commands import provider as _provider  # noqa: F401
 from sftpwarden.cli_commands import runtime as _runtime  # noqa: F401
+from sftpwarden.cli_commands import upgrade as _upgrade  # noqa: F401
 from sftpwarden.cli_commands import users as _users  # noqa: F401
 from sftpwarden.cli_commands import watcher as _watcher  # noqa: F401
 from sftpwarden.cli_commands.app import app

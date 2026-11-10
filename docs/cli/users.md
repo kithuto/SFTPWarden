@@ -1,6 +1,14 @@
 # User Commands
 
-User commands mutate provider data. After a runtime-affecting user change,
+Use these commands to list accounts, create access or revoke it. Read commands
+show provider data; they do not prove that a client can authenticate. For a full
+walkthrough, see [Operations](../operations.md#local-runtime).
+
+Commands below show alternative invocations. Replace `prod` with your context
+where needed. User JSON can contain password hashes and other credential
+material; keep it out of public logs and issues.
+
+User changes mutate provider data. After a runtime-affecting user change,
 SFTPWarden refreshes the runtime automatically unless `--no-refresh` is passed.
 For Kubernetes YAML/CSV providers, SFTPWarden saves the local provider file and
 prints the deploy/apply/upgrade command to run because the file is copied into
@@ -68,14 +76,22 @@ sftpwarden user show alice --config ./sftpwarden.yaml
 
 ## `sftpwarden user create`
 
-Creates a user in the selected provider.
+Create Alice with an interactively prompted password:
 
 ```bash
-sftpwarden user create alice --public-key ./alice.pub
-sftpwarden user create alice --password "correct horse battery staple"
-sftpwarden user create alice --password-hash '$y$j9T$...'
-sftpwarden user create alice --public-key ./alice.pub --upload-dir inbound --comment "Finance inbox"
+sftpwarden user create alice
 ```
+
+Before the first deployment, add `--no-refresh` because no runtime exists yet.
+As an alternative for a new account, use its existing public key:
+
+```bash
+sftpwarden user create bob --public-key ./bob-key.pub
+```
+
+To add a key to Alice after creating her account, use
+`sftpwarden user key add alice laptop --public-key ./alice-key.pub`.
+See [Named Keys](../named-keys.md) for key generation and verification.
 
 ### Arguments
 
@@ -89,7 +105,7 @@ sftpwarden user create alice --public-key ./alice.pub --upload-dir inbound --com
 | --- | --- | --- | --- |
 | `--public-key` | `TEXT` | none | Adds an SSH public key. The value can be literal OpenSSH public key text or a path to a public key file. May be passed multiple times. |
 | `--password` | `TEXT` | none | Plaintext password to hash before saving. Avoid shell history exposure in production. |
-| `--password-hash` | `TEXT` | none | Precomputed password hash to store. Use this instead of `--password` in automation. |
+| `--password-hash` | `TEXT` | none | Precomputed `sha512crypt` hash to store. Treat it as sensitive; command arguments can be visible to other processes. |
 | `--upload-dir` | relative path | `upload` | Upload directory inside the user's chroot. Must be a safe relative path. |
 | `--comment` | `TEXT` | none | Operator note stored as metadata. It does not affect runtime access by itself. |
 | `--uid` | `INTEGER` | auto-assigned | Explicit Linux UID for the runtime user. |
@@ -105,7 +121,10 @@ storage.
 
 ## `sftpwarden user update`
 
-Updates an existing provider user.
+Updates an existing provider user. The examples below are independent changes.
+`--public-key` replaces the user's key list; use the named-key commands to change
+one key without replacing the others. UID/GID changes to retained identities
+require a maintenance and ownership procedure; refresh refuses silent renumbering.
 
 ```bash
 sftpwarden user update alice --comment "Finance inbox"
@@ -139,8 +158,8 @@ sftpwarden user update alice --enabled
 
 ## `sftpwarden user disable`
 
-Disables an entire user. Disabled users are treated as inactive by runtime
-planning.
+Disables an entire user. After successful refresh, new password and key logins
+are denied. Existing sessions continue; see [revocation](../named-keys.md#revocation-and-expiry).
 
 ```bash
 sftpwarden user disable alice

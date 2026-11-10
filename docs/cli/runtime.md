@@ -3,8 +3,16 @@
 Runtime commands are intended to run inside the SFTPWarden container. Most
 operators do not need to run them directly from a workstation.
 
-The generated Compose and Kubernetes deployments use these commands to plan,
-apply, loop, and health-check runtime user state.
+Use the workstation commands `sftpwarden refresh` and `sftpwarden health` for
+normal operation. For a local Compose diagnostic, run:
+
+```bash
+docker compose exec sftpwarden sftpwarden runtime health --json
+```
+
+All direct `runtime` examples below run **inside the container**. The generated
+deployment uses them to apply user policy and check process or synchronization
+health. They do not apply new deployment configuration.
 
 ## `sftpwarden runtime`
 
@@ -39,7 +47,7 @@ sftpwarden runtime plan --json
 
 ### Effects
 
-Read-only. It loads config, provider users, and runtime state, then prints what a
+Read-only. It loads config, provider users and runtime state, then prints what a
 refresh would do.
 It uses the applied configuration captured by container startup. A missing or
 invalid applied snapshot is an error; recreate the runtime with deploy.
@@ -60,7 +68,7 @@ sftpwarden runtime refresh --config /etc/sftpwarden/sftpwarden.yaml
 
 ### Effects
 
-Applies provider users to Linux users, UID/GID state, home/upload directories,
+Applies provider users to Linux users, UID/GID state, home/upload directories
 and OpenSSH authorized keys.
 It does not render or reload `sshd_config`. An undeployed provider configuration
 change blocks manual refresh; other pending config changes are reported and the
@@ -125,7 +133,7 @@ restart policy controls restart. Provider errors are retried with delays of
 retained, including installed OpenSSH expiry deadlines.
 
 Readiness checks current process identities, a supervisor heartbeat no older
-than 5 seconds, the local OpenSSH listener, and successful reconciliation.
+than 5 seconds, the local OpenSSH listener and successful reconciliation.
 An unapplied failure immediately makes readiness false. For enabled sync, the
 maximum success age is `sync.interval_seconds + 30 + 30 + 5` seconds (one
 interval, attempt budget, retry cap and scheduling allowance). A pending attempt

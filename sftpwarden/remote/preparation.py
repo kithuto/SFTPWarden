@@ -8,13 +8,21 @@ from uuid import uuid4
 
 import yaml
 
-from sftpwarden.config import FILE_PROVIDER_TYPES, DeployTarget, SFTPWardenConfig, load_config
+from sftpwarden.config import (
+    FILE_PROVIDER_TYPES,
+    DeployTarget,
+    SFTPWardenConfig,
+    load_config,
+    write_config,
+)
 from sftpwarden.contexts import local_context
 from sftpwarden.render.compose import compose_model
 from sftpwarden.security.environment import dsn_environment_names
 from sftpwarden.services.provider_layout import complete_provider_layout, migrate_provider_layout
 from sftpwarden.services.provider_schema import reconcile_provider_schema
+from sftpwarden.utils._version import get_version
 from sftpwarden.utils.errors import ProviderError, SFTPWardenError
+from sftpwarden.utils.images import official_image
 from sftpwarden.utils.persistence import atomic_bytes, reject_symlink
 
 PREPARATION_FILE = ".sftpwarden/remote-preparation.yml"
@@ -120,6 +128,9 @@ def bootstrap_preparation(
 def apply_preparation(root: Path, *, relative_config: str, compose_file: str) -> None:
     """Reconcile schemas, migrate file mounts, and render the selected Compose file."""
     config_path, config = preparation_inputs(root, relative_config, compose_file)
+    if official_image(config.docker.image):
+        config.docker.image = f"ghcr.io/kithuto/sftpwarden:{get_version()}"
+        write_config(config_path, config)
     entry = local_context(config.project.name, root, config.provider.type)
     entry.config = str(config_path)
     reconcile_provider_schema(entry, config)

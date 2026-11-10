@@ -50,14 +50,16 @@ def test_context_warns_when_watcher_kept_without_local_sync_targets(
     assert "there are no remote local-sync contexts left" in capsys.readouterr().out
 
 
-def test_helm_upgrade_reports_missing_upgrade_command(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_helm_upgrade_reports_missing_upgrade_command(
+    monkeypatch: pytest.MonkeyPatch, local_project_factory
+) -> None:
     class EmptyPlan:
         actions: list[object] = []
 
         def as_dict(self) -> dict[str, object]:
             return {}
 
-    entry = local_context("dev", Path("project"), ProviderType.YAML)
+    _, entry = local_project_factory()
     config = default_project_config("dev", deploy_target=DeployTarget.KUBERNETES)
     monkeypatch.setattr(
         helm_commands, "_load_context_config", lambda *_args, **_kwargs: (entry, config)

@@ -22,6 +22,7 @@ from sftpwarden.services.deploy import (
     helm_command,
     kubectl_command,
 )
+from sftpwarden.services.deployment_upgrade import begin_upgrade, complete_upgrade, plan_upgrade
 from sftpwarden.services.kubernetes_identity import (
     _capture,
     ensure_release_retention,
@@ -92,10 +93,12 @@ def test_legacy_cluster_preparation_direct_upgrade_and_retained_reinstall(
     legacy_image,
     legacy_chart,
     cleanup_stack,
+    monkeypatch,
     mode,
     authority,
 ):
     require_kubernetes_cluster()
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     root = tmp_path / "project"
     root.mkdir(mode=0o700)
     client = tmp_path / "client"
@@ -261,6 +264,10 @@ def test_legacy_cluster_preparation_direct_upgrade_and_retained_reinstall(
             == old_pod["metadata"]["uid"]
         )
         assert server.connect("control").returncode == 0
+    entry = local_context("upgrading", root, config.provider.type)
+    upgrade = plan_upgrade(entry)
+    assert upgrade.source == "1.3.0"
+    begin_upgrade(entry, upgrade)
     with operation_lock(config, "test-identity-preflight"):
         prepare_identity(config)
     if mode == KubernetesMode.HELM:
@@ -276,6 +283,7 @@ def test_legacy_cluster_preparation_direct_upgrade_and_retained_reinstall(
     close()
     request(config, ["delete", "pod", "runtime-0", "--wait=true", "--timeout=60s"])
     wait_for_activation(config, previous_uid=old_pod["metadata"]["uid"])
+    assert complete_upgrade(entry, upgrade)["status"] == "complete"
     close = tunnel(config, server, cleanup_stack)
     assert server.connect("control").returncode == 0
     assert (

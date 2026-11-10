@@ -28,8 +28,14 @@ EXTERNAL_GROUPS = {
         "test_remote_compose_artifacts.py",
         "test_upgrade_recovery.py",
         "test_context_cleanup.py",
+        "test_management_updates.py",
     },
-    "delivery": {"test_watcher_ssh.py", "test_provider_transport.py", "test_database_providers.py"},
+    "delivery": {
+        "test_watcher_ssh.py",
+        "test_watcher_upgrade.py",
+        "test_provider_transport.py",
+        "test_database_providers.py",
+    },
     "databases": {
         "test_provider_concurrency.py",
         "test_sql_read_snapshot.py",

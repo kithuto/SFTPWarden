@@ -1,68 +1,41 @@
 # CLI Reference
 
-User and provider mutations report a conflict if their source changed before
-the write. Reload before retrying. MongoDB standalone supports individual user
-edits; bulk import/copy, schema migration and provider restore require a replica
-set or sharded cluster. See [provider guarantees](providers.md#concurrent-edits).
-
-Runtime refresh uses the deployed configuration snapshot and never rewrites
-OpenSSH's daemon configuration. Apply pending provider or daemon changes with
-`deploy`; see [runtime commands](cli/runtime.md).
-Local Compose refresh and health use the configured `docker.compose_file`,
-including filenames containing spaces. Remote operations use the context's
-`remote.compose_file` setting.
-
-This reference documents the public `sftpwarden` command surface from the real
-Typer application. It is written for operators who are new to SFTPWarden and need
-to know what each command does, what each argument accepts, and which commands
-change local files, remote hosts, containers, provider data, or Kubernetes
-resources.
+Use this reference to look up a command's arguments, options and effects.
+For an end-to-end first deployment, follow [Getting Started](getting-started.md).
+For task-based procedures, use [Operations](operations.md).
 
 ## How To Read Commands
 
-Compose `deploy` for local and remote `local-sync` contexts includes the explicit
-[file-provider mount migration](providers.md#compose-file-provider-migration).
-It preserves recovery copies, updates the authoritative provider path and waits
-for the recreated runtime. `deploy --dry-run` leaves project files and the context
-registry unchanged.
-
-`sftpwarden` is command-first:
-
-```bash
+```text
 sftpwarden <command> [options]
 sftpwarden <group> <subcommand> [arguments] [options]
 ```
 
-Most commands work against the active context. Select a different context for
-one command with `--context <name>` or `-c <name>`. Use `--config <path>` only
-when you want to bypass the context registry and point directly at a
-`sftpwarden.yaml` file.
+Angle brackets describe required values; square brackets describe optional
+parts. Replace them with real values rather than typing the brackets.
 
-`sftpwarden.yaml` is desired state. Editing it manually, or changing it with
-`sftpwarden config`, does not update running infrastructure by itself. Apply
-deployment-level config changes with `sftpwarden deploy`, `sftpwarden kube
-apply`, or `sftpwarden helm upgrade`. User/provider data changes are applied to
-the running runtime with `sftpwarden refresh`, except Kubernetes YAML/CSV
-providers, where the provider file is copied into the PVC during deploy/apply or
-upgrade.
+Most commands use the active context. Inspect it with `sftpwarden context show`
+or select a context for one command with `--context NAME` where supported.
+`validate` and `compose` instead default to `sftpwarden.yaml` in the current
+directory. The command's option table defines how its target is selected.
 
-Public keys must contain one supported SSH key with a valid wire encoding whose
-algorithm matches the declared type. Truncated blobs, mismatched types and
-multiple key lines are rejected before provider changes. A malformed key in a
-provider fails refresh and preserves the previously applied authorization.
-See [public-key validation](named-keys.md#public-key-validation) for its scope.
+Examples on reference pages show **alternatives**, unless introduced as a
+sequence. Use `sftpwarden COMMAND --help` to inspect an individual command.
 
-Key deletion, disable and expiry may leave a user with no usable credentials;
-that is a valid deny policy. Successful refresh removes authorization for new
-sessions. Already authenticated sessions continue until closed or terminated by
-the runtime administrator; see [revocation and expiry](named-keys.md#revocation-and-expiry).
-In schema v2, an explicit `keys: []` also revokes a leftover legacy `public_keys`
-copy. A malformed key container or CSV boolean fails validation instead.
+### When changes take effect
 
-`runtime health --probe readiness|liveness|startup` distinguishes policy readiness
-from process availability. External `health` fails for an unreachable or non-ready
-runtime. See [runtime health](cli/runtime.md#sftpwarden-runtime-health) for deadlines
-and recovery behavior.
+| Operation | Effect |
+| --- | --- |
+| `config PATH VALUE` | Saves desired project configuration. |
+| `deploy` | Applies configuration and generated deployment files. |
+| `upgrade` | Updates the CLI and watcher; incompatible deployments require explicit all-context consent. |
+| User/key mutation | Saves provider data and normally refreshes access. |
+| `refresh` | Reloads users already available to the runtime. |
+| `watch` | Delivers editable provider files to remote local-sync contexts. |
+
+Kubernetes YAML/CSV files require deploy for delivery. Comment-only edits do not
+need runtime refresh. See [Configuration Effects](configuration-effects.md) for
+the complete setting-by-setting rules.
 
 ## Common Value Types
 
@@ -77,12 +50,15 @@ and recovery behavior.
 
 ## Common Flags
 
+These flags are available only on commands that list them. They are not global
+options that can be added to every command.
+
 | Flag | Value | What it does |
 | --- | --- | --- |
 | `--context`, `-c` | `TEXT` | Runs the command against one registered context without changing the active context. |
 | `--config` | `PATH` | Reads a specific `sftpwarden.yaml` file directly. |
 | `--json` | flag | Prints machine-readable JSON instead of Rich tables or human text. |
-| `--dry-run` | flag | Prints the planned operation without writing files, touching containers, or mutating remote resources. |
+| `--dry-run` | flag | Previews the operation without applying it. Reads and prerequisite checks may still occur; see the command's effects. |
 | `--yes`, `-y` | flag | Accepts confirmation prompts for scripts and CI. Use it only when the action is intentional. |
 | `--help` | flag | Shows command help generated by Typer. |
 
@@ -102,38 +78,44 @@ sftpwarden --show-completion
 
 ## Command Sections
 
-The command pages below are also available in the left navigation under the
-Reference section. Each page documents its commands and subcommands with
-arguments, options, examples, and operational effects.
+| Task | Reference |
+| --- | --- |
+| Create a project | [Init](cli/init.md) |
+| Update the CLI and watcher | [Upgrade](cli/upgrade.md) |
+| Deploy, inspect, refresh or back up | [Core](cli/core.md) |
+| Manage SFTP accounts | [Users](cli/users.md) |
+| Manage one account's keys | [User keys](cli/user-keys.md) |
+| Transfer accounts or migrate schemas | [Providers](cli/providers.md) |
+| Select an installation | [Contexts](cli/contexts.md) |
+| Inspect or save settings | [Config](cli/config.md) |
+| Deliver remote provider files | [Watcher and sync](cli/watcher.md) |
+| Operate Kubernetes manifests | [Kubernetes](cli/kubernetes.md) |
+| Operate a Helm release | [Helm](cli/helm.md) |
+| Inspect container-side behavior | [Runtime](cli/runtime.md) |
 
-- [Init Commands](cli/init.md): project creation and provider schema selection.
-- [Core Commands](cli/core.md): deploy, validate, compose, plan, refresh, health,
-  backup (including explicit runtime maintenance), and restore to an existing
-  context (with maintenance and interruption tracking for local file providers)
-  or an empty local recovery directory. In-place recovery requires host access
-  to protected runtime files; see the [recovery permissions](recovery.md).
-- [User Commands](cli/users.md): user listing, creation, updates, disable/enable,
-  and removal.
-- [User Key Commands](cli/user-keys.md): named key listing, add/remove,
-  lifecycle, rotation, expiry, and import.
-- [Provider Commands](cli/providers.md): provider export/import/copy and schema
-  migration commands.
-- [Context Commands](cli/contexts.md): context registry, active context, remote
-  metadata, cleanup, and dynamic context fields.
-- [Config Commands](cli/config.md): `sftpwarden.yaml` inspection and supported
-  config updates.
-- [Watcher And Sync Commands](cli/watcher.md): remote local-sync planning,
-  foreground watch, and watcher service installation.
-- [Kubernetes Commands](cli/kubernetes.md): render, apply, status, logs, doctor,
-  and delete.
-- [Helm Commands](cli/helm.md): values, template, lint, upgrade, and uninstall.
-- [Runtime Commands](cli/runtime.md): container-side runtime entrypoints used by
-  the deployed image.
+### Advanced behavior
+
+Concurrent mutations reject stale source data. Reload before retrying; see
+[provider concurrency](providers.md#concurrent-edits). MongoDB standalone supports
+individual user edits but requires a replica set or sharded cluster for bulk
+operations.
+
+Refresh uses the applied configuration snapshot. Local Compose refresh and health
+use `docker.compose_file`; remote operations use the context's
+`remote.compose_file`. Deploy activates configuration changes and performs
+[file-provider migration](providers.md#compose-file-provider-migration) when needed.
+
+Invalid provider data preserves the last applied policy. Removing the last
+usable credential is a valid revocation and denies new sessions after application.
+Existing sessions continue. See [key validation](named-keys.md#public-key-validation),
+[revocation](named-keys.md#revocation-and-expiry) and
+[runtime health](cli/runtime.md#sftpwarden-runtime-health) for the detailed rules.
 
 ## Command Index
 
 - [sftpwarden](cli/core.md#sftpwarden)
 - [sftpwarden version](cli/core.md#sftpwarden-version)
+- [sftpwarden upgrade](cli/upgrade.md)
 - [sftpwarden init](cli/init.md#sftpwarden-init)
 - [sftpwarden deploy](cli/core.md#sftpwarden-deploy)
 - [sftpwarden validate](cli/core.md#sftpwarden-validate)

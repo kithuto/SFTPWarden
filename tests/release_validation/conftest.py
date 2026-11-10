@@ -231,6 +231,9 @@ def run_external(
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run an external command used by real release scenarios."""
+    builder = (env or os.environ).get("SFTPWARDEN_RELEASE_BUILDER")
+    if builder and args[:2] == ["docker", "build"]:
+        args = ["docker", "buildx", "build", "--builder", builder, "--load", *args[2:]]
     completed = subprocess.run(
         args,
         cwd=cwd,

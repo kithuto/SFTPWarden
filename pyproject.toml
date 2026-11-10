@@ -25,6 +25,7 @@ classifiers = [
   "Topic :: System :: Systems Administration",
 ]
 dependencies = [
+  "packaging>=24.2",
   "passlib",
   "pydantic",
   "pyyaml",

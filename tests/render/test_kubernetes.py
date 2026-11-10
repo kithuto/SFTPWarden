@@ -1246,8 +1246,70 @@ def test_kube_cli_commands_cover_success_paths(
 
     for result in results:
         assert result.exit_code == 0, result.output
-    assert any(call[0][:3] == ["kubectl", "-n", "sftpwarden"] for call in calls)
+    assert any(
+        call[0][:5] == ["kubectl", "--context", "test-cluster", "-n", "sftpwarden"]
+        for call in calls
+    )
     assert any(call[1].get("capture_output") is False for call in calls)
+
+
+@pytest.mark.parametrize("secret", [None, "shared-server-identity"])
+@pytest.mark.parametrize("json_output", [False, True])
+def test_kube_doctor_checks_configured_identity_and_reports_missing_resource(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    local_project_factory: Callable[..., tuple[Path, ContextEntry]],
+    secret: str | None,
+    json_output: bool,
+) -> None:
+    """Check the actual identity source, including failure and recovery diagnostics."""
+    root = register_kubernetes_project(
+        local_project_factory, tmp_path, "doctor", KubernetesMode.MANIFESTS
+    )
+    config = load_config(root / "sftpwarden.yaml")
+    config.kubernetes.release = "My_Server"
+    config.kubernetes.namespace = "identity-tests"
+    config.kubernetes.kube_context = "isolated-cluster"
+    config.kubernetes.host_keys_secret = secret
+    write_config(root / "sftpwarden.yaml", config)
+    kind = "secret" if secret else "pvc"
+    resource = secret or "my-server-host-keys"
+    expected = [
+        "kubectl",
+        "--context",
+        "isolated-cluster",
+        "-n",
+        "identity-tests",
+        "get",
+        kind,
+        resource,
+    ]
+    check_name = "host-keys secret" if secret else "host-keys PVC"
+    calls: list[list[str]] = []
+    missing = False
+
+    def fake_run(command: list[str], **_kwargs) -> CommandResult:
+        calls.append(command)
+        if command == expected and missing:
+            return CommandResult(command, 1, "", f'{kind} "{resource}" not found')
+        return CommandResult(command, 0, "resource exists\n", "")
+
+    monkeypatch.setattr(kube_commands, "run", fake_run)
+    for missing in (False, True, False):
+        calls.clear()
+        result = CliRunner().invoke(
+            app, ["kube", "doctor", "--context", "doctor", *(["--json"] if json_output else [])]
+        )
+        assert result.exit_code == 0, result.output
+        assert calls[-1] == expected
+        if json_output:
+            check = json.loads(result.output)["checks"][-1]
+            assert check["name"] == check_name
+            assert check["command"] == expected
+            assert check["returncode"] == int(missing)
+            assert bool(check["message"]) == missing
+        else:
+            assert f"{check_name}: {'warn' if missing else 'pass'}" in result.output
 
 
 def test_kube_cli_commands_cover_error_paths(

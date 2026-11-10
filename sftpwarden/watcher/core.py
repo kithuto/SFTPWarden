@@ -313,7 +313,10 @@ def _install_watcher(
     existing = config.watcher
     replacing = existing.installed and existing.mode != selected_mode.value
     if existing.installed and existing.mode == selected_mode.value:
-        return f"Watcher already installed in {selected_mode.value} mode."
+        from sftpwarden.watcher.upgrade import upgrade_watcher, watcher_upgrade_plan
+
+        result = watcher_upgrade_plan() if dry_run else upgrade_watcher()
+        return f"Watcher already installed in {selected_mode.value} mode; {result['status']}."
     if replacing and not yes:
         raise ContextError(
             f"Watcher is already installed in {existing.mode} mode.",
@@ -484,7 +487,17 @@ def sync_target(
 
 def poll_watch(*, interval_seconds: int = 2, dry_run: bool = False) -> None:
     """Retry independently with durable acknowledgements after delivery and required refresh."""
+    from sftpwarden.utils.persistence import file_lock
+    from sftpwarden.watcher.polling import checkpoint_owner
+    from sftpwarden.watcher.process import identity, process_path, publish_process
+
+    instance, started = identity()
     poller = WatchPoller(dry_run=dry_run)
-    while True:
-        poller.poll()
-        time.sleep(interval_seconds)
+    # A replacement must never deliver alongside another managed/manual watcher.
+    # This lock is on the shared checkpoint mount for Docker too.
+    with file_lock(process_path(), timeout=0.1, owner=checkpoint_owner(process_path())):
+        while True:
+            poller.poll()
+            if not dry_run:
+                publish_process(instance, started)
+            time.sleep(interval_seconds)

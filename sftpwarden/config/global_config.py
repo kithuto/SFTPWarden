@@ -46,6 +46,13 @@ class WatcherState(BaseModel):
     activated: bool | None = None
 
 
+class UpdateConfig(BaseModel):
+    """Operator preferences for advisory release checks."""
+
+    model_config = ConfigDict(extra="forbid")
+    check_enabled: bool = True
+
+
 class GlobalConfig(BaseModel):
     """Global SFTPWarden CLI configuration."""
 
@@ -55,6 +62,7 @@ class GlobalConfig(BaseModel):
     default_provider: ProviderType | None = None
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     watcher: WatcherState = Field(default_factory=WatcherState)
+    updates: UpdateConfig = Field(default_factory=UpdateConfig)
 
 
 def load_global_config(path: Path | None = None) -> GlobalConfig:

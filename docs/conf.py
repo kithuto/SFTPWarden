@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import shutil
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 project = "SFTPWarden"
+release = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+version = release
 author = "Ignasi Rovira"
 copyright = "2026, Ignasi Rovira"
 

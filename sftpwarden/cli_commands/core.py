@@ -17,6 +17,7 @@ from sftpwarden.cli_commands.deploy_schema import (
     apply_provider_schema_before_deploy,
     provider_schema_deploy_text,
 )
+from sftpwarden.cli_commands.deploy_upgrade import prepare_upgrade
 from sftpwarden.cli_commands.errors import handle_error
 from sftpwarden.cli_commands.output import (
     print_deploy_config_plan,
@@ -25,6 +26,7 @@ from sftpwarden.cli_commands.output import (
     runtime_plan_explanation,
     runtime_plan_to_json,
 )
+from sftpwarden.cli_commands.update_notice import notify_update
 from sftpwarden.config import (
     DeployTarget,
     KubernetesMode,
@@ -53,11 +55,13 @@ from sftpwarden.services.deploy import (
     helm_values_diff_reason,
     kubernetes_rendered_manifest_diff_reason,
 )
+from sftpwarden.services.deployment_upgrade import begin_upgrade, complete_upgrade
 from sftpwarden.services.health import project_health
 from sftpwarden.utils.console import console, print_info, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
-from sftpwarden.utils.paths import expand_path
+from sftpwarden.utils.paths import contexts_path, expand_path
 from sftpwarden.utils.platform import system_is
+from sftpwarden.utils.state_transactions import serialized_state
 from sftpwarden.watcher import (
     derive_watch_targets,
     poll_watch,
@@ -363,6 +367,7 @@ def watch(
 
 
 @app.command()
+@serialized_state(contexts_path)
 def deploy(
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run")] = False,
@@ -384,16 +389,12 @@ def deploy(
     """
     try:
         entry = resolve_context(context_name=context, reconcile_config=True, read_only=dry_run)
-        if (
-            not dry_run
-            and entry.critical
-            and not yes
-            and not Confirm.ask(f"Deploy critical context {entry.name}?", default=False)
-        ):
-            raise typer.Exit(1)
+        upgrade = prepare_upgrade(entry, dry_run=dry_run, yes=yes, json_output=json_output)
+        if not dry_run:
+            begin_upgrade(entry, upgrade)
         deploy_config = load_config(entry.config) if entry.config else None
         schema_result = (
-            apply_provider_schema_before_deploy(entry, deploy_config, dry_run=dry_run, yes=yes)
+            apply_provider_schema_before_deploy(entry, deploy_config, dry_run=dry_run, yes=True)
             if deploy_config is not None
             else None
         )
@@ -404,6 +405,7 @@ def deploy(
                     {
                         "dry_run": True,
                         "plan": plan_data.as_dict(),
+                        "upgrade": upgrade.as_dict(),
                         "provider_schema": (
                             schema_result.as_dict() if schema_result is not None else None
                         ),
@@ -415,17 +417,19 @@ def deploy(
                 console.print(schema_text)
             console.print(plan_data.text())
             return
-        if schema_result and schema_result.changed:
+        if schema_result and schema_result.changed and not json_output:
             print_success(provider_schema_deploy_text(schema_result))
             if schema_result.backup_path:
                 console.print(f"Backup: {schema_result.backup_path}")
         with terminal_status(f"Deploying context {entry.name}"):
             output = deploy_context(entry)
+            upgraded = complete_upgrade(entry, upgrade)
         if json_output:
             print_json(
                 {
                     "dry_run": False,
                     "result": output,
+                    "upgrade": upgraded,
                     "plan": plan_data.as_dict(),
                     "provider_schema": (
                         schema_result.as_dict() if schema_result is not None else None
@@ -434,6 +438,7 @@ def deploy(
             )
             return
         print_success(output)
+        notify_update()
     except SFTPWardenError as exc:
         handle_error(exc)
 

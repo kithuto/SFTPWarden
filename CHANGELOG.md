@@ -57,13 +57,27 @@ not establish complete client isolation. An end-user file portal, LDAP/AD,
 complex per-path policies and auditing changes outside the runtime are outside
 these scheduled deliveries.
 
-## [1.3.1] - Unreleased
+## [1.3.1] - 2026-11-10
 
-This release is in development. The changes below require completion of the
-ordinary and external release gates before publication.
+### Added
+
+- Add `upgrade` with stable-release discovery, previews, confirmation and separate
+  CLI, watcher and deployment results. Self-update supports owning pip virtual
+  environments, pipx and uv tool installations, preserving provider dependencies.
+- Check watcher/runtime compatibility before updating. Incompatible installations
+  require explicit consent to deploy all contexts; normal management updates leave
+  servers running until explicit deploy. Custom images remain unchanged.
+- Detect actual deployed versions, recommend a backup and orchestrate supported
+  migrations during deploy, Kubernetes apply and Helm upgrade. Private receipts
+  retain incomplete-operation evidence; completion requires runtime verification.
+- Replace installed watchers with process verification and preserved checkpoints,
+  retain inactive installations and avoid restarting an unchanged current watcher.
+- Add bounded, cached release notices and `upgrade --status` for update recovery.
 
 ### Fixed
 
+- Make `kube doctor` check the configured host-key Secret or the default retained
+  PVC, avoiding false warnings for valid identity configurations.
 - Flush SQLite snapshots and restored files through writable descriptors on Windows,
   and protect temporary host-key validation files with owner-only Windows permissions.
 - Apply deny-only authentication policies, enforce key expiry, and retain the last

@@ -2,15 +2,23 @@
 
 `sftpwarden user key` manages SSH keys for one provider user.
 
-Schema v1 providers store anonymous `public_keys`. In v1, `list`, `show`, `add`,
-and `remove` work with deterministic key names and fingerprints. Operations that
-need persisted key metadata - `disable`, `enable`, `rename`, `rotate`, `expire`,
-and `import` - migrate the provider forward to schema v2 after confirmation.
-Use `--yes` for non-interactive migration approval, or `--dry-run` to preview the
-migration and key operation without writing.
+New projects use schema v2, with named keys, metadata and expiry. Key names must
+match `^[a-z][a-z0-9._-]{0,63}$`. Follow [Named Keys](../named-keys.md) for a
+practical Alice example.
 
-Schema v2 stores named keys with metadata, lifecycle fields, disabled state, and
-expiry. Key names must match `^[a-z][a-z0-9._-]{0,63}$`.
+Mutations normally refresh access unless `--no-refresh` is used. Kubernetes
+YAML/CSV projects require deploy to deliver the updated provider file. Listing
+a key shows stored policy; verify a real connection before removing an older
+working credential. The examples below are alternative invocations.
+
+## Legacy schema behavior
+
+Schema v1 providers store anonymous `public_keys`. In v1, `list`, `show`, `add`
+and `remove` work with deterministic key names and fingerprints. Operations that
+need persisted key metadata - `disable`, `enable`, `rename`, `rotate`, `expire`
+and `import` - migrate the provider forward to schema v2 after confirmation.
+Use `--yes` for non-interactive migration approval or `--dry-run` to preview the
+migration and key operation without writing.
 
 ## `sftpwarden user key`
 
@@ -84,7 +92,7 @@ Adds one SSH public key to a user.
 
 ```bash
 sftpwarden user key add alice prod-ci --public-key ./prod-ci.pub
-sftpwarden user key add alice laptop --public-key "ssh-ed25519 AAAA..."
+sftpwarden user key add alice laptop --public-key ./alice-key.pub
 sftpwarden user key add alice prod-ci --public-key ./prod-ci.pub --comment "CI deployment"
 ```
 
@@ -227,7 +235,7 @@ Replaces one key's public key while preserving its name and lifecycle metadata.
 
 ```bash
 sftpwarden user key rotate alice prod-ci --public-key ./prod-ci-new.pub
-sftpwarden user key rotate alice prod-ci --public-key "ssh-ed25519 AAAA..." --yes
+sftpwarden user key rotate alice prod-ci --public-key ./prod-ci-new.pub --yes
 ```
 
 ### Arguments
@@ -269,7 +277,7 @@ sftpwarden user key expire alice prod-ci --at 2027-01-01T12:00:00Z
 
 | Flag | Value | Default | What it does |
 | --- | --- | --- | --- |
-| `--at` | ISO date or datetime | required | Expiry date/time. Accepts values such as `2027-01-01`, `2027-01-01T12:00:00+00:00`, or `2027-01-01T12:00:00Z`. Date-only values mean midnight UTC. |
+| `--at` | ISO date or datetime | required | Expiry date/time. Accepts values such as `2027-01-01`, `2027-01-01T12:00:00+00:00` or `2027-01-01T12:00:00Z`. Date-only values mean midnight UTC. |
 | `--context`, `-c` | `TEXT` | active context | Selects a registered context. |
 | `--config` | `PATH` | none | Uses a project config directly. |
 | `--yes`, `-y` | flag | false | Accepts schema migration confirmation when the provider is v1. |

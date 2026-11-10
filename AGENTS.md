@@ -56,6 +56,10 @@ Core product principles:
   deployment changes require an explicit `deploy`.
 - The watcher only syncs editable user provider files for remote `local-sync`
   contexts. It must not watch or apply config changes.
+- Normal management upgrades defer server changes to deploy. Incompatible watcher
+  updates require explicit all-context deployment consent before any mutation.
+- Keep `release_compatibility.json` aligned with tested runtime and watcher bounds;
+  never infer backward compatibility from package version numbers alone.
 - `comment` is metadata and must not trigger runtime refresh by itself.
 - Runtime code must stay usable inside the OpenSSH container with minimal
   dependencies.

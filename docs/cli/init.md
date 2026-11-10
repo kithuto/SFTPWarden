@@ -1,14 +1,24 @@
 # Init Commands
 
+Start here when creating a project. For installation and the first password-based
+connection, use [Getting Started](../getting-started.md).
+
+Run `init` in a new project directory. YAML is the built-in default; `--provider`
+overrides the environment or global default for this project.
+
 ## `sftpwarden init`
 
 Creates a SFTPWarden project and registers it in the local context registry. It
 can create local Compose projects, remote local-sync projects, remote-only
-context entries, Kubernetes manifest projects, and Helm projects.
+context entries, Kubernetes manifest projects and Helm projects.
 
 For new projects, `init` writes `sftpwarden.yaml`, creates empty provider
-storage, writes deployment files when the target is Compose, and selects the new
+storage, writes deployment files when the target is Compose and selects the new
 context as the active context.
+
+The following commands are alternatives. Database examples require the named
+environment variable and initialized database access. Remote-only examples require
+an existing remote project; they register it without creating its files.
 
 ```bash
 sftpwarden init dev --yes
@@ -31,19 +41,19 @@ sftpwarden init prod --deploy helm --namespace sftpwarden --yes
 | Flag | Value | Default | What it does |
 | --- | --- | --- | --- |
 | `--context`, `-c` | `TEXT` | none | Context name used by remote init compatibility mode. For normal init, prefer the positional `context_name`. |
-| `--provider` | `yaml`, `csv`, `sqlite`, `mysql`, `mariadb`, `postgresql`, `mongodb` | global default, then `yaml` | Selects the user provider type stored in `sftpwarden.yaml`. |
+| `--provider` | `yaml`, `csv`, `sqlite`, `mysql`, `mariadb`, `postgresql`, `mongodb` | environment/global default, then `yaml` | Selects the user provider type stored in `sftpwarden.yaml`. |
 | `--root` | `PATH` | current directory | Local project root to initialize or register. |
 | `--remote` | `REMOTE` | none | Creates a remote context from `user@host:/path`. Mutually exclusive with `--remote-url`. |
 | `--remote-url` | `REMOTE` | none | Compatibility alias for a remote URL. Mutually exclusive with `--remote`. |
 | `--dsn` | `DSN` | none | Database URL for SQL and MongoDB providers. Required with `--yes` for external database providers. |
 | `--query` | `TEXT` | provider default | Custom SQL read query for SQL providers. Use only when the table shape is managed outside SFTPWarden. |
-| `--table` | `TEXT` | `sftp_users` | SQL users table name for MySQL, MariaDB, PostgreSQL, and SQLite. |
+| `--table` | `TEXT` | `sftp_users` | SQL users table name for MySQL, MariaDB, PostgreSQL and SQLite. |
 | `--collection` | `TEXT` | `sftp_users` | MongoDB collection name. |
 | `--user-schema` | `1` or `2` | `2` | Provider user schema to initialize. v1 is the simple `public_keys` format. v2 is the named-key format and the default for new projects. |
 | `--deploy`, `-d` | `compose`, `kube`, `helm` | `compose` | Deployment target stored in `sftpwarden.yaml`. `kube` means Kubernetes manifests. `helm` means Helm mode. |
 | `--namespace` | `TEXT` | `sftpwarden` for Kubernetes targets | Kubernetes namespace for `--deploy kube` or `--deploy helm`. Invalid for Compose projects. |
-| `--create-namespace` / `--no-create-namespace` | flag pair | prompt, or create with `--yes` | Controls whether a missing Kubernetes namespace is created during init. |
-| `--create-table` / `--no-create-table` | flag pair | prompt, or create with `--yes` | Controls whether missing SQL tables or MongoDB storage are created during init. |
+| `--create-namespace` / `--no-create-namespace` | flag pair | prompt or create with `--yes` | Controls whether a missing Kubernetes namespace is created during init. |
+| `--create-table` / `--no-create-table` | flag pair | prompt or create with `--yes` | Controls whether missing SQL tables or MongoDB storage are created during init. |
 | `--host` | `TEXT` | prompt in remote mode | Remote SSH host used when no compact remote URL is supplied. |
 | `--user` | `TEXT` | local SSH default | Remote SSH username used when building remote settings. |
 | `--port` | `INTEGER` | global default, normally `22` | Remote SSH port. |
@@ -54,6 +64,9 @@ sftpwarden init prod --deploy helm --namespace sftpwarden --yes
 | `--skip-checks` | flag | false | Skips remote and Kubernetes prerequisite checks. Use when preparing files before the target exists. |
 | `--critical` | flag | false | Marks the context as critical so destructive or deployment commands ask for confirmation. |
 | `--yes`, `-y` | flag | false | Accepts prompts and defaults. For production-like names without `--critical`, also accepts creating the context as non-critical. |
+
+Use `--critical` for installations where confirmation is required. `--yes`
+accepts defaults, including a non-critical context if `--critical` is omitted.
 
 ### Behavior By Target
 
@@ -70,6 +83,11 @@ sftpwarden init prod --deploy helm --namespace sftpwarden --yes
 For SQL and MongoDB providers, `init` checks whether the configured table or
 collection exists. If it is missing, interactive mode asks whether to create it.
 With `--yes`, SFTPWarden creates it unless `--no-create-table` is provided.
+
+Without `--dsn`, interactive SQL setup asks for host, port, database, username
+and password. Interactive MongoDB setup asks for its DSN. For repeatable setups,
+pass an environment reference as shown above and provide its value through your
+secret-management workflow.
 
 When `--user-schema 2` is selected for SQL providers, storage creation includes
 the table needed for named keys.

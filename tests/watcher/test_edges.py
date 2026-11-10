@@ -74,7 +74,11 @@ def test_watcher_registry_reports_unregistered_mode() -> None:
         watcher_class(WatcherInstallMode.AUTO)
 
 
-def test_platform_helpers_cover_resolution_fallbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_platform_helpers_cover_resolution_fallbacks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(platform_utils.sysconfig, "get_path", lambda _: str(tmp_path))
     monkeypatch.setattr(platform_utils.shutil, "which", lambda name: f"/bin/{name}")
     assert platform_utils.executable_command("sftpwarden") == ["/bin/sftpwarden"]
 
@@ -84,6 +88,9 @@ def test_platform_helpers_cover_resolution_fallbacks(monkeypatch: pytest.MonkeyP
         "sftpwarden",
     ]
     assert platform_utils.executable_command("sftpwarden") == ["sftpwarden"]
+    owned = tmp_path / ("sftpwarden.exe" if platform_utils.os.name == "nt" else "sftpwarden")
+    owned.touch()
+    assert platform_utils.executable_command("sftpwarden") == [str(owned)]
 
     monkeypatch.setenv("SUDO_USER", "deploy")
     assert platform_utils.current_username() == "deploy"
@@ -327,3 +334,17 @@ def test_watcher_replacement_dry_run_and_broken_metadata(
     save_global_config(config)
     with pytest.raises(ContextError, match="missing its mode"):
         watcher_core.uninstall_watcher()
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+def test_scheduler_user_without_shell_environment(monkeypatch, unavailable):
+    for name in ("USER", "LOGNAME", "USERNAME", "SUDO_USER"):
+        monkeypatch.delenv(name, raising=False)
+    if unavailable:
+        monkeypatch.setattr(
+            platform_utils.getpass, "getuser", lambda: (_ for _ in ()).throw(OSError("unknown"))
+        )
+        assert platform_utils.current_username() == "sftpwarden"
+    else:
+        monkeypatch.setattr(platform_utils.getpass, "getuser", lambda: "actual-owner")
+        assert platform_utils.current_username() == "actual-owner"

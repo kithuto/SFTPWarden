@@ -1,9 +1,18 @@
 # Provider Commands
 
-Provider commands move users between providers, inspect provider schema state,
+Provider commands move users between providers, inspect provider schema state
 and run explicit schema migrations. They work with local or remote local-sync
 contexts that have a local project config. Remote-only contexts do not expose
 local provider transfer operations.
+
+For an ordered transfer procedure, see [Providers](../providers.md#transfer-and-migration).
+The examples here are alternatives. Preview imports or copies before applying
+them: `--merge` adds or updates users while preserving destination-only users;
+`--replace` makes the destination match the source and can revoke access.
+
+Exports contain credential material. Prefer `--output` for a private file and
+keep stdout exports out of shared logs. A provider snapshot is not a runtime
+backup; use [Recovery](../recovery.md) to preserve identity and uploaded files.
 
 ## `sftpwarden provider`
 
@@ -24,10 +33,10 @@ Subcommands:
 
 ## `sftpwarden provider export`
 
-Exports users from a provider to YAML, JSON, or CSV.
+Exports users from a provider to YAML, JSON or CSV.
 
 ```bash
-sftpwarden provider export --format json
+sftpwarden provider export --format json --output users.json
 sftpwarden provider export --output users.yaml
 sftpwarden provider export --context prod --format csv --output users.csv
 ```
@@ -48,7 +57,7 @@ export file with private file permissions where supported.
 
 ## `sftpwarden provider import`
 
-Imports users from a YAML, JSON, or CSV transfer file into the selected provider.
+Imports users from a YAML, JSON or CSV transfer file into the selected provider.
 You must choose exactly one write mode: `--merge` or `--replace`.
 
 ```bash
@@ -135,7 +144,7 @@ sftpwarden provider schema show --json
 | --- | --- | --- | --- |
 | `--context`, `-c` | `TEXT` | active context | Context to inspect. |
 | `--config` | `PATH` | none | Project config to inspect directly. |
-| `--json` | flag | false | Prints configured schema, provider schema, user count, provider type, and migration status as JSON. |
+| `--json` | flag | false | Prints configured schema, provider schema, user count, provider type and migration status as JSON. |
 
 ### Effects
 

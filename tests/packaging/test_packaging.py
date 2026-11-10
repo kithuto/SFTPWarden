@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import runpy
 import subprocess
 import sys
 import tomllib
@@ -110,11 +111,23 @@ def test_release_versions_are_consistent() -> None:
     ]
 
     assert sftpwarden.__version__ == version
+    from sftpwarden.services.update_compatibility import bundled_compatibility
+
+    assert bundled_compatibility()["release"] == version
     assert chart["version"] == version
     assert chart["appVersion"] == version
     assert values["image"]["tag"] == ""
     assert example_values["image"]["tag"] == ""
     assert changelog_headings[0].startswith(f"## [{version}] - ")
+
+
+def test_documentation_version_tracks_package_releases() -> None:
+    """Refresh published documentation metadata whenever the package version changes."""
+    config = runpy.run_path("docs/conf.py")
+    workflow = yaml.safe_load(Path(".github/workflows/docs.yml").read_text(encoding="utf-8"))
+
+    assert config["release"] == config["version"] == get_version()
+    assert "pyproject.toml" in workflow[True]["push"]["paths"]
 
 
 def test_examples_are_cli_first_guides() -> None:

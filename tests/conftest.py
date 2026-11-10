@@ -20,6 +20,41 @@ TEST_HASH = "$6$rounds=500000$saltstring$hashvalue"
 RELEASE_VALIDATION_DIR = Path(__file__).parent / "release_validation"
 
 
+@pytest.fixture(autouse=True)
+def isolated_upgrade_inspection(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    """Keep the new deployment inspection boundary off real infrastructure in fast tests.
+
+    Upgrade contract tests override these responses for failure and legacy cases;
+    opt-in release tests always execute the real probes.
+    """
+    if Path(str(request.node.path)).is_relative_to(RELEASE_VALIDATION_DIR):
+        return
+    from sftpwarden.services import deployment_upgrade
+    from sftpwarden.system.commands import CommandResult
+    from sftpwarden.utils._version import get_version
+
+    def pin(config):
+        selected = config.model_copy(deep=True)
+        selected.kubernetes.kube_context = selected.kubernetes.kube_context or "test-cluster"
+        return selected
+
+    monkeypatch.setattr(deployment_upgrade, "pin_context", pin)
+
+    def inspect(command, **_kwargs):
+        parts = command if command[0] != "ssh" else command[-1].split()
+        if command[0] == "ssh" and command[-1].startswith("head -c "):
+            output = default_project_config("remote-test").model_dump_json()
+        elif "exec" in parts:
+            output = get_version()
+        elif "--quiet" in parts or "--ignore-not-found" in parts:
+            output = "test-runtime"
+        else:
+            raise AssertionError(f"Unexpected external upgrade probe: {command}")
+        return CommandResult(command, 0, output, "")
+
+    monkeypatch.setattr(deployment_upgrade, "run", inspect)
+
+
 @pytest.fixture
 def applied_runtime_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Exercise applied snapshots in private temporary paths without host sshd mutation."""

@@ -6,8 +6,11 @@
 - `sftpwarden config show` and `sftpwarden config default-provider` operate on
   global CLI settings under `~/.sftpwarden/config.toml`.
 
+For a step-by-step port change, see [Configuration](../configuration.md).
+The examples below are independent settings, not a sequence to apply.
+
 Changing `sftpwarden.yaml` records desired state only. Apply deployment-level
-changes with `sftpwarden deploy`, `sftpwarden kube apply`, or `sftpwarden helm
+changes with `sftpwarden deploy`, `sftpwarden kube apply` or `sftpwarden helm
 upgrade`.
 
 ## `sftpwarden config`
@@ -32,14 +35,12 @@ Group-level options are also accepted by the dynamic path commands.
 
 Reads or updates one dotted path in `sftpwarden.yaml`. If `VALUE` is omitted,
 the command prints the current value. If `VALUE` is supplied, SFTPWarden parses
-it with YAML scalar rules, validates the full config model, and writes the file.
+it with YAML scalar rules, validates the full config model and writes the file.
 
 ```bash
 sftpwarden config server.port
 sftpwarden config server.port 2200
-sftpwarden config provider.type csv
 sftpwarden config provider.user_schema 2
-sftpwarden config auth.allow_password false
 sftpwarden config kubernetes.liveness_probe.period_seconds 45
 ```
 
@@ -60,7 +61,7 @@ sftpwarden config kubernetes.liveness_probe.period_seconds 45
 
 ### Value Parsing
 
-Numbers become integers, `true`/`false` become booleans, and `null` clears
+Numbers become integers, `true`/`false` become booleans and `null` clears
 nullable fields. Existing string fields remain strings even if the value looks
 like a number or boolean.
 
@@ -71,8 +72,9 @@ warns that the next deploy/apply/upgrade will run a forward migration.
 
 ### Supported Project Paths
 
-The command paths below come from the real `PROJECT_CONFIG_PATHS` constant and
-the `SFTPWardenConfig` model.
+The table lists accepted project paths. Accepted does not always mean active:
+compatibility fields and `auth.recommended` have the effects described in
+[Configuration Effects](../configuration-effects.md).
 
 | Path | Accepted value |
 | --- | --- |
@@ -104,14 +106,14 @@ the `SFTPWardenConfig` model.
 | `uid_gid.start` | integer `>= 1000` |
 | `uid_gid.end` | integer `>= 1001` and greater than `uid_gid.start` |
 | `uid_gid.preserve_existing` | boolean |
-| `provider.type` | `yaml`, `csv`, `sqlite`, `mysql`, `postgresql`, `mariadb`, or `mongodb` |
+| `provider.type` | `yaml`, `csv`, `sqlite`, `mysql`, `postgresql`, `mariadb` or `mongodb` |
 | `provider.path` | provider path text |
 | `provider.dsn` | text DSN or `null` |
 | `provider.query` | text SQL query or `null` |
 | `provider.table` | SQL table name text accepted by the config validator |
 | `provider.collection` | MongoDB collection name text |
 | `provider.user_schema` | supported user schema version, currently `1` or `2` |
-| `logging.level` | `debug`, `info`, `warning`, or `error` |
+| `logging.level` | `debug`, `info`, `warning` or `error` |
 | `logging.format` | `json` or `text` |
 | `healthcheck.interval_seconds` | integer `>= 1` |
 | `healthcheck.timeout_seconds` | integer `>= 1` |
@@ -126,9 +128,11 @@ the `SFTPWardenConfig` model.
 | `kubernetes.namespace` | text namespace |
 | `kubernetes.release` | text release name |
 | `kubernetes.kube_context` | text kube context or `null` |
-| `kubernetes.service_type` | `ClusterIP`, `NodePort`, or `LoadBalancer` |
+| `kubernetes.service_type` | `ClusterIP`, `NodePort` or `LoadBalancer` |
 | `kubernetes.storage_class` | text storage class or `null` |
 | `kubernetes.data_storage_size` | Kubernetes storage quantity such as `10Gi` |
+| `kubernetes.host_keys_secret` | Existing Secret name for host identity or `null` to use a retained PVC |
+| `kubernetes.provider_dsn_secret` | Existing Secret name containing `SFTPWARDEN_PROVIDER_DSN` or `null` for managed delivery |
 | `kubernetes.startup_probe.period_seconds` | integer `>= 1` |
 | `kubernetes.startup_probe.timeout_seconds` | integer `>= 1` |
 | `kubernetes.startup_probe.failure_threshold` | integer `>= 1` |
@@ -150,7 +154,7 @@ the `SFTPWardenConfig` model.
 | `remote.delete_extra_files` | boolean |
 | `remote.include_env` | boolean |
 | `watcher.enabled` | boolean |
-| `watcher.mode` | `auto`, `systemd`, `openrc`, `runit`, `supervisord`, `launchd`, `windows-task`, or `docker` |
+| `watcher.mode` | `auto`, `systemd`, `openrc`, `runit`, `supervisord`, `launchd`, `windows-task` or `docker` |
 | `watcher.image` | text Docker watcher image or `null`; valid only when watcher mode is Docker |
 
 For detailed meaning of each field, see [Configuration](../configuration.md).
@@ -190,7 +194,7 @@ sftpwarden config default-provider sqlite
 
 | Argument | Required | Value | What it means |
 | --- | --- | --- | --- |
-| `provider` | No | `yaml`, `csv`, `sqlite`, `mysql`, `postgresql`, `mariadb`, or `mongodb` | New global default provider. Omit it to print the current default. |
+| `provider` | No | `yaml`, `csv`, `sqlite`, `mysql`, `postgresql`, `mariadb` or `mongodb` | New global default provider. Omit it to print the current default. |
 
 ### Options
 
@@ -198,4 +202,6 @@ No command-specific options.
 
 ### Effects
 
-When a provider argument is supplied, writes the global CLI config.
+When a provider argument is supplied, writes the global CLI config. It affects
+future initialization, not existing projects. `--provider` and the environment
+variable `SFTPWARDEN_DEFAULT_PROVIDER` take precedence.
