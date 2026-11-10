@@ -8,7 +8,7 @@ LABEL org.opencontainers.image.title="SFTPWarden watcher" \
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN apk add --no-cache openssh-client rsync tini
+RUN apk add --no-cache openssh-client rsync tini 'zlib>=1.4-r0'
 COPY docker/release-constraints.txt /release-constraints.txt
 
 COPY docker/watcher/entrypoint.sh /usr/local/bin/sftpwarden-watcher-entrypoint

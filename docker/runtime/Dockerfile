@@ -9,7 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     SFTPWARDEN_CONFIG=/etc/sftpwarden/sftpwarden.yaml
 
-RUN apk add --no-cache openssh-server shadow tini \
+RUN apk add --no-cache openssh-server shadow tini 'zlib>=1.4-r0' \
     && mkdir -p /etc/sftpwarden/host_keys /etc/sftpwarden/authorized_keys /var/lib/sftpwarden /data /run/sshd
 COPY docker/release-constraints.txt /release-constraints.txt
 

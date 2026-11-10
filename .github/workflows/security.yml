@@ -51,10 +51,10 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: sftpwarden:security
-          format: sarif
-          output: trivy-runtime.sarif
-          exit-code: "1"
-          severity: HIGH,CRITICAL
+          format: json
+          output: trivy-runtime.json
+          exit-code: "0"
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           ignore-unfixed: false
 
       - name: Scan watcher image
@@ -62,10 +62,10 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: sftpwarden-watcher:security
-          format: sarif
-          output: trivy-watcher.sarif
-          exit-code: "1"
-          severity: HIGH,CRITICAL
+          format: json
+          output: trivy-watcher.json
+          exit-code: "0"
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
           ignore-unfixed: false
 
       - name: Generate runtime SBOM
@@ -80,7 +80,23 @@ jobs:
           image: sftpwarden-watcher:security
           output-file: watcher-sbom.spdx.json
 
-      - name: Upload SBOMs
+      - name: Publish complete reports and enforce container policy
+        id: container-policy
+        if: always()
+        shell: bash
+        run: |
+          # Reuse each scan: retain all findings in SARIF, but block HIGH/CRITICAL.
+          # Inspect both images and fail closed on missing or invalid reports.
+          status=0
+          for image in runtime watcher; do
+            trivy convert --format sarif --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL --exit-code 0 \
+              --output "trivy-$image.sarif" "trivy-$image.json" || status=1
+            trivy convert --format table --severity HIGH,CRITICAL --exit-code 1 \
+              "trivy-$image.json" || status=1
+          done
+          exit "$status"
+
+      - name: Upload security reports and SBOMs
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -88,6 +104,8 @@ jobs:
           path: |
             runtime-sbom.spdx.json
             watcher-sbom.spdx.json
+            trivy-runtime.json
+            trivy-watcher.json
             trivy-runtime.sarif
             trivy-watcher.sarif
 

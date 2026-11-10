@@ -76,6 +76,11 @@ these scheduled deliveries.
 
 ### Fixed
 
+- Preserve all container security findings in JSON and SARIF reports while
+  enforcing the existing HIGH/CRITICAL threshold separately. Report conversion
+  errors and missing scan results fail the security job.
+- Require Alpine's corrected `zlib` package in runtime and watcher images,
+  including both source and release-wheel builds, addressing CVE-2026-4738.
 - Make `kube doctor` check the configured host-key Secret or the default retained
   PVC, avoiding false warnings for valid identity configurations.
 - Flush SQLite snapshots and restored files through writable descriptors on Windows,

@@ -121,6 +121,12 @@ to overwrite an existing release. Publishing is restricted to the gated `main`
 release path; contributor PRs target `dev`. Never include local planning files,
 temporary credentials, backup archives or unredacted diagnostics in commits.
 
+The security workflow scans each container image once and retains findings of
+every severity in JSON and SARIF reports. A separate check blocks HIGH/CRITICAL
+findings, including those without a fix; missing or unreadable reports also fail.
+Lower-severity findings remain visible for remediation. Do not suppress an
+advisory to make CI pass: update the affected dependency when a fix is available.
+
 The deployment release group rehearses image, multi-architecture index and Helm
 chart publication against a disposable loopback registry. It verifies readback,
 safe retries and refusal to overwrite conflicting artifacts. Actual publishing

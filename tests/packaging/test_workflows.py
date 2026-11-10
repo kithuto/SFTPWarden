@@ -107,8 +107,25 @@ def test_security_scans_contributors_without_write_credentials() -> None:
     assert scan["permissions"] == {"contents": "read"}
     scans = [step for step in scan["steps"] if "trivy-action@" in step.get("uses", "")]
     assert len(scans) == 2
-    assert all(step["with"]["exit-code"] == "1" for step in scans)
-    assert all(step["with"]["severity"] == "HIGH,CRITICAL" for step in scans)
+    # Scan once without discarding lower-severity findings. The separate gate
+    # must not inherit trivy-action's SARIF severity override.
+    assert all(step["with"]["format"] == "json" for step in scans)
+    assert all(step["with"]["exit-code"] == "0" for step in scans)
+    assert all(step["with"]["severity"] == "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL" for step in scans)
+    assert all(step["with"]["ignore-unfixed"] is False for step in scans)
+    assert all(step.get("continue-on-error", False) is False for step in scans)
+    gate = next(step for step in scan["steps"] if step.get("id") == "container-policy")
+    assert gate["if"] == "always()"
+    assert gate.get("continue-on-error", False) is False
+    assert "for image in runtime watcher" in gate["run"]
+    assert "--format sarif --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL" in gate["run"]
+    assert "--format table --severity HIGH,CRITICAL --exit-code 1" in gate["run"]
+    assert 'exit "$status"' in gate["run"]
+    upload = next(step for step in scan["steps"] if "upload-artifact@" in step.get("uses", ""))
+    assert upload["if"] == "always()"
+    for image in ("runtime", "watcher"):
+        assert f"trivy-{image}.json" in upload["with"]["path"]
+        assert f"trivy-{image}.sarif" in upload["with"]["path"]
     publisher = workflow["jobs"]["publish-sarif"]
     assert "head.repo.full_name == github.repository" in publisher["if"]
     assert not any(
