@@ -277,6 +277,48 @@ def free_tcp_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def start_with_stable_port(
+    start: Callable[[int], subprocess.CompletedProcess[str]],
+    remove_failed: Callable[[], None],
+) -> int:
+    """Publish an explicit port that survives Docker stop/start.
+
+    The caller registers container cleanup before this function. Retry only a
+    host-port allocation race, removing the owned failed container and volumes.
+    Other Docker failures are reported immediately.
+    """
+    for _attempt in range(3):
+        port = free_tcp_port()
+        result = start(port)
+        if result.returncode == 0:
+            return port
+        error = result.stderr.lower()
+        if "address already in use" not in error and "port is already allocated" not in error:
+            pytest.fail(f"Test container creation failed: {result.stderr}")
+        remove_failed()
+    pytest.fail("Test container could not reserve a stable host port after three attempts.")
+
+
+def start_stable_ssh_gateway(name: str, arguments: list[str]) -> int:
+    """Start an owned SSH gateway with a fixed, collision-checked host port."""
+    return start_with_stable_port(
+        lambda port: run_external(
+            [
+                "docker",
+                "run",
+                "--detach",
+                "--name",
+                name,
+                "--publish",
+                f"127.0.0.1:{port}:22",
+                *arguments,
+            ],
+            check=False,
+        ),
+        lambda: remove_docker_container(name),
+    )
+
+
 def docker_image_id(image: str) -> str | None:
     """Return a Docker image ID when the tag exists."""
     result = run_external(

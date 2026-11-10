@@ -32,7 +32,14 @@ from sftpwarden.watcher import delivery, polling
 from sftpwarden.watcher.backends import docker as docker_watcher
 from sftpwarden.watcher.backends import systemd as systemd_watcher
 
-from .conftest import REPO_ROOT, eventually, remove_docker_container, run_external
+from .conftest import (
+    REPO_ROOT,
+    eventually,
+    remove_docker_container,
+    run_external,
+    start_stable_ssh_gateway,
+    start_with_stable_port,
+)
 from .test_auth_policy import PolicyRuntime
 from .test_auth_policy import policy_image as policy_image
 from .test_docker_compose_runtime import generate_keypair
@@ -124,25 +131,26 @@ def build_ssh_delivery_project(
     for name in ("data", "state", "host_keys"):
         (remote / name).mkdir(mode=0o700)
     compose = write_compose(config, remote, allow_local_build=False)
-    # Let Docker reserve the port atomically instead of racing another process
-    # between a host free-port probe and container creation.
-    initial_compose = yaml.safe_load(compose.read_text())
-    initial_compose["services"]["sftpwarden"]["ports"] = ["127.0.0.1:0:22"]
-    compose.write_text(yaml.safe_dump(initial_compose))
     cleanup_stack.add(
         lambda: run_external(
             ["docker", "compose", "-f", str(compose), "down", "--volumes"], timeout=60, check=False
         )
     )
-    run_external(
-        ["docker", "compose", "-f", str(compose), "up", "-d", "--wait", "--wait-timeout", "90"],
-        timeout=120,
-    )
+
+    def start_runtime(port):
+        config.server.port = port
+        for root in (remote, local):
+            write_config(root / "sftpwarden.yaml", config)
+        write_compose(config, remote, allow_local_build=False)
+        return run_external(
+            ["docker", "compose", "-f", str(compose), "up", "-d", "--wait", "--wait-timeout", "90"],
+            timeout=120,
+            check=False,
+        )
+
+    start_with_stable_port(start_runtime, server.close)
     server.refresh_port()
-    config.server.port = server.port
-    for root in (remote, local):
-        write_config(root / "sftpwarden.yaml", config)
-    write_compose(config, remote, allow_local_build=False)
+    assert server.port == config.server.port
     public = run_external(
         ["docker", "exec", server.name, "cat", "/etc/sftpwarden/host_keys/ssh_host_ed25519_key.pub"]
     ).stdout.strip()
@@ -196,15 +204,9 @@ def build_ssh_delivery_project(
     (credentials / "authorized_keys").write_text(public_key + "\n")
     gateway = f"sftpwarden-ssh-gate-{uuid4().hex[:12]}"
     cleanup_stack.add(lambda: remove_docker_container(gateway))
-    run_external(
+    port = start_stable_ssh_gateway(
+        gateway,
         [
-            "docker",
-            "run",
-            "--detach",
-            "--name",
-            gateway,
-            "--publish",
-            "127.0.0.1:0:22",
             "--volume",
             f"{tmp_path}:{PurePosixPath(engine_root).parent}",
             "--volume",
@@ -222,9 +224,9 @@ def build_ssh_delivery_project(
             "-o PermitRootLogin=prohibit-password -o PasswordAuthentication=no -o StrictModes=yes "
             "-o AuthorizedKeysFile=/root/.ssh/authorized_keys "
             "-o 'Subsystem=sftp internal-sftp'",
-        ]
+        ],
     )
-    port = int(run_external(["docker", "port", gateway, "22/tcp"]).stdout.strip().rsplit(":", 1)[1])
+    assert run_external(["docker", "port", gateway, "22/tcp"]).stdout.strip() == f"127.0.0.1:{port}"
     known = tmp_path / "gateway-known-hosts"
     ssh_config = tmp_path / "ssh_config"
     ssh_config.write_text(
@@ -349,6 +351,9 @@ def test_unavailable_ssh_target_does_not_acknowledge_or_block_an_independent_tar
     second[2].assert_denied()
     assert first[2].connect("alice").returncode == 0
     run_external(["docker", "start", first[2].gateway])
+    assert run_external(["docker", "port", first[2].gateway, "22/tcp"]).stdout.strip() == (
+        f"127.0.0.1:{first[0].remote.port}"
+    ), "The recovery fixture changed the SSH endpoint"
     restarted = polling.WatchPoller()
 
     def recovered():
@@ -678,6 +683,9 @@ def test_remote_capture_and_fresh_recovery_preserve_sftp_identity_and_data(
     create_backup(
         context_name=context.name, output=str(archive), include_data=True, maintenance=True
     )
+    assert run_external(["docker", "port", server.name, "22/tcp"]).stdout.strip() == (
+        f"127.0.0.1:{server.port}"
+    ), "The maintenance fixture changed the SFTP endpoint"
     assert server.connect("control").returncode == 0
     assert not (remote / ".sftpwarden-operation.lock").exists()
 

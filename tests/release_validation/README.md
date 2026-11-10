@@ -22,6 +22,15 @@ variables documented in `conftest.py` and the watcher SSH module.
 The package gate also installs the candidate sdist in an isolated environment and
 exercises local user, provider and recovery workflows through that installation.
 
+The infrastructure-free deployment-preview contract substitutes deterministic
+read-only version and cluster probes while exercising the installed CLI. It checks
+the reported source version, generated operations and unchanged input files.
+Live SSH, Compose and cluster gates verify the actual probes and effects; fictional
+contract endpoints must never be contacted. Disposable SSH gateways and SFTP
+runtimes use explicit host ports so outage/restart and maintenance preserve their
+endpoints and delivery checkpoints. Port-allocation collisions retry only startup;
+they do not extend recovery deadlines or suppress unrelated errors.
+
 CI checks bounded load first on each native image. The installed CLI contracts
 run once, independently of architecture. Five external groups then run in parallel
 on both architectures, alongside the cluster gates, using the exact same recorded
