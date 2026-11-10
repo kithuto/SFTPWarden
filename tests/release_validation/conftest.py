@@ -16,9 +16,9 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TEST_HASH = "$6$rounds=500000$saltstring$hashvalue"
-FAKE_KEY_1 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForReleaseValidation"
-FAKE_KEY_2 = "ssh-ed25519 ZmFrZS1yZWxlYXNlLWtleS0y"
-FAKE_KEY_3 = "ssh-ed25519 ZmFrZS1yZWxlYXNlLWtleS0z"
+PUBLIC_KEY_1 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFMsDFmvcbuEKKQ2nRx6M4jxyJuS9KoOesN7GyrXw+d+"
+PUBLIC_KEY_2 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGv5cJFgm0ffn6oHXkIseBv94l3DX7v+2vbF0+qWC+M6"
+PUBLIC_KEY_3 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIO4yPXotP3j1CbR8K0q0gMB5l+dDIw21jyWrsXIwLFO2"
 
 
 @dataclass(frozen=True)
@@ -58,6 +58,8 @@ class ReleaseCli:
                 "TERM": "dumb",
             }
         )
+        if os.environ.get("SFTPWARDEN_TEST_INSTALLED_ARTIFACT") == "1":
+            self.env.pop("PYTHONPATH", None)
 
     def run(
         self,
@@ -68,7 +70,8 @@ class ReleaseCli:
         extra_env: dict[str, str] | None = None,
     ) -> CliResult:
         """Run `python -m sftpwarden` as a user would."""
-        command = [sys.executable, "-m", "sftpwarden", *[str(arg) for arg in args]]
+        isolated = ["-I"] if self.env.get("SFTPWARDEN_TEST_INSTALLED_ARTIFACT") == "1" else []
+        command = [sys.executable, *isolated, "-m", "sftpwarden", *[str(arg) for arg in args]]
         env = self.env.copy()
         if extra_env:
             env.update(extra_env)
@@ -107,8 +110,30 @@ class ReleaseCli:
 class CleanupStack:
     """LIFO cleanup registry for resources created by release tests."""
 
-    def __init__(self) -> None:
+    def __init__(self, root: Path) -> None:
+        self.root = root.resolve()
         self._callbacks: list[Callable[[], None]] = []
+
+    def remove_tree(self, path: Path) -> None:
+        """Remove only owned test trees, including private container-owned files."""
+        path = Path(os.path.abspath(path))
+        if path != self.root and self.root not in path.parents:
+            raise ValueError("Cleanup target is outside this test's temporary directory")
+        # Never let an intermediate symlink redirect privileged cleanup outside
+        # the registered tree. rm itself does not follow links within that tree.
+        for parent in (path, *path.parents):
+            if parent.is_symlink():
+                raise ValueError("Cleanup target contains a symbolic link")
+            if parent == self.root:
+                break
+        try:
+            shutil.rmtree(path)
+        except FileNotFoundError:
+            return
+        except PermissionError:
+            if sys.platform != "linux":
+                raise
+            run_external(["sudo", "-n", "rm", "-rf", "--", str(path)], timeout=60)
 
     def add(self, callback: Callable[[], None]) -> None:
         """Register one cleanup callback."""
@@ -130,9 +155,12 @@ class CleanupStack:
 
 
 @pytest.fixture
-def cleanup_stack() -> Iterator[CleanupStack]:
+def cleanup_stack(tmp_path: Path) -> Iterator[CleanupStack]:
     """Return a cleanup stack that always runs at test end."""
-    stack = CleanupStack()
+    stack = CleanupStack(tmp_path)
+    # Registered first, so private test files disappear after owned processes and
+    # infrastructure have been stopped, including when fixture setup fails.
+    stack.add(lambda: stack.remove_tree(tmp_path))
     try:
         yield stack
     finally:
@@ -163,10 +191,11 @@ def assert_ok(result: CliResult) -> None:
 
 def assert_failed(result: CliResult, *expected_fragments: str) -> None:
     """Assert a CLI command failed with a controlled user-facing message."""
-    assert result.returncode != 0, f"Command unexpectedly succeeded: {result.args}\n{result.output}"
+    assert result.returncode in {1, 2}, _format_cli_failure(result)
     assert_no_traceback(result)
+    semantic_output = " ".join(result.output.split())
     for fragment in expected_fragments:
-        assert fragment in result.output, _format_cli_failure(result)
+        assert " ".join(fragment.split()) in semantic_output, _format_cli_failure(result)
 
 
 def assert_no_traceback(result: CliResult) -> None:
@@ -202,6 +231,9 @@ def run_external(
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run an external command used by real release scenarios."""
+    builder = (env or os.environ).get("SFTPWARDEN_RELEASE_BUILDER")
+    if builder and args[:2] == ["docker", "build"]:
+        args = ["docker", "buildx", "build", "--builder", builder, "--load", *args[2:]]
     completed = subprocess.run(
         args,
         cwd=cwd,
@@ -245,6 +277,48 @@ def free_tcp_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def start_with_stable_port(
+    start: Callable[[int], subprocess.CompletedProcess[str]],
+    remove_failed: Callable[[], None],
+) -> int:
+    """Publish an explicit port that survives Docker stop/start.
+
+    The caller registers container cleanup before this function. Retry only a
+    host-port allocation race, removing the owned failed container and volumes.
+    Other Docker failures are reported immediately.
+    """
+    for _attempt in range(3):
+        port = free_tcp_port()
+        result = start(port)
+        if result.returncode == 0:
+            return port
+        error = result.stderr.lower()
+        if "address already in use" not in error and "port is already allocated" not in error:
+            pytest.fail(f"Test container creation failed: {result.stderr}")
+        remove_failed()
+    pytest.fail("Test container could not reserve a stable host port after three attempts.")
+
+
+def start_stable_ssh_gateway(name: str, arguments: list[str]) -> int:
+    """Start an owned SSH gateway with a fixed, collision-checked host port."""
+    return start_with_stable_port(
+        lambda port: run_external(
+            [
+                "docker",
+                "run",
+                "--detach",
+                "--name",
+                name,
+                "--publish",
+                f"127.0.0.1:{port}:22",
+                *arguments,
+            ],
+            check=False,
+        ),
+        lambda: remove_docker_container(name),
+    )
+
+
 def docker_image_id(image: str) -> str | None:
     """Return a Docker image ID when the tag exists."""
     result = run_external(
@@ -257,14 +331,21 @@ def docker_image_id(image: str) -> str | None:
     return result.stdout.strip() or None
 
 
-def preserve_or_remove_image(image: str, previous_id: str | None) -> None:
+def preserve_or_remove_image(
+    image: str, previous_id: str | None, *, created_image: bool = False
+) -> None:
     """Restore a pre-existing Docker tag or remove a tag created by a test."""
     current_id = docker_image_id(image)
     if not current_id:
         return
     if previous_id and previous_id != current_id:
-        run_external(["docker", "image", "tag", previous_id, image], check=False, timeout=60)
-        run_external(["docker", "image", "rm", current_id], check=False, timeout=60)
+        run_external(["docker", "image", "tag", previous_id, image], timeout=60)
+        if created_image:
+            metadata = json.loads(run_external(["docker", "image", "inspect", current_id]).stdout)[
+                0
+            ]
+            if not metadata.get("RepoTags") and not metadata.get("RepoDigests"):
+                run_external(["docker", "image", "rm", current_id], timeout=60)
         return
     if previous_id is None:
         run_external(["docker", "image", "rm", image], check=False, timeout=60)
@@ -291,23 +372,43 @@ def docker_compose_down(project_root: Path) -> None:
 
 
 def remove_docker_container(name: str) -> None:
-    """Force-remove one Docker container if it exists."""
-    run_external(["docker", "rm", "-f", name], check=False, timeout=60)
+    """Remove an owned container and its anonymous volumes, preserving named volumes."""
+    result = run_external(["docker", "rm", "-f", "-v", name], check=False, timeout=60)
+    if result.returncode:
+        absent = run_external(["docker", "container", "inspect", name], check=False, timeout=30)
+        if absent.returncode == 0 or "No such container" not in absent.stderr:
+            pytest.fail(f"Cleanup could not confirm removal of the owned container {name}.")
 
 
 def cleanup_kubernetes_namespace(namespace: str) -> None:
     """Delete a namespace created by release validation."""
     run_external(
-        ["kubectl", "delete", "namespace", namespace, "--ignore-not-found=true", "--wait=false"],
-        check=False,
-        timeout=120,
+        [
+            "kubectl",
+            "delete",
+            "namespace",
+            namespace,
+            "--ignore-not-found=true",
+            "--wait=true",
+            "--timeout=150s",
+        ],
+        timeout=180,
     )
 
 
 def cleanup_helm_release(release: str, namespace: str) -> None:
     """Uninstall a Helm release created by release validation."""
     run_external(
-        ["helm", "uninstall", release, "--namespace", namespace],
-        check=False,
+        [
+            "helm",
+            "uninstall",
+            release,
+            "--namespace",
+            namespace,
+            "--ignore-not-found",
+            "--wait",
+            "--timeout",
+            "90s",
+        ],
         timeout=120,
     )

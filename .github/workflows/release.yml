@@ -1,115 +1,519 @@
-name: Release
+name: Release candidate
 
 on:
   push:
-    branches: [main]
-    paths:
-      - "sftpwarden/**"
-      - "pyproject.toml"
-      - "README.md"
-      - "LICENSE"
-      - "CHANGELOG.md"
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: sftpwarden-release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  verify:
+  version:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read
     outputs:
       changed: ${{ steps.version.outputs.changed }}
       version: ${{ steps.version.outputs.version }}
-
+      mode: ${{ steps.version.outputs.mode }}
+      tree: ${{ steps.version.outputs.tree }}
+      candidate_commit: ${{ steps.version.outputs.candidate_commit }}
+      source_run_id: ${{ steps.version.outputs.source_run_id }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-
-      - name: Check package version change
-        id: version
+      - id: version
+        name: Route changes and identify a verified candidate
         env:
-          BEFORE_SHA: ${{ github.event.before }}
-        run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          import os
-          import subprocess
-          import tomllib
-          from pathlib import Path
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python tools/ci_candidate.py plan
 
-          def read_version(text: str) -> str:
-              return tomllib.loads(text)["project"]["version"]
+  ordinary:
+    needs: version
+    if: needs.version.outputs.mode == 'full'
+    uses: ./.github/workflows/ci.yml
 
-          package_version = read_version(Path("pyproject.toml").read_text(encoding="utf-8"))
-
-          previous = ""
-          before = os.environ.get("BEFORE_SHA", "")
-          if before and before != "0" * 40:
-              result = subprocess.run(
-                  ["git", "show", f"{before}:pyproject.toml"],
-                  capture_output=True,
-                  check=False,
-                  text=True,
-              )
-              if result.returncode == 0:
-                  previous = read_version(result.stdout)
-
-          changed = previous != package_version
-          print(f"version={package_version}")
-          print(f"previous_version={previous}")
-          print(f"changed={str(changed).lower()}")
-          PY
-
-  package:
-    needs: verify
-    if: needs.verify.outputs.changed == 'true'
+  documentation:
+    name: Documentation only
+    needs: version
+    if: needs.version.outputs.mode == 'docs'
     runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/p/sftpwarden
-
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7.0.0
-
-      - name: Set up Python
-        uses: actions/setup-python@v6.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
           cache: pip
+      - run: python -m pip install -e ".[docs]"
+      - run: python -m sphinx -W --keep-going -b html docs docs/_build/html
 
-      - name: Build distributions
-        run: |
-          python -m pip install --upgrade pip build twine
-          python -m build
-          python -m twine check dist/*
+  reuse:
+    needs: version
+    if: needs.version.outputs.mode == 'reuse'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/reuse.yml
+    with:
+      source-run-id: ${{ needs.version.outputs.source_run_id }}
+      candidate-commit: ${{ needs.version.outputs.candidate_commit }}
+      tree: ${{ needs.version.outputs.tree }}
+      version: ${{ needs.version.outputs.version }}
 
-      - name: Upload package artifacts
-        uses: actions/upload-artifact@v7.0.1
-        with:
-          name: python-package
-          path: dist/*
-
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@v1.14.0
-
-  github-release:
-    needs: [verify, package]
-    if: needs.verify.outputs.changed == 'true'
+  packages:
+    needs: [version]
+    if: needs.version.outputs.mode == 'full'
     runs-on: ubuntu-latest
-
     steps:
-      - name: Download package artifacts
-        uses: actions/download-artifact@v8.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          name: python-package
-          path: dist
+          python-version: "3.14"
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - name: Build the candidate distributions and chart once
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          python -m pip install --constraint docker/build-constraints.txt build twine hatchling
+          python tools/verify_helm_release_metadata.py --version "$VERSION"
+          python -m build --no-isolation
+          python -m twine check dist/*.whl dist/*.tar.gz
+          python - <<'PY'
+          import pathlib, zipfile
+          wheels = list(pathlib.Path("dist").glob("*.whl"))
+          assert len(wheels) == 1, "Expected one candidate wheel"
+          names = zipfile.ZipFile(wheels[0]).namelist()
+          assert "sftpwarden/__init__.py" in names, "Candidate package is missing"
+          assert not any("__pycache__" in name or name.startswith(("docs/_build/", ".tox/")) for name in names), "Generated artifacts in candidate wheel"
+          PY
+          helm lint charts/sftpwarden
+          helm package charts/sftpwarden --destination dist/chart
+          python tools/release_artifacts.py record dist --commit "$GITHUB_SHA" --version "$VERSION"
+      - name: Exercise an isolated installation from the candidate sdist
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          SFTPWARDEN_TEST_INSTALLED_ARTIFACT: "1"
+        run: |
+          candidate_env="$RUNNER_TEMP/candidate-sdist"
+          trap 'rm -rf "$candidate_env"' EXIT
+          python -m venv "$candidate_env"
+          "$candidate_env/bin/python" -m pip install --constraint docker/build-constraints.txt hatchling
+          "$candidate_env/bin/python" -m pip install --no-build-isolation --constraint docker/release-constraints.txt "dist/sftpwarden-$VERSION.tar.gz[mysql,postgres,mongodb]" pytest
+          "$candidate_env/bin/python" -I -m pytest tests/release_validation/test_local_user_workflows.py --run-release-validation --junitxml=sdist-results.xml -vv --tb=short
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: candidate-sdist-results
+          path: sdist-results.xml
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: candidate-packages
+          path: dist/*
+          if-no-files-found: error
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v3.0.1
+  images:
+    needs: [version, packages]
+    uses: ./.github/workflows/docker.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+
+  contracts:
+    name: Installed CLI contracts
+    needs: packages
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      SFTPWARDEN_TEST_INSTALLED_ARTIFACT: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          tag_name: v${{ needs.verify.outputs.version }}
+          python-version: "3.14"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-packages
+          path: dist
+      - name: Verify and test the installed candidate CLI once
+        run: |
+          python tools/release_artifacts.py verify dist --commit "$GITHUB_SHA"
+          python -m pip install --constraint docker/release-constraints.txt "$(find dist -maxdepth 1 -name '*.whl')[mysql,postgres,mongodb]" pytest
+          python -I tools/run_release_gates.py contracts --junitxml=contract-results.xml -vv --tb=short
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: candidate-contracts
+          path: contract-results.xml
+          if-no-files-found: error
+
+  external:
+    needs: [packages, images]
+    uses: ./.github/workflows/external.yml
+
+  security:
+    needs: [version, images, reuse]
+    if: always() && needs.version.result == 'success' && ((needs.version.outputs.mode == 'full' && needs.images.result == 'success') || (needs.version.outputs.mode == 'reuse' && needs.reuse.result == 'success'))
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    uses: ./.github/workflows/security.yml
+    with:
+      candidate-commit: ${{ needs.version.outputs.candidate_commit }}
+      audit-python: ${{ needs.version.outputs.mode == 'reuse' }}
+
+  cluster:
+    name: Kubernetes / ${{ matrix.group }} / ${{ matrix.arch }}
+    needs: [version, packages, images]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            group: current
+            kind_sha256: aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            group: current
+            kind_sha256: 20022bee6cfcd5086cb7234d218e3454e6090022f2a8f55d1fa7fcf42c3867a2
+          - arch: amd64
+            runner: ubuntu-24.04
+            group: upgrade
+            kind_sha256: aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d
+    env:
+      SFTPWARDEN_TEST_INSTALLED_ARTIFACT: "1"
+      SFTPWARDEN_RELEASE_RUNTIME_IMAGE: sftpwarden-candidate:${{ github.sha }}-${{ matrix.arch }}
+      SFTPWARDEN_RELEASE_KUBE_CONTEXT: kind-sftpwarden-candidate
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-packages
+          path: dist
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-images-${{ matrix.arch }}
+          path: candidate-images
+      - name: Load the tested bytes and install the candidate
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          python tools/release_artifacts.py verify dist --commit "$GITHUB_SHA"
+          python tools/release_artifacts.py verify candidate-images --commit "$GITHUB_SHA"
+          docker load --input "candidate-images/runtime-$ARCH.tar.gz"
+          python -m pip install --constraint docker/release-constraints.txt "$(find dist -maxdepth 1 -name '*.whl')[mysql,postgres,mongodb]" pytest
+          python -I - <<'PY'
+          import pathlib, sftpwarden, tarfile
+          root = pathlib.Path(sftpwarden.__file__).resolve().parent.parent
+          assert not root.is_relative_to(pathlib.Path.cwd())
+          target = root / "charts"
+          target.mkdir()
+          with tarfile.open(next(pathlib.Path("dist/chart").glob("*.tgz"))) as chart:
+              chart.extractall(target, filter="data")
+          PY
+      - name: Install pinned disposable cluster tools
+        env:
+          ARCH: ${{ matrix.arch }}
+          KIND_SHA256: ${{ matrix.kind_sha256 }}
+        run: |
+          echo "KUBECONFIG=$RUNNER_TEMP/candidate-kubeconfig" >> "$GITHUB_ENV"
+          curl --fail --location --silent --show-error "https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-$ARCH" --output kind
+          echo "$KIND_SHA256  kind" | sha256sum --check
+          sudo install -m 0755 kind /usr/local/bin/kind
+          kind version
+          curl --fail --location --silent --show-error "https://dl.k8s.io/release/v1.37.0/bin/linux/$ARCH/kubectl" --output kubectl
+          curl --fail --location --silent --show-error "https://dl.k8s.io/release/v1.37.0/bin/linux/$ARCH/kubectl.sha256" --output kubectl.sha256
+          echo "$(cat kubectl.sha256)  kubectl" | sha256sum --check
+          chmod 0755 kubectl
+          sudo mv kubectl /usr/local/bin/kubectl
+      - name: Create only the candidate cluster and load its tested runtime
+        run: |
+          kind create cluster --name sftpwarden-candidate --image kindest/node:v1.37.0@sha256:a1ed56cfb0e7b93589bdf97c8cd566405a265939e3620fc4f5de89adff580ae5 --wait 180s
+          kind load docker-image --name sftpwarden-candidate "$SFTPWARDEN_RELEASE_RUNTIME_IMAGE"
+      - name: Exercise manifest and Helm release gates
+        env:
+          GROUP: ${{ matrix.group }}
+        run: |
+          selection="release_kubernetes or release_helm"
+          if [ "$GROUP" = upgrade ]; then
+            selection="($selection) and release_upgrade"
+          else
+            selection="($selection) and not release_upgrade"
+          fi
+          python -I -m pytest tests/release_validation --run-release-validation -m "$selection" --maxfail=1 --junitxml=cluster-results.xml -vv --tb=short
+      - name: Remove the owned cluster
+        if: always()
+        run: |
+          if command -v kind >/dev/null 2>&1; then kind delete cluster --name sftpwarden-candidate; fi
+          rm -f "$KUBECONFIG"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: candidate-cluster-${{ matrix.arch }}-${{ matrix.group }}
+          path: cluster-results.xml
+          if-no-files-found: error
+
+  gate:
+    name: Release aggregate
+    needs: [version, ordinary, packages, images, contracts, external, cluster, documentation, reuse, security]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Require the complete validation or verified promotion route
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          CI_MODE: ${{ needs.version.outputs.mode }}
+          CI_TREE: ${{ needs.version.outputs.tree }}
+        run: python tools/ci_candidate.py gate
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: needs.version.outputs.mode == 'full'
+        with:
+          name: candidate-validation
+          path: candidate-validation.json
+          if-no-files-found: error
+
+  publication-preflight:
+    env:
+      CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
+    needs: [version, gate]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-packages
+          path: dist
+      - name: Refuse a conflicting version tag or release
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python tools/release_artifacts.py verify dist --commit "$CANDIDATE_COMMIT"
+          python tools/github_candidate.py dist --repository "$GITHUB_REPOSITORY" --version "$VERSION" --commit "$GITHUB_SHA"
+
+  publish-python:
+    env:
+      CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
+    needs: [version, publication-preflight]
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-packages
+          path: dist
+      - name: Verify bytes and refuse conflicting PyPI artifacts
+        id: pypi
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          python tools/release_artifacts.py verify dist --commit "$CANDIDATE_COMMIT"
+          python tools/pypi_candidate.py dist --version "$VERSION" --stage publish-dist --github-output "$GITHUB_OUTPUT"
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        if: steps.pypi.outputs.missing != '0'
+        with:
+          packages-dir: publish-dist/
+      - name: Verify complete versioned Python publication
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: python tools/pypi_candidate.py dist --version "$VERSION" --wait-seconds 120
+
+  publish-images:
+    env:
+      CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
+    needs: [version, publication-preflight]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-images-${{ matrix.arch }}
+          path: candidate-images
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote only the tested architecture images
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          python tools/release_artifacts.py verify candidate-images --commit "$CANDIDATE_COMMIT"
+          docker load --input "candidate-images/runtime-$ARCH.tar.gz"
+          docker load --input "candidate-images/watcher-$ARCH.tar.gz"
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          python tools/promote_image.py "sftpwarden-candidate:$CANDIDATE_COMMIT-$ARCH" "$repository:$VERSION-$ARCH"
+          python tools/promote_image.py "sftpwarden-watcher-candidate:$CANDIDATE_COMMIT-$ARCH" "$repository-watcher:$VERSION-$ARCH"
+
+  publish-chart:
+    env:
+      CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
+    needs: [version, publication-preflight]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-packages
+          path: dist
+      - name: Promote the tested chart archive
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python tools/release_artifacts.py verify dist --commit "$CANDIDATE_COMMIT"
+          printf '%s' "$REGISTRY_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          python tools/promote_chart.py "dist/chart/sftpwarden-$VERSION.tgz" "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/charts" "$VERSION"
+
+  publish-indexes:
+    needs: [version, publish-images]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.version.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish verified architecture indexes without advancing latest
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          python tools/promote_index.py "$repository" "$VERSION"
+          python tools/promote_index.py "$repository-watcher" "$VERSION"
+
+  published-smoke:
+    env:
+      CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
+    needs: [version, publish-python, publish-chart, publish-indexes]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-packages
+          path: dist
+      - name: Read back published packages and images
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          python tools/release_artifacts.py verify dist --commit "$CANDIDATE_COMMIT"
+          python tools/pypi_candidate.py dist --version "$VERSION"
+          python -m pip install --no-cache-dir "sftpwarden==$VERSION"
+          python -I -m sftpwarden --version
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          docker pull "$repository:$VERSION-$ARCH"
+          docker pull "$repository-watcher:$VERSION-$ARCH"
+          test "$(docker image inspect --format '{{.Architecture}}' "$repository:$VERSION-$ARCH")" = "$ARCH"
+          docker run --rm --entrypoint sftpwarden "$repository:$VERSION-$ARCH" --version
+          docker run --rm --entrypoint sftpwarden "$repository-watcher:$VERSION-$ARCH" --version
+
+  complete-release:
+    env:
+      CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
+    needs: [version, published-smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-packages
+          path: dist
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Advance latest only after every versioned artifact and smoke gate
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python tools/release_artifacts.py verify dist --commit "$CANDIDATE_COMMIT"
+          python tools/github_candidate.py dist --repository "$GITHUB_REPOSITORY" --version "$VERSION" --commit "$GITHUB_SHA"
+          repository="ghcr.io/${GITHUB_REPOSITORY,,}"
+          python tools/promote_index.py "$repository" "$VERSION" --latest
+          python tools/promote_index.py "$repository-watcher" "$VERSION" --latest
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
           target_commitish: ${{ github.sha }}
-          files: dist/*
+          overwrite_files: false
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/chart/*.tgz
+            dist/artifact-manifest.json
           generate_release_notes: true
+      - name: Verify the completed release tag and exact asset digests
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python tools/github_candidate.py dist --repository "$GITHUB_REPOSITORY" --version "$VERSION" --commit "$GITHUB_SHA" --complete

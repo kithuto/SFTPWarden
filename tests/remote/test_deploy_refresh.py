@@ -13,6 +13,7 @@ from sftpwarden.config import (
     DeployTarget,
     ProviderType,
     default_project_config,
+    runtime_config_fingerprints,
     write_config,
 )
 from sftpwarden.contexts import (
@@ -27,6 +28,7 @@ from sftpwarden.refresh.core import refresh_context
 from sftpwarden.remote.deploy import deploy_context
 from sftpwarden.utils.errors import ContextError
 from sftpwarden.utils.errors import RuntimeError as SFTPWardenRuntimeError
+from sftpwarden.utils.paths import contexts_path
 
 
 def test_deploy_remote_local_sync_dry_run_includes_sync_and_compose(
@@ -56,10 +58,35 @@ def test_deploy_remote_local_sync_dry_run_includes_sync_and_compose(
 
     assert result.exit_code == 0, result.output
     assert "mkdir -p /opt/sftpwarden" in output
-    assert "rsync" in output
+    assert "rsync" in output or "scp" in output
     assert "docker compose -f docker-compose.yml pull" in output
     assert "docker compose -f docker-compose.yml up -d" in output
     assert "--build" not in output
+
+
+def test_deploy_dry_run_preserves_config_compose_and_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
+    root = tmp_path / "project"
+    root.mkdir()
+    config = default_project_config("renamed")
+    write_config(root / "sftpwarden.yaml", config)
+    (root / "users.yaml").write_text("users: []\n")
+    compose = root / "docker-compose.yml"
+    compose.write_text("# operator-maintained file\n")
+    entry = local_context("original", root, config.provider.type)
+    missing = local_context("missing", tmp_path / "absent", config.provider.type)
+    save_registry(
+        ContextRegistry(default="original", contexts={"original": entry, "missing": missing})
+    )
+    registry = contexts_path().read_bytes()
+    files = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    result = CliRunner().invoke(app, ["deploy", "--context", "original", "--dry-run", "--json"])
+    assert result.exit_code == 0, result.output
+    assert contexts_path().read_bytes() == registry
+    assert {p: p.read_bytes() for p in root.rglob("*") if p.is_file()} == files
+    assert not (root / "provider").exists()
 
 
 def test_deploy_remote_only_dry_run_validates_remote_files(
@@ -113,6 +140,10 @@ def test_deploy_context_accepts_injected_runner(tmp_path: Path) -> None:
         "docker-compose.yml",
         "up",
         "-d",
+        "--force-recreate",
+        "--wait",
+        "--wait-timeout",
+        "90",
         "--build",
     ]
     assert calls[2][0] == ["docker", "compose", "-f", "docker-compose.yml", "ps", "sftpwarden"]
@@ -143,7 +174,18 @@ def test_deploy_context_pulls_packaged_runtime_image(
     assert "ghcr.io/kithuto/sftpwarden:9.9.9" in compose_text
     assert "--build" not in " ".join(" ".join(command) for command, _cwd in calls)
     assert calls[1][0] == ["docker", "compose", "-f", "docker-compose.yml", "pull"]
-    assert calls[2][0] == ["docker", "compose", "-f", "docker-compose.yml", "up", "-d"]
+    assert calls[2][0] == [
+        "docker",
+        "compose",
+        "-f",
+        "docker-compose.yml",
+        "up",
+        "-d",
+        "--force-recreate",
+        "--wait",
+        "--wait-timeout",
+        "90",
+    ]
 
 
 def test_deploy_context_reports_missing_local_docker_compose(tmp_path: Path) -> None:
@@ -371,6 +413,9 @@ def test_refresh_context_executes_kubernetes_runtime_refresh(
 
     assert refresh_context(entry, dry_run=True).startswith("(dry-run) kubectl -n sftp exec prod-0")
     assert refresh_context(entry) == "Refreshed prod."
+    from sftpwarden.render.kubernetes import kubernetes_runtime_config
+
+    provider_digest, config_digest = runtime_config_fingerprints(kubernetes_runtime_config(config))
     assert calls == [
         [
             "kubectl",
@@ -386,6 +431,10 @@ def test_refresh_context_executes_kubernetes_runtime_refresh(
             "refresh",
             "--config",
             "/etc/sftpwarden/sftpwarden.yaml",
+            "--desired-provider-fingerprint",
+            provider_digest,
+            "--desired-config-fingerprint",
+            config_digest,
         ]
     ]
 

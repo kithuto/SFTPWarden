@@ -1,7 +1,7 @@
 # Contributing to SFTPWarden
 
 Thanks for helping improve SFTPWarden. Bug reports, docs fixes, examples, tests,
-security hardening, provider improvements, and operational feedback are all welcome.
+security hardening, provider improvements and operational feedback are all welcome.
 
 SFTPWarden is infrastructure software, so small, clear, well-tested changes are
 preferred over large rewrites.
@@ -12,7 +12,7 @@ Found a bug? Open an issue with:
 
 - what you expected to happen;
 - what happened instead;
-- your OS, Python version, Docker version, and SFTPWarden version or commit;
+- your OS, Python version, Docker version and SFTPWarden version or commit;
 - the exact command you ran;
 - relevant logs or traceback with secrets redacted.
 
@@ -58,8 +58,6 @@ changes from `dev` to `main` when preparing production or release updates.
 git clone https://github.com/kithuto/sftpwarden.git
 cd sftpwarden
 git checkout dev
-python -m venv .venv
-source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev,docs,mysql,postgres,mongodb]"
 sftpwarden --version
@@ -68,18 +66,18 @@ sftpwarden --version
 The `mysql` extra also enables MariaDB because both providers use PyMySQL. The
 `mariadb` extra is an alias for the same dependency.
 
-Use Python 3.11, 3.12, 3.13, or 3.14. The full test matrix uses all four through
+Use Python 3.11, 3.12, 3.13 or 3.14. The full test matrix uses all four through
 `tox`.
 
 ## Daily Development Commands
 
-Run the full local validation:
+When the complete code change is ready, run the full ordinary validation:
 
 ```bash
 tox
 ```
 
-Run one environment:
+During development, select only the environment relevant to the change:
 
 ```bash
 tox -e py311
@@ -87,19 +85,85 @@ tox -e py312
 tox -e py313
 tox -e py314
 tox -e lint
+tox -e mypy
 tox -e coverage
 tox -e docs
 tox -e package
 tox -e audit
-tox -e clean
 ```
 
-Run pytest directly while iterating:
+Batch related changes and use Python 3.14 for focused checks while iterating:
 
 ```bash
-python -m pytest
-python -m pytest tests/test_cli.py
+python -m pytest tests/cli/
 ```
+
+Select tests for the changed behavior and failure/recovery paths. Run the full
+ordinary `tox` matrix once the complete change is ready, including documentation.
+If corrections follow, repeat the affected checks rather than an unchanged full
+matrix. Runtime, deployment, watcher and recovery changes also require disposable
+real-environment checks in [release validation](tests/release_validation/README.md).
+Mocked tests and rendered manifests do not establish working SFTP or recovery.
+Validate corrections locally before pushing another candidate. When changing CI
+execution, compare measured elapsed time and total execution cost, preserve every
+required gate and distinguish local evidence from checks requiring native hosts.
+
+The ordinary coverage gate requires at least 95% line coverage, with a project
+target above 97%. Add meaningful behavior and failure-path tests; do not
+exclude executable code to meet the gate.
+
+The release workflow runs on pushes and pull requests to `dev` and `main`, but
+selects the work from the complete Git diff:
+
+- Documentation-only changes build Sphinx without running Python tests, building
+  images or starting Docker/Kubernetes environments. This covers `docs/`, the
+  root documentation files. For a PR, the complete diff against its target must
+  be documentation-only, not just its latest commit. Unknown paths require full
+  validation; changing dependencies, tests or workflows does too.
+- Code changes build candidate packages, chart and native images, record their
+  hashes and validate those artifacts. The matrix covers Linux, macOS and Windows
+  with Python 3.11–3.14, plus the applicable external release gates.
+- A same-repository `dev` → `main` PR, and the subsequent push to `main`, can reuse
+  a successful `dev` push candidate with an identical Git tree. This compares
+  all tracked files, including documentation, tests and workflows. The source
+  run must retain its full-validation receipt and all candidate artifacts.
+  Checksums and provenance are verified again; Python dependencies and both
+  architectures' container images receive fresh security scans.
+
+If an identical dev candidate is still running, promotion waits up to 35 minutes
+instead of repeating its tests. A failed/cancelled candidate blocks promotion;
+an absent candidate or missing/expired artifacts require full validation.
+Manual release-workflow runs always force full validation. PR results and fork
+artifacts are never used as trusted promotion evidence. The first run after
+changing this workflow must establish a new fully validated candidate.
+
+Configure branch protection to require the `Release aggregate` check rather than
+individual jobs that intentionally skip on other routes. Failed or missing
+required gates block publication. Versioned artifact conflicts are errors, not
+permission to overwrite an existing release. Publishing is restricted to the
+gated `main` release path; contributor PRs target `dev`. Reused artifacts retain
+their original source commit and bytes; the release tag targets the main commit.
+Never include local planning files, temporary credentials, backup archives or
+unredacted diagnostics in commits.
+
+The security workflow scans the tested image archives without rebuilding them
+and retains findings of every severity in JSON and SARIF reports. A separate check blocks HIGH/CRITICAL
+findings, including those without a fix; missing or unreadable reports also fail.
+Lower-severity findings remain visible for remediation. Do not suppress an
+advisory to make CI pass: update the affected dependency when a fix is available.
+Scheduled/manual security scans build current source images independently.
+Scorecard runs on a schedule or manually, not on every PR. Pages publishes only
+from `main` when its documentation inputs change.
+
+The deployment release group rehearses image, multi-architecture index and Helm
+chart publication against a disposable loopback registry. It verifies readback,
+safe retries and refusal to overwrite conflicting artifacts. Actual publishing
+still requires the repository's GHCR permissions, the PyPI trusted publisher
+for `release.yml` with environment `pypi`, and Pages access for `main`.
+If publication fails partway through, rerun only the failed jobs in the same
+workflow run to reuse its verified candidate artifacts. A new run may have to
+rebuild if the trusted dev artifacts are unavailable, and may correctly refuse
+to replace already published bytes.
 
 Build docs:
 
@@ -113,13 +177,13 @@ Build package artifacts:
 python -m build
 ```
 
-Clean local artifacts:
+Optional cleanup after inspecting its scope (not a validation step):
 
 ```bash
 tox -e clean
 ```
 
-This removes Python caches, coverage output, docs output, package artifacts, and
+This removes Python caches, coverage output, docs output, package artifacts and
 Docker smoke-test images created during local validation.
 
 ## Project Structure
@@ -129,12 +193,12 @@ sftpwarden/
   cli_commands/        # Typer command modules
   config/              # Project and global config models
   contexts/            # Context registry and resolution
-  providers/           # YAML, CSV, SQLite, SQL, and MongoDB providers
+  providers/           # YAML, CSV, SQLite, SQL and MongoDB providers
   refresh/             # Runtime refresh orchestration
-  remote/              # SSH, rsync/scp, and remote deploy support
+  remote/              # SSH, rsync/scp and remote deploy support
   render/              # Compose and Kubernetes rendering
   security/            # Password/hash helpers
-  services/            # Deploy, backup, health, and CLI-facing workflows
+  services/            # Deploy, backup, health and CLI-facing workflows
   system/              # Subprocess wrapper
   users/               # User models and provider mutation helpers
   utils/               # Small shared utilities
@@ -153,20 +217,25 @@ tools/                 # Local maintenance helpers
 
 ## Coding Guidelines
 
-- Keep code, CLI output, logs, examples, and docs in English.
+- Keep code, CLI output, logs, examples and docs in English.
 - Preserve the public CLI unless a change is explicitly planned.
 - Prefer small modules with clear ownership.
 - Keep runtime dependencies minimal.
 - Use type hints for public functions.
 - Use NumPy-style docstrings for public classes and functions.
 - Do not print secrets.
-- Do not commit generated output such as `.tox/`, `dist/`, or `docs/_build/`.
+- Do not commit generated output such as `.tox/`, `dist/` or `docs/_build/`.
 - Preserve unrelated user changes when working in a dirty tree.
 
 ## Documentation Guidelines
 
 The README should stay focused on adoption: what the project does, when to use it,
-how to install it, and the shortest safe path to a running deployment.
+how to install it and the shortest safe path to a running deployment.
+
+Use clear English and avoid serial commas before `and` or `or`. Start with the
+simplest working procedure, explain how to verify it and link to advanced detail.
+The current documentation targets 1.4.0; basic installation follows the latest
+release without a version pin or required virtual environment.
 
 Use `docs/` for detail:
 
@@ -174,7 +243,7 @@ Use `docs/` for detail:
 - operations and remote deployment workflows;
 - security model and limitations;
 - CLI reference;
-- contribution, development, and testing workflow.
+- contribution, development and testing workflow.
 
 ## Pull Request Checklist
 
@@ -183,11 +252,21 @@ Before opening a PR:
 - target `dev`, not `main`;
 - for docs-only changes, run `tox -e docs`;
 - for code changes, run `tox`;
-- for Docker/runtime changes, build the affected Docker image locally;
+- verify runtime or deployment changes in disposable real environments;
 - update docs and examples when behavior changes;
 - add or update tests for code changes;
-- keep secrets out of logs, screenshots, and fixtures;
+- keep secrets out of logs, screenshots and fixtures;
 - explain the user-facing impact in the PR description.
+
+## Upgrade Changes
+
+When changing upgrades, keep `sftpwarden/release_compatibility.json` aligned with
+the release and tested runtime bounds. Verify owning-manager updates in disposable
+pip, pipx and uv installations, and watcher replacement against real supported
+runtimes. Preserve checkpoints and prove that compatible management updates do
+not deploy servers. Incompatible updates must require explicit all-context consent.
+Scheduler command tests do not establish native platform support: identify any
+unavailable Windows or macOS scheduler checks separately from passing Linux tests.
 
 ## Security Issues
 

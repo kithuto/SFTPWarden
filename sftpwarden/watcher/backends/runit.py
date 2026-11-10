@@ -38,6 +38,7 @@ class RunitWatcher(BaseWatcher):
 
     @classmethod
     def is_supported(cls) -> bool:
+        """Return whether runit is available on the current host."""
         return (
             system_is("Linux")
             and shutil.which("sv") is not None
@@ -47,14 +48,17 @@ class RunitWatcher(BaseWatcher):
 
     @classmethod
     def path(cls) -> Path:
+        """Return the generated runit service-script path."""
         return runit_script_path()
 
     @classmethod
     def render(cls, *, image: str | None = None) -> str:
+        """Render the runit watcher service script."""
         return render_runit_script()
 
     @classmethod
     def commands(cls, *, image: str | None = None) -> list[list[str]]:
+        """Return commands that install and start the runit watcher."""
         return [
             ["sudo", "mkdir", "-p", RUNIT_SERVICE_DIR, "/var/service"],
             [
@@ -71,6 +75,7 @@ class RunitWatcher(BaseWatcher):
 
     @classmethod
     def uninstall_commands(cls, *, path: Path | None = None) -> list[list[str]]:
+        """Return commands that stop and remove the runit watcher."""
         return [
             ["sudo", "sv", "down", RUNIT_ACTIVE_DIR],
             ["sudo", "rm", "-f", RUNIT_ACTIVE_DIR],

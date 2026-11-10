@@ -1,14 +1,23 @@
 from __future__ import annotations
 
-import shlex
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
-from sftpwarden.config import FILE_PROVIDER_TYPES, RemoteStorage, load_config, provider_local_path
+from sftpwarden.config import (
+    FILE_PROVIDER_TYPES,
+    DeployTarget,
+    RemoteStorage,
+    load_config,
+    provider_local_path,
+)
 from sftpwarden.contexts import ContextEntry, ContextType, resolve_context
 from sftpwarden.refresh import docker_compose_command
-from sftpwarden.remote.ssh import ssh_base_command
+from sftpwarden.refresh.core import kubernetes_refresh_command
+from sftpwarden.remote.ssh import remote_path_expression, ssh_base_command
 from sftpwarden.render.compose import compose_text
+from sftpwarden.runtime.probes import Probe, probe_runtime
 from sftpwarden.services.context_cleanup import ensure_remote_only_root_available
 from sftpwarden.services.provider_schema import plan_provider_schema_reconciliation
 from sftpwarden.system.commands import command_text, run
@@ -47,7 +56,7 @@ class HealthReport:
         """
         return all(check.status != "fail" for check in self.checks)
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible health report.
 
         Returns
@@ -190,40 +199,54 @@ def runtime_health_from_context(entry: ContextEntry) -> list[HealthCheck]:
         Runtime checks.
     """
     command = [
-        *docker_compose_command(entry)[:-1],
-        "health",
+        *docker_compose_command(entry, runtime_command="health"),
         "--config",
         CONTAINER_CONFIG_PATH,
         "--json",
     ]
     if entry.type == ContextType.LOCAL:
-        result = run(command, cwd=entry.root or ".")
+        if entry.config and Path(entry.config).exists():
+            config = load_config(entry.config)
+            if config.deploy.target == DeployTarget.KUBERNETES:
+                command = kubernetes_refresh_command(config, runtime_command="health")
+                command.append("--json")
+        cwd = entry.root or "."
     elif entry.remote:
-        remote_root = shlex.quote(entry.remote.remote_root)
+        remote_root = remote_path_expression(entry.remote.remote_root)
         remote_command = f"cd {remote_root} && {command_text(command)}"
-        result = run([*ssh_base_command(entry.remote), remote_command])
+        command = [*ssh_base_command(entry.remote), remote_command]
+        cwd = None
     else:
         return [HealthCheck("runtime", "fail", "Remote context is missing settings.")]
+
+    try:
+        result = run(command, cwd=cwd, timeout=10)
+    except subprocess.TimeoutExpired:
+        return [HealthCheck("runtime", "fail", "Runtime health exceeded its 10-second deadline.")]
 
     if result.returncode == 0:
         return [HealthCheck("runtime", "pass", "Runtime health command passed.")]
     return [
         HealthCheck(
             "runtime",
-            "warn",
-            result.output or "Runtime health command did not pass.",
+            "fail",
+            "Runtime health command did not pass; inspect private runtime diagnostics.",
             "Start the runtime with `sftpwarden deploy` if it is not running.",
         )
     ]
 
 
-def runtime_health(config_path: str | Path = CONTAINER_CONFIG_PATH) -> HealthReport:
+def runtime_health(
+    config_path: str | Path = CONTAINER_CONFIG_PATH, *, probe: Probe = "readiness"
+) -> HealthReport:
     """Build a runtime-internal health report.
 
     Parameters
     ----------
     config_path
         Runtime config path.
+    probe
+        Readiness, liveness, or startup semantics; never queries the provider.
 
     Returns
     -------
@@ -232,8 +255,10 @@ def runtime_health(config_path: str | Path = CONTAINER_CONFIG_PATH) -> HealthRep
     """
     checks: list[HealthCheck] = []
     try:
-        config = load_config(config_path)
-        checks.append(HealthCheck("config", "pass", f"Loaded {config_path}."))
+        from sftpwarden.runtime.configuration import load_runtime_config
+
+        config = load_runtime_config(config_path)
+        checks.append(HealthCheck("config", "pass", "Loaded applied runtime configuration."))
     except Exception as exc:  # noqa: BLE001
         return HealthReport(
             context="runtime",
@@ -251,15 +276,8 @@ def runtime_health(config_path: str | Path = CONTAINER_CONFIG_PATH) -> HealthRep
         else:
             checks.append(HealthCheck(name, "fail", f"{path} does not exist."))
 
-    try:
-        from sftpwarden.runtime import load_runtime_inputs
-
-        load_runtime_inputs(config_path)
-        checks.append(HealthCheck("provider", "pass", "Provider users are readable."))
-    except Exception as exc:  # noqa: BLE001
-        checks.append(
-            HealthCheck("provider", "fail", str(exc), "Verify provider config and dependencies.")
-        )
+    healthy, message = probe_runtime(Path(config.server.state_dir), probe=probe)
+    checks.append(HealthCheck(probe, "pass" if healthy else "fail", message))
 
     sshd_config = RUNTIME_SSHD_CONFIG
     checks.append(

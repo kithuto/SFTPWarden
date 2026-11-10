@@ -11,8 +11,8 @@ from sftpwarden.services.users import UserService
 from sftpwarden.utils.errors import ProviderError, RuntimeError
 
 PASSWORD_HASH = "$6$rounds=500000$saltstring$hashvalue"
-TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests"
-SECOND_TEST_KEY = "ssh-ed25519 ZmFrZS1rZXktMg=="
+TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFMsDFmvcbuEKKQ2nRx6M4jxyJuS9KoOesN7GyrXw+d+"
+SECOND_TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGv5cJFgm0ffn6oHXkIseBv94l3DX7v+2vbF0+qWC+M6"
 
 
 def create_project(

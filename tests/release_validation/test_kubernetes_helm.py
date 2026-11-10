@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
+
+from sftpwarden.config import DeployTarget, load_config, write_config
 
 from .conftest import (
     CleanupStack,
@@ -27,6 +30,107 @@ def require_kubernetes_cluster() -> None:
             "Release validation requires kubectl access to a real Kubernetes cluster.\n"
             f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
         )
+
+
+def select_candidate(root: Path) -> None:
+    """Use the installed candidate image and explicitly selected disposable cluster."""
+    path = root / "sftpwarden.yaml"
+    config = load_config(path)
+    if image := os.environ.get("SFTPWARDEN_RELEASE_RUNTIME_IMAGE"):
+        config.docker.image = image
+    if context := os.environ.get("SFTPWARDEN_RELEASE_KUBE_CONTEXT"):
+        config.kubernetes.kube_context = context
+    write_config(path, config)
+
+
+@pytest.mark.release_validation
+@pytest.mark.release_external
+@pytest.mark.release_kubernetes
+@pytest.mark.parametrize("use_secret", [False, True], ids=["pvc", "custom-secret"])
+def test_kube_doctor_identity_against_real_cluster(
+    cli: ReleaseCli,
+    cleanup_stack: CleanupStack,
+    tmp_path: Path,
+    unique_name: str,
+    use_secret: bool,
+) -> None:
+    """Check resource discovery and missing-resource diagnostics without a runtime image."""
+    require_executable("kubectl")
+    kube_context = (
+        os.environ.get("SFTPWARDEN_RELEASE_KUBE_CONTEXT")
+        or run_external(["kubectl", "config", "current-context"]).stdout.strip()
+    )
+    kubectl = ["kubectl", "--context", kube_context]
+    run_external([*kubectl, "cluster-info"], timeout=60)
+    namespace = f"doctor-{unique_name}"
+
+    def cleanup() -> None:
+        run_external(
+            [
+                *kubectl,
+                "delete",
+                "namespace",
+                namespace,
+                "--ignore-not-found=true",
+                "--wait=true",
+                "--timeout=60s",
+            ],
+            timeout=90,
+        )
+        remaining = run_external(
+            [*kubectl, "get", "namespace", namespace, "--ignore-not-found=true", "-o", "name"]
+        )
+        assert not remaining.stdout.strip(), "Doctor test namespace was not removed"
+
+    cleanup_stack.add(cleanup)
+    run_external([*kubectl, "create", "namespace", namespace])
+    context_name = f"doctor-{unique_name}"
+    root = tmp_path / "doctor-project"
+    assert_ok(cli.run("init", context_name, "--root", root, "--yes"))
+    config = load_config(root / "sftpwarden.yaml")
+    config.deploy.target = DeployTarget.KUBERNETES
+    config.kubernetes.namespace = namespace
+    config.kubernetes.kube_context = kube_context
+    config.kubernetes.release = context_name
+    config.kubernetes.host_keys_secret = "custom-identity" if use_secret else None
+    write_config(root / "sftpwarden.yaml", config)
+    kind = "secret" if use_secret else "pvc"
+    name = "custom-identity" if use_secret else f"{context_name}-host-keys"
+    check_name = "host-keys secret" if use_secret else "host-keys PVC"
+    namespaced = [*kubectl, "-n", namespace]
+    # A legacy Secret must not hide an absent configured identity resource.
+    run_external([*namespaced, "create", "secret", "generic", f"{context_name}-host-keys"])
+    resource = {
+        "apiVersion": "v1",
+        "kind": "Secret" if use_secret else "PersistentVolumeClaim",
+        "metadata": {"name": name, "namespace": namespace},
+    }
+    if not use_secret:
+        # Existence is the diagnostic contract. Do not provision real storage.
+        resource["spec"] = {
+            "storageClassName": "",
+            "accessModes": ["ReadWriteOnce"],
+            "resources": {"requests": {"storage": "1Mi"}},
+            "volumeName": f"unallocated-{unique_name}",
+        }
+    resource_path = tmp_path / "identity.json"
+    resource_path.write_text(json.dumps(resource), encoding="utf-8")
+    for present in (False, True, False):
+        if present:
+            run_external([*namespaced, "apply", "-f", str(resource_path)])
+        else:
+            run_external([*namespaced, "delete", kind, name, "--ignore-not-found=true"])
+        result = cli.run("kube", "doctor", "--context", context_name, "--json")
+        assert_ok(result)
+        checks = json.loads(result.stdout)["checks"]
+        identity = next(check for check in checks if check["name"] == check_name)
+        assert identity["command"] == [*namespaced, "get", kind, name]
+        assert (identity["returncode"] == 0) is present, identity
+        assert bool(identity["message"]) is not present
+        assert all(check["returncode"] == 0 for check in checks if check is not identity)
+        text = cli.run("kube", "doctor", "--context", context_name)
+        assert_ok(text)
+        assert f"{check_name}: {'pass' if present else 'warn'}" in text.stdout
 
 
 @pytest.mark.release_validation
@@ -59,6 +163,7 @@ def test_kubernetes_manifest_release_flow_against_real_cluster(
             timeout=180,
         )
     )
+    select_candidate(root)
     render = cli.run("kube", "render", "--context", context_name)
     dry_apply = cli.run("kube", "apply", "--context", context_name, "--dry-run", "--json")
     apply = cli.run("kube", "apply", "--context", context_name, "--json", timeout=240)
@@ -79,6 +184,7 @@ def test_kubernetes_manifest_release_flow_against_real_cluster(
     assert status_data["namespace"] == namespace
     assert {check["name"] for check in status_data["checks"]} >= {"namespace", "statefulset"}
     assert_ok(doctor)
+    assert all(check["returncode"] == 0 for check in json.loads(doctor.stdout)["checks"])
     assert_ok(refresh)
     assert "kubectl" in json.loads(refresh.stdout)["targets"][0]["result"]
     assert_no_traceback(logs)
@@ -120,6 +226,7 @@ def test_helm_release_flow_against_real_cluster(
             timeout=180,
         )
     )
+    select_candidate(root)
     values = cli.run("helm", "values", "--context", context_name, "--write")
     template = cli.run("helm", "template", "--context", context_name, "--json", timeout=120)
     lint = cli.run("helm", "lint", "--context", context_name, timeout=120)

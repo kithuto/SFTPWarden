@@ -62,6 +62,7 @@ def run(
     cwd: str | None = None,
     timeout: float | None = None,
     capture_output: bool = True,
+    input_text: str | None = None,
 ) -> CommandResult:
     """Run an external command without raising on failure.
 
@@ -75,6 +76,8 @@ def run(
         Optional command timeout in seconds.
     capture_output
         Whether to capture stdout and stderr.
+    input_text
+        Optional standard input; never included in the command arguments.
 
     Returns
     -------
@@ -91,6 +94,7 @@ def run(
             errors="replace",
             capture_output=capture_output,
             timeout=timeout,
+            input=input_text,
         )
     except FileNotFoundError as exc:
         return CommandResult(
@@ -116,6 +120,8 @@ def run_checked(
     fallback_suggestion: str,
     timeout: float | None = None,
     capture_output: bool = True,
+    private_output: bool = False,
+    input_text: str | None = None,
 ) -> CommandResult:
     """Run an external command and raise a typed SFTPWarden error on failure.
 
@@ -135,6 +141,8 @@ def run_checked(
         Optional command timeout in seconds.
     capture_output
         Whether to capture stdout and stderr.
+    input_text
+        Optional standard input. Use ``private_output`` when errors may echo it.
 
     Returns
     -------
@@ -146,15 +154,24 @@ def run_checked(
     SFTPWardenError
         Raised as ``error_type`` when the command exits with a non-zero code.
     """
-    command_result = run(
-        args,
-        cwd=cwd,
-        capture_output=capture_output,
-        timeout=timeout,
-    )
+    try:
+        command_result = run(
+            args,
+            cwd=cwd,
+            capture_output=capture_output,
+            timeout=timeout,
+            **({"input_text": input_text} if input_text is not None else {}),
+        )
+    except subprocess.TimeoutExpired:
+        raise error_type(
+            message,
+            suggestion="The command exceeded its deadline; inspect its effects before retrying.",
+        ) from None
     if command_result.returncode != 0:
         raise error_type(
             message,
-            suggestion=command_result.output or fallback_suggestion,
+            suggestion=fallback_suggestion
+            if private_output
+            else command_result.output or fallback_suggestion,
         )
     return command_result

@@ -1,8 +1,19 @@
 # Providers
 
-Providers store SFTP users outside the runtime image. The runtime reads the
-configured provider during refresh/sync and writes only active users and active
-keys into OpenSSH state.
+A provider stores SFTP accounts: usernames, password hashes and public keys.
+It does not store uploaded files. Start with the built-in YAML provider unless
+you already have a reason to use a database or spreadsheet workflow.
+
+You use the same `sftpwarden user` commands with every built-in provider. You can
+also add or update accounts directly in the file or database using its supported
+format. Automatic synchronization is enabled by default: the runtime reads that
+source and applies user changes without needing an image rebuild or restart.
+
+CLI user changes normally request an immediate refresh. External changes are
+picked up automatically once they are available to the runtime; the periodic
+interval defaults to 60 seconds. See
+[Automatic User Synchronization](operations.md#automatic-user-synchronization)
+for file delivery, timing and verification.
 
 ## Choosing a Provider
 
@@ -16,12 +27,45 @@ keys into OpenSSH state.
 | PostgreSQL | Yes | Yes | Production database and Kubernetes deployments |
 | MongoDB | Yes | Yes | Document-oriented infrastructure |
 
-For production Kubernetes, prefer PostgreSQL, MariaDB/MySQL, or MongoDB when user
+For production Kubernetes, prefer PostgreSQL, MariaDB/MySQL or MongoDB when user
 state must change outside deployment cycles. YAML and CSV remain useful for
 reviewed declarative workflows, but their rendered contents are copied into the
-provider PVC during `deploy`, `kube apply`, or `helm upgrade --install`.
+provider PVC during `deploy`, `kube apply` or `helm upgrade --install`.
 
 ## Provider Configuration
+
+Create a new project with the selected provider. YAML is the built-in default:
+
+```bash
+sftpwarden init demo --yes
+```
+
+For another provider, pass `--provider` during initialization. For example, in
+a separate project directory:
+
+```bash
+sftpwarden init sqlite-demo --provider sqlite --yes
+```
+
+To change the default for future projects, use
+`sftpwarden config default-provider sqlite`. It does not convert existing data.
+To move existing users, use [Transfer and Migration](#transfer-and-migration).
+
+File providers need no optional packages. Database providers need a reachable
+database, credentials and the matching CLI extra:
+
+| Provider | Installation |
+| --- | --- |
+| MySQL or MariaDB | `python -m pip install "sftpwarden[mysql]"` |
+| PostgreSQL | `python -m pip install "sftpwarden[postgres]"` |
+| MongoDB | `python -m pip install "sftpwarden[mongodb]"` |
+
+The following blocks describe the provider section in `sftpwarden.yaml`.
+Let `init` create it for a new project. A Compose deployment moves file providers
+into a dedicated directory; see [file-provider migration](#compose-file-provider-migration)
+before editing an existing installation's paths.
+
+### File provider settings
 
 YAML:
 
@@ -50,7 +94,9 @@ provider:
   user_schema: 2
 ```
 
-MySQL, MariaDB, and PostgreSQL:
+### Database provider settings
+
+MySQL, MariaDB and PostgreSQL:
 
 ```yaml
 provider:
@@ -70,8 +116,65 @@ provider:
   user_schema: 2
 ```
 
+### Credentials and environment variables
+
+A DSN is a connection address that may include a database username and password.
+Make the database reachable from both the administrator's CLI and the runtime.
+A successful CLI connection does not prove that the container can reach it.
+
 Use environment variables for real DSNs so secrets are not committed in
 `sftpwarden.yaml`.
+
+Provider commands resolve `${NAME}` from their process environment. A whole DSN
+written as `$NAME` or `%NAME%` is also supported on Linux, macOS and Windows.
+Expansion happens once: dollar signs inside the resulting credential are not
+expanded again. Bare dollar signs within a literal URL are preserved. Missing
+or empty referenced variables fail before a connection is opened.
+
+Generated Compose files pass only the variables referenced by `provider.dsn`.
+They contain required-variable expressions, not resolved credentials. Docker
+Compose resolves these on the machine where it runs, using its environment and
+project `.env` rules. Host-side provider commands use the process environment;
+they do not load a project's `.env` file. Local shell variables are not implicitly
+forwarded to a remote Docker Compose process.
+
+### Database transport options
+
+MySQL and MariaDB accept these DSN query parameters:
+
+| Option | Behavior |
+| --- | --- |
+| `charset` | Driver connection character set. |
+| `connect_timeout` | Connection timeout, 1–30 whole seconds; default 5. |
+| `read_timeout`, `write_timeout` | Socket operation timeouts, 1–30 whole seconds; default 20. |
+| `ssl_ca` | CA certificate file available on the machine executing the provider operation. |
+| `ssl_cert`, `ssl_key` | Optional client certificate and private key files; a key requires a certificate. |
+| `ssl_verify_cert`, `ssl_verify_identity` | Request verified TLS; disabling either is rejected. |
+| `ssl_disabled` | `false` requires verified TLS; `true` explicitly disables TLS and cannot be combined with TLS options. |
+
+TLS options always enable certificate-chain and hostname verification. An
+untrusted certificate, a hostname mismatch or a server without requested TLS
+must fail the connection. Unknown, duplicate, empty and malformed options are
+errors. File paths refer to the executing host or container; custom CA/client
+files must be provisioned there explicitly.
+
+MongoDB connections default to `connectTimeoutMS=5000`,
+`serverSelectionTimeoutMS=5000`, `socketTimeoutMS=20000` and `timeoutMS=25000`.
+The URI can specify a smaller positive whole-millisecond value for each option;
+zero, larger values and duplicate timeout options are rejected. Every provider
+operation closes its client, including when reading or validation fails.
+
+PostgreSQL keeps psycopg/libpq DSN and TLS semantics, including `sslmode=verify-full`
+and `sslrootcert`. `connect_timeout` defaults to five seconds and accepts whole
+seconds from 1 to 30 (including `PGCONNECT_TIMEOUT`). Libpq applies connection
+timeouts per host in a multi-host DSN. Subsequent socket waits have a 20-second
+deadline; timed-out sessions are closed. Provision CA/client files on every host
+or container that executes a provider operation. The runtime's attempt deadline
+also bounds reconciliation as a whole.
+
+Socket timeouts bound individual driver operations. They do not establish a
+single deadline for an entire multi-step CLI workflow. The supervised runtime
+also applies its separate refresh-attempt deadline.
 
 ## User Schemas
 
@@ -79,7 +182,7 @@ Schema v1 and schema v2 are both supported formats:
 
 - `user_schema: 1` stores simple anonymous public keys in `public_keys`.
 - `user_schema: 2` stores named keys with fingerprints, comments, disabled
-  state, timestamps, expiry, source, and metadata.
+  state, timestamps, expiry, source and metadata.
 
 New `sftpwarden init` projects default to schema v2. Use `--user-schema 1` when
 you intentionally want the simpler v1 format:
@@ -93,11 +196,40 @@ Existing configs that omit `provider.user_schema` continue to behave as schema
 v1 until explicitly migrated. Changing `provider.user_schema` in
 `sftpwarden.yaml` records the desired schema; it does not rewrite provider data
 at config-edit time. Forward migrations run during `sftpwarden deploy`,
-`sftpwarden kube apply`, or `sftpwarden helm upgrade`, with confirmation unless
+`sftpwarden kube apply` or `sftpwarden helm upgrade`, with confirmation unless
 `--yes` is used. Manual YAML edits are handled the same way as changes made with
 `sftpwarden config`.
 
 ## File Providers
+
+Use `sftpwarden user create alice` to enter a password privately or add a public
+key with the named-key commands. Do not place plaintext passwords in files.
+
+Missing, unreadable, malformed or truncated provider files fail refresh and leave
+the last applied authorization in place. Empty YAML files, `users: null` and CSV
+files without a valid header are errors. To intentionally remove all users, use
+`users: []` in YAML or a CSV containing only its valid header. CSV rows must have
+the same number of cells as the header; incomplete rows are rejected.
+Import uses the same validation for YAML, CSV and JSON. JSON requires an explicit
+`users` list and duplicate explicit keys in YAML/JSON are rejected. YAML anchors
+and merge defaults remain supported. A truncated import fails before changing
+the destination provider.
+
+
+The following YAML blocks illustrate storage formats. The shortened public keys
+are placeholders and cannot authenticate; use a real `.pub` file with the CLI.
+
+CSV `disabled` values are checked explicitly, ignoring surrounding whitespace
+and case. The boolean text forms listed for SQL below are accepted; an empty or
+omitted CSV value retains the default `false`. Other values fail validation.
+Schema-v2 CSV key JSON rejects duplicate fields and non-finite numbers, including
+inside metadata. Failed serialization leaves an existing provider file intact.
+
+In schema v2, an explicit `keys` list is authoritative. `keys: []` revokes key
+access even if a legacy `public_keys` copy remains in the document. If `keys` is
+omitted, legacy `public_keys` are still converted to named keys. A null, boolean,
+number, string or mapping in place of a key list is invalid; it is not interpreted
+as an empty policy. Schema v1 continues to use `public_keys`.
 
 YAML schema v1:
 
@@ -125,7 +257,28 @@ users:
 CSV schema v1 uses a `public_keys` column. CSV schema v2 uses a `keys` JSON
 column, which is supported but less comfortable for nested key metadata.
 
+### SQLite behavior
+
+SQLite runtime reads use a read-only connection and a consistent transaction for
+users and keys. Reading, health checks and runtime planning do not initialize or
+migrate tables. Configure `provider.user_schema` to match existing storage and
+perform initialization or migration explicitly before deployment. A single-user
+update replaces only that user's key rows in the same transaction; full provider
+replacement still removes users and keys absent from the supplied snapshot.
+
 ## SQL Providers
+
+SQL input is validated as a complete user/key snapshot. Invalid boolean values,
+incomplete key rows, fractional UID/GID values and malformed metadata fail the
+read instead of becoming enabled credentials, missing keys or empty metadata.
+Metadata must be a JSON object with unique field names; SQL `NULL` means no
+metadata. Correct the source data and retry refresh. Failed validation preserves
+the runtime's last applied authorization and state.
+
+Boolean columns accept driver booleans, integer `0`/`1`, single-bit byte values
+and case-insensitive `true`/`false`, `t`/`f`, `yes`/`no`, `y`/`n`, `on`/`off` or
+`1`/`0` text. An explicitly null or unrecognized boolean is invalid. Custom user
+queries may select a subset of users; all fetched key rows must still be valid.
 
 Schema v1 uses the configured users table, usually `sftp_users`:
 
@@ -144,10 +297,14 @@ During `init`, SFTPWarden checks whether required SQL storage exists. If it is
 missing, interactive init asks whether to create it. Non-interactive automation
 can use `--create-table` or `--no-create-table`.
 
+Make `SFTPWARDEN_POSTGRES_DSN` available in the shell using your secret-management
+workflow before running this example. `--create-table` initializes storage in the
+selected database; it does not create the database server.
+
 ```bash
 sftpwarden init prod \
   --provider postgresql \
-  --dsn 'postgresql://sftpwarden:change-me@db.example.com:5432/sftpwarden' \
+  --dsn '${SFTPWARDEN_POSTGRES_DSN}' \
   --create-table
 ```
 
@@ -158,18 +315,40 @@ table.
 
 Schema v1 stores users with `public_keys`. Schema v2 embeds `keys` in each user
 document and writes schema metadata on documents created by SFTPWarden. During
-`init`, SFTPWarden checks the configured collection and username index, and can
+`init`, SFTPWarden checks the configured collection and username index and can
 create them when requested.
+
+Reads require a stable collection UUID before and after the snapshot. Missing,
+recreated or inaccessible collections report failure and preserve applied access;
+they are never interpreted as an empty user set. Provider credentials therefore
+need collection metadata access as well as document read access.
+
+Ordinary user and key edits use atomic document comparison on standalone servers
+and replica sets. Bulk replacement requires a replica set or sharded cluster and
+runs in one transaction. On standalone MongoDB, import/copy (including merge),
+full schema migration and provider restore are rejected before the first write.
+Configure a replica set to use those operations; individual user CRUD remains
+available. A rejected bulk operation leaves the stored users unchanged.
 
 ## Transfer and Migration
 
-Move users between providers:
+Export a snapshot into a private file:
 
 ```bash
-sftpwarden provider export --format json > users.json
-sftpwarden provider import --input users.json --merge
-sftpwarden provider copy --from-context dev --to-context prod --merge
+sftpwarden provider export --format json --output users.json
 ```
+
+Then select the destination context and preview the import before applying it:
+
+```bash
+sftpwarden provider import --input users.json --merge --dry-run
+sftpwarden provider import --input users.json --merge
+```
+
+`--merge` adds or updates matching users and keeps destination-only users.
+`--replace` makes the destination match the snapshot, which can revoke access.
+Snapshots contain credential material; protect them and remove temporary copies.
+For direct context-to-context transfer, use [provider copy](cli/providers.md).
 
 Inspect or migrate schema:
 
@@ -189,3 +368,72 @@ Migrations are forward-only and never run during ordinary reads. Backward schema
 changes are rejected with a clear error instead of rewriting provider data.
 Advanced named-key operations on schema v1 data can ask to migrate to schema v2;
 in non-interactive workflows, pass `--yes` when that migration is intended.
+
+## Advanced Storage Behavior
+
+### Concurrent edits
+
+User and named-key commands compare the selected user with a fresh copy inside
+the provider's lock or transaction. Edits to different users preserve both
+changes; a stale edit to the same user returns a conflict, including when only
+its comment changed. Reload the provider before retrying a conflicting edit.
+Import, copy and schema migration compare the complete source snapshot before
+replacement, so a concurrent edit prevents an outdated bulk write.
+
+YAML and CSV use the stable file lock described below. SQLite holds a write
+transaction across comparison and publication. SQL databases use transactional
+row locks and serializable mutations; users and key rows are read together in a
+read-only, repeatable-read snapshot. Updating one SQL user never replaces another
+user's keys. Transaction conflicts and lock timeouts are errors, not successful
+partial edits.
+
+These guarantees cover participating application writers. Arbitrary editors and
+direct database writes do not acquire SFTPWarden's application locks. Keep an
+exclusive maintenance window for external bulk rewrites and schema changes.
+
+### Compose file-provider migration
+
+For Compose deployments, `sftpwarden deploy` moves
+the active YAML, CSV or SQLite provider to `provider/<filename>` and updates
+`provider.path` to `/etc/sftpwarden/provider-data/<filename>`. The runtime mounts
+only that dedicated directory read-only. A later atomic save replaces a file
+inside the mounted directory and becomes visible to normal refresh/sync without
+another deploy. `compose --write` alone does not perform this migration.
+
+Run `deploy --dry-run` to review the transition, then perform the deploy before
+using the upgraded client to edit a running legacy installation. Stop external
+editors and database writers during this one-time transition. The migration
+retains the original provider and private recovery material in
+`.sftpwarden/provider-migration/` (`config.yaml`, `provider`, `journal.json`).
+SQLite recovery snapshots include committed WAL transactions. An occupied target,
+unrelated files in the dedicated directory or conflicting recovery material stops
+the migration without overwriting that material.
+
+After migration, the path in the updated config is authoritative. Update external
+editors and scripts to use `provider/<filename>`; the original file is a recovery
+copy and is no longer synchronized. Application writers using the old local path
+receive an error. If deployment fails after the copy, user edits to the migrated
+file remain blocked until a retry successfully recreates the runtime and waits
+for readiness. Do not delete the pending-deploy marker to bypass that check.
+
+For an interrupted config update, keep the source, target and recovery directory
+unchanged and retry `deploy`. If a conflict is reported, preserve both copies and
+reconcile them before retrying. To roll back a completed transition, stop writers
+and the runtime, preserve any newer provider edits, restore the recovery config
+and the matching provider, remove the old-path migration notice only after that
+reconciliation and recreate the legacy mount using the matching CLI version.
+Never assume the original provider includes edits made after migration.
+
+The client uses POSIX advisory locks or Windows byte-range locks in a stable
+separate file, plus unique temporary files and atomic replacement. These locks
+coordinate SFTPWarden writers; external editors and direct database clients do not
+participate. Use a local filesystem with reliable locking and rename semantics;
+network mounts and cloud synchronization are not distributed writer coordination.
+Windows file privacy also depends on the containing directory's ACL. Directory
+fsync is used where supported; Windows does not offer that operation through this
+implementation.
+
+For a remote-only context, deploy runs the preparation inside the remote project
+using the preparation image that matches the CLI version. The remote host needs
+Docker Compose and access to that image. Review `deploy --dry-run` before applying
+the transition; local provider commands still require a local project.

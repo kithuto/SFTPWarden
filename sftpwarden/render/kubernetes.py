@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import shlex
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -18,10 +21,13 @@ from sftpwarden.config import (
     SFTPWardenConfig,
     provider_local_path,
 )
-from sftpwarden.providers import empty_provider_text, provider_from_config
+from sftpwarden.providers import empty_provider_text
+from sftpwarden.providers.documents import parse_provider_document
 from sftpwarden.render.compose import runtime_image_reference
 from sftpwarden.utils._version import get_version
+from sftpwarden.utils.archives import MAX_METADATA_BYTES, check_managed_path
 from sftpwarden.utils.constants import CONTAINER_CONFIG_PATH
+from sftpwarden.utils.errors import ProviderError
 from sftpwarden.utils.paths import expand_path
 
 KUBERNETES_MANIFEST_FILE = "kubernetes.yml"
@@ -77,15 +83,11 @@ def kubernetes_manifests(
     name = kubernetes_resource_name(config.kubernetes.release)
     namespace = config.kubernetes.namespace
     labels = kubernetes_labels(config)
-    resources = [
-        _config_map(config, name, namespace, labels, project_root),
-        _host_keys_secret(name, namespace, labels),
-    ]
-    if config.provider.type in EXTERNAL_DSN_PROVIDER_TYPES and config.provider.dsn:
-        resources.append(_provider_dsn_secret(config, name, namespace, labels))
+    config_map = _config_map(config, name, namespace, labels, project_root)
+    resources = [config_map]
     resources.extend(_persistent_volume_claims(config, name, namespace, labels))
-    resources.append(_service(config.kubernetes, name, namespace, labels))
-    resources.append(_stateful_set(config, name, namespace, labels, project_root))
+    resources.append(_service(config.kubernetes, name, namespace, labels, port=config.server.port))
+    resources.append(_stateful_set(config, name, namespace, labels, config_map["data"]))
     return resources
 
 
@@ -93,7 +95,11 @@ def kubernetes_manifest_text(
     config: SFTPWardenConfig, project_root: str | Path | None = None
 ) -> str:
     """Render Kubernetes manifests as a YAML multi-document stream."""
-    return yaml.safe_dump_all(kubernetes_manifests(config, project_root), sort_keys=False)
+    return (
+        "# Offline render: live identity and credential prerequisites are unverified.\n"
+        "# Run sftpwarden kube prepare before applying an upgrade; activate explicitly.\n"
+        + yaml.safe_dump_all(kubernetes_manifests(config, project_root), sort_keys=False)
+    )
 
 
 def write_kubernetes_manifests(config: SFTPWardenConfig, project_root: str | Path = ".") -> Path:
@@ -108,7 +114,7 @@ def helm_values_model(
     config: SFTPWardenConfig, project_root: str | Path | None = None
 ) -> dict[str, Any]:
     """Return starter Helm values derived from a project config."""
-    repository, tag = split_image(runtime_image_reference(config).image)
+    repository, tag = split_image(runtime_image_reference(config, allow_local_build=False).image)
     runtime_config = kubernetes_runtime_config(config)
     values: dict[str, Any] = {
         "image": {
@@ -145,7 +151,7 @@ def helm_values_model(
             "liveness": _helm_probe_values(config.kubernetes.liveness_probe),
         },
         "hostKeys": {
-            "secretName": host_keys_secret_name(config.kubernetes.release),
+            "secretName": config.kubernetes.host_keys_secret or "",
             "mountPath": HOST_KEY_SECRET_MOUNT,
         },
         "resources": {},
@@ -182,6 +188,7 @@ def split_image(image: str) -> tuple[str, str | None]:
 
 
 def _helm_probe_values(probe: KubernetesProbeConfig) -> dict[str, int]:
+    """Serialize probe timing settings for Helm values."""
     return {
         "periodSeconds": probe.period_seconds,
         "timeoutSeconds": probe.timeout_seconds,
@@ -196,10 +203,13 @@ def host_keys_secret_name(release: str) -> str:
 
 def provider_dsn_secret_name(config: SFTPWardenConfig) -> str:
     """Return the provider DSN Secret name for a config."""
-    return f"{kubernetes_resource_name(config.kubernetes.release)}-provider"
+    return config.kubernetes.provider_dsn_secret or (
+        f"{kubernetes_resource_name(config.kubernetes.release)}-provider"
+    )
 
 
 def _metadata(name: str, namespace: str, labels: dict[str, str]) -> dict[str, Any]:
+    """Build shared Kubernetes object metadata."""
     return {"name": name, "namespace": namespace, "labels": labels}
 
 
@@ -210,6 +220,7 @@ def _config_map(
     labels: dict[str, str],
     project_root: str | Path | None,
 ) -> dict[str, Any]:
+    """Build the runtime configuration ConfigMap."""
     data = {"sftpwarden.yaml": kubernetes_config_text(config)}
     if _provider_syncs_from_config_map(config):
         data[_provider_runtime_filename(config)] = _provider_bootstrap_text(config, project_root)
@@ -221,31 +232,10 @@ def _config_map(
     }
 
 
-def _host_keys_secret(name: str, namespace: str, labels: dict[str, str]) -> dict[str, Any]:
-    return {
-        "apiVersion": "v1",
-        "kind": "Secret",
-        "metadata": _metadata(f"{name}-host-keys", namespace, labels),
-        "type": "Opaque",
-        "stringData": {},
-    }
-
-
-def _provider_dsn_secret(
-    config: SFTPWardenConfig, name: str, namespace: str, labels: dict[str, str]
-) -> dict[str, Any]:
-    return {
-        "apiVersion": "v1",
-        "kind": "Secret",
-        "metadata": _metadata(f"{name}-provider", namespace, labels),
-        "type": "Opaque",
-        "stringData": {PROVIDER_DSN_ENV: config.provider.dsn or ""},
-    }
-
-
 def _persistent_volume_claims(
     config: SFTPWardenConfig, name: str, namespace: str, labels: dict[str, str]
 ) -> list[dict[str, Any]]:
+    """Build all persistent volume claims required by the runtime."""
     claims = [
         _pvc(
             f"{name}-data",
@@ -260,6 +250,10 @@ def _persistent_volume_claims(
         claims.append(
             _pvc(f"{name}-provider", namespace, labels, config.kubernetes.storage_class, "1Gi")
         )
+    if not config.kubernetes.host_keys_secret:
+        claims.append(
+            _pvc(f"{name}-host-keys", namespace, labels, config.kubernetes.storage_class, "1Gi")
+        )
     return claims
 
 
@@ -270,6 +264,7 @@ def _pvc(
     storage_class: str | None,
     size: str,
 ) -> dict[str, Any]:
+    """Build one Kubernetes persistent volume claim."""
     spec: dict[str, Any] = {
         "accessModes": ["ReadWriteOnce"],
         "resources": {"requests": {"storage": size}},
@@ -279,14 +274,23 @@ def _pvc(
     return {
         "apiVersion": "v1",
         "kind": "PersistentVolumeClaim",
-        "metadata": _metadata(name, namespace, labels),
+        "metadata": {
+            **_metadata(name, namespace, labels),
+            "annotations": {"helm.sh/resource-policy": "keep"},
+        },
         "spec": spec,
     }
 
 
 def _service(
-    kubernetes: KubernetesConfig, name: str, namespace: str, labels: dict[str, str]
+    kubernetes: KubernetesConfig,
+    name: str,
+    namespace: str,
+    labels: dict[str, str],
+    *,
+    port: int,
 ) -> dict[str, Any]:
+    """Build the Kubernetes Service exposing SFTP."""
     return {
         "apiVersion": "v1",
         "kind": "Service",
@@ -294,14 +298,17 @@ def _service(
         "spec": {
             "type": kubernetes.service_type.value,
             "selector": labels,
-            "ports": [{"name": "sftp", "port": 22, "targetPort": "sftp"}],
+            "ports": [{"name": "sftp", "port": port, "targetPort": "sftp"}],
         },
     }
 
 
-def _kubernetes_probe(health_probe: dict[str, Any], probe: KubernetesProbeConfig) -> dict[str, Any]:
+def _kubernetes_probe(
+    health_probe: dict[str, Any], probe: KubernetesProbeConfig, *, kind: str = "readiness"
+) -> dict[str, Any]:
+    """Combine a probe action with configured timing thresholds."""
     return {
-        **health_probe,
+        "exec": {"command": [*health_probe["exec"]["command"], "--probe", kind]},
         "failureThreshold": probe.failure_threshold,
         "periodSeconds": probe.period_seconds,
         "timeoutSeconds": probe.timeout_seconds,
@@ -313,16 +320,20 @@ def _stateful_set(
     name: str,
     namespace: str,
     labels: dict[str, str],
-    project_root: str | Path | None,
+    config_data: dict[str, str],
 ) -> dict[str, Any]:
+    """Build the complete SFTPWarden runtime StatefulSet."""
     volumes = [
         {"name": "config", "configMap": {"name": f"{name}-config"}},
         {"name": "data", "persistentVolumeClaim": {"claimName": f"{name}-data"}},
         {"name": "state", "persistentVolumeClaim": {"claimName": f"{name}-state"}},
-        {"name": "host-keys", "emptyDir": {}},
         {
-            "name": "host-key-secret",
-            "secret": {"secretName": f"{name}-host-keys", "optional": True},
+            "name": "host-keys",
+            **(
+                {"emptyDir": {}}
+                if config.kubernetes.host_keys_secret
+                else {"persistentVolumeClaim": {"claimName": f"{name}-host-keys"}}
+            ),
         },
     ]
     volume_mounts = [
@@ -335,7 +346,6 @@ def _stateful_set(
         {"name": "data", "mountPath": config.server.data_dir},
         {"name": "state", "mountPath": config.server.state_dir},
         {"name": "host-keys", "mountPath": config.server.host_keys_dir},
-        {"name": "host-key-secret", "mountPath": HOST_KEY_SECRET_MOUNT, "readOnly": True},
     ]
     if config.provider.type in FILE_PROVIDER_TYPES:
         volumes.append(
@@ -344,22 +354,38 @@ def _stateful_set(
         volume_mounts.append({"name": "provider", "mountPath": PROVIDER_MOUNT})
     init_volume_mounts = [
         {"name": "host-keys", "mountPath": "/host-keys"},
-        {
-            "name": "host-key-secret",
-            "mountPath": "/host-key-secret",
-            "readOnly": True,
-        },
+        {"name": "state", "mountPath": "/previous-state", "readOnly": True},
     ]
-    init_command = "cp /host-key-secret/* /host-keys/ 2>/dev/null || true; chmod 700 /host-keys"
-    provider_bootstrap = _provider_bootstrap_command(config, project_root)
+    init_command = (
+        "python -m sftpwarden.runtime.host_keys --directory /host-keys --state /previous-state"
+    )
+    if config.kubernetes.host_keys_secret:
+        volumes.append(
+            {
+                "name": "host-key-secret",
+                "secret": {
+                    "secretName": config.kubernetes.host_keys_secret,
+                    "defaultMode": 0o600,
+                },
+            }
+        )
+        init_volume_mounts.append(
+            {
+                "name": "host-key-secret",
+                "mountPath": "/host-key-secret",
+                "readOnly": True,
+            }
+        )
+        init_command += " --secret /host-key-secret"
+    provider_bootstrap = _provider_bootstrap_command(config)
     if provider_bootstrap:
         init_volume_mounts.append({"name": "provider", "mountPath": PROVIDER_MOUNT})
-        if _provider_syncs_from_config_map(config):
-            init_volume_mounts.append(
-                {"name": "config", "mountPath": CONFIG_MAP_MOUNT, "readOnly": True}
-            )
+        init_volume_mounts.append(
+            {"name": "config", "mountPath": CONFIG_MAP_MOUNT, "readOnly": True}
+        )
         init_command = f"{init_command}; {provider_bootstrap}"
-    image = runtime_image_reference(config).image
+    init_command = "set -eu; " + init_command
+    image = runtime_image_reference(config, allow_local_build=False).image
     env: list[dict[str, Any]] = [{"name": "SFTPWARDEN_CONFIG", "value": CONTAINER_CONFIG_PATH}]
     if config.provider.type in EXTERNAL_DSN_PROVIDER_TYPES and config.provider.dsn:
         env.append(
@@ -367,7 +393,7 @@ def _stateful_set(
                 "name": PROVIDER_DSN_ENV,
                 "valueFrom": {
                     "secretKeyRef": {
-                        "name": f"{name}-provider",
+                        "name": provider_dsn_secret_name(config),
                         "key": PROVIDER_DSN_ENV,
                     }
                 },
@@ -391,10 +417,23 @@ def _stateful_set(
         "spec": {
             "serviceName": name,
             "replicas": config.kubernetes.replicas,
+            "updateStrategy": {"type": "OnDelete", "rollingUpdate": None},
             "selector": {"matchLabels": labels},
             "template": {
-                "metadata": {"labels": labels},
+                "metadata": {
+                    "labels": labels,
+                    "annotations": {
+                        "sftpwarden.io/config-revision": hashlib.sha256(
+                            json.dumps(
+                                config_data,
+                                sort_keys=True,
+                            ).encode()
+                        ).hexdigest(),
+                        "sftpwarden.io/activation": "explicit-identity-preflight-required",
+                    },
+                },
                 "spec": {
+                    "automountServiceAccountToken": False,
                     "initContainers": [
                         {
                             "name": "host-key-bootstrap",
@@ -416,13 +455,13 @@ def _stateful_set(
                             "env": env,
                             "volumeMounts": volume_mounts,
                             "startupProbe": _kubernetes_probe(
-                                health_probe, config.kubernetes.startup_probe
+                                health_probe, config.kubernetes.startup_probe, kind="startup"
                             ),
                             "readinessProbe": _kubernetes_probe(
                                 health_probe, config.kubernetes.readiness_probe
                             ),
                             "livenessProbe": _kubernetes_probe(
-                                health_probe, config.kubernetes.liveness_probe
+                                health_probe, config.kubernetes.liveness_probe, kind="liveness"
                             ),
                             "securityContext": {
                                 "privileged": False,
@@ -451,43 +490,64 @@ def _stateful_set(
 def _provider_bootstrap_text(
     config: SFTPWardenConfig, project_root: str | Path | None = None
 ) -> str:
+    """Return validated initial content for a file provider."""
     if config.provider.type not in FILE_PROVIDER_TYPES:
         return ""
     if config.provider.type in TEXT_SYNC_PROVIDER_TYPES and project_root is not None:
         provider_path = provider_local_path(project_root, config)
-        if provider_path.exists():
-            provider_from_config(project_root, config).read()
-            return provider_path.read_text(encoding="utf-8")
+        root = expand_path(project_root)
+        try:
+            check_managed_path(root, provider_path.relative_to(root).as_posix())
+            before = provider_path.lstat()
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+                raise ValueError
+            with provider_path.open("rb") as source:
+                content = source.read(MAX_METADATA_BYTES + 1)
+            after = provider_path.lstat()
+            if (
+                len(content) > MAX_METADATA_BYTES
+                or len(content) != before.st_size
+                or (before.st_dev, before.st_ino, before.st_mtime_ns, before.st_size)
+                != (after.st_dev, after.st_ino, after.st_mtime_ns, after.st_size)
+            ):
+                raise ValueError
+            text = content.decode("utf-8")
+        except (OSError, ValueError):
+            raise ProviderError(
+                "Local bootstrap provider is missing, unreadable or changing; no "
+                "empty policy was rendered."
+            ) from None
+        users = parse_provider_document(
+            text, "csv" if config.provider.type == ProviderType.CSV else "yaml"
+        )
+        if users.schema_version != config.provider.user_schema:
+            raise ProviderError(
+                "Bootstrap provider schema does not match the deployment configuration."
+            )
+        return text
     return empty_provider_text(config.provider.type, user_schema=config.provider.user_schema)
 
 
-def _provider_bootstrap_command(
-    config: SFTPWardenConfig, project_root: str | Path | None
-) -> str | None:
+def _provider_bootstrap_command(config: SFTPWardenConfig) -> str | None:
+    """Validate storage through the same Linux bootstrap used by the Helm chart."""
     if config.provider.type not in FILE_PROVIDER_TYPES:
         return None
-    provider_path = kubernetes_runtime_config(config).provider.path
-    bootstrap_text = _provider_bootstrap_text(config, project_root)
-    quoted_path = shlex.quote(provider_path)
-    quoted_dir = shlex.quote(str(Path(provider_path).parent))
-    if _provider_syncs_from_config_map(config):
-        source = f"{CONFIG_MAP_MOUNT}/{_provider_runtime_filename(config)}"
-        return (
-            f"mkdir -p {quoted_dir}; "
-            f"cp {shlex.quote(source)} {quoted_path}; "
-            f"chmod 600 {quoted_path}"
-        )
-    quoted_text = shlex.quote(bootstrap_text)
-    return (
-        f"mkdir -p {quoted_dir}; "
-        f"test -f {quoted_path} || printf %s {quoted_text} > {quoted_path}; "
-        f"chmod 600 {quoted_path}"
+    return shlex.join(
+        [
+            "python",
+            "-m",
+            "sftpwarden.runtime.bootstrap_provider",
+            "--config",
+            f"{CONFIG_MAP_MOUNT}/sftpwarden.yaml",
+        ]
     )
 
 
 def _provider_syncs_from_config_map(config: SFTPWardenConfig) -> bool:
+    """Return whether the provider content is synced through a ConfigMap."""
     return config.provider.type in TEXT_SYNC_PROVIDER_TYPES
 
 
 def _provider_runtime_filename(config: SFTPWardenConfig) -> str:
+    """Return the provider filename used inside the runtime container."""
     return Path(kubernetes_runtime_config(config).provider.path).name

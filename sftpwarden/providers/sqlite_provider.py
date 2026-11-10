@@ -7,6 +7,7 @@ from typing import Any
 
 from sftpwarden.config import ProviderType
 from sftpwarden.providers.base import FileProvider
+from sftpwarden.providers.mutations import prepare_user_mutation, require_unchanged_snapshot
 from sftpwarden.providers.registry import register_provider
 from sftpwarden.providers.sql import (
     DEFAULT_SQL_USERS_TABLE,
@@ -55,24 +56,31 @@ class SQLiteProvider(FileProvider):
         path = self.ensure_exists()
         validate_sql_table(self.config.table)
         with closing(self._connect(path)) as connection:
-            ensure_sqlite_schema(
-                connection,
-                self.config.table,
-                schema_version=self.config.user_schema,
-            )
-            rows = connection.execute(sql_select_users_query(self.config.table)).fetchall()
-            key_rows = None
-            if schema_uses_key_table(self.config.user_schema):
-                key_rows = connection.execute(
-                    sql_select_user_keys_query(self.config.table)
-                ).fetchall()
-            return users_from_sql_rows(
-                [dict(row) for row in rows],
-                key_rows=[dict(row) for row in key_rows] if key_rows is not None else None,
-                schema_version=self.config.user_schema,
-            )
+            try:
+                # One read snapshot for users and keys; no read-time migrations.
+                connection.execute("begin")
+                return self._read_users(connection, self.config.user_schema)
+            except sqlite3.DatabaseError as exc:
+                raise ProviderError(
+                    "Cannot read SQLite provider schema.",
+                    suggestion=(
+                        "Check the configured user_schema and explicitly initialize or migrate "
+                        "storage before refreshing."
+                    ),
+                ) from exc
 
-    def write(self, users: ProviderUsers) -> None:
+    def _read_users(self, connection: sqlite3.Connection, schema_version: int) -> ProviderUsers:
+        rows = connection.execute(sql_select_users_query(self.config.table)).fetchall()
+        keys = None
+        if schema_uses_key_table(schema_version):
+            keys = connection.execute(sql_select_user_keys_query(self.config.table)).fetchall()
+        return users_from_sql_rows(
+            [dict(row) for row in rows],
+            key_rows=[dict(row) for row in keys] if keys is not None else None,
+            schema_version=schema_version,
+        )
+
+    def _write(self, users: ProviderUsers) -> None:
         """Replace SQLite users with a desired user set.
 
         Parameters
@@ -83,18 +91,77 @@ class SQLiteProvider(FileProvider):
         path = self.ensure_parent_dir()
         validate_sql_table(self.config.table)
         with closing(self._connect(path, write=True)) as connection:
-            ensure_sqlite_schema(connection, self.config.table, schema_version=users.schema_version)
-            upsert_sqlite_users(
-                connection,
-                self.config.table,
-                users,
-                schema_version=users.schema_version,
-            )
-            delete_missing_sqlite_users(connection, self.config.table, users)
+            self._replace_users(connection, users)
             connection.commit()
         chmod_private(path)
 
-    def upsert_user(self, user: SFTPUser) -> None:
+    def _replace_users(self, connection: sqlite3.Connection, users: ProviderUsers) -> None:
+        ensure_sqlite_schema(connection, self.config.table, schema_version=users.schema_version)
+        upsert_sqlite_users(
+            connection, self.config.table, users, schema_version=users.schema_version
+        )
+        delete_missing_sqlite_users(connection, self.config.table, users)
+        if schema_uses_key_table(users.schema_version):
+            key_table = sql_user_keys_table(self.config.table)
+            connection.execute(
+                f"delete from {key_table} where username not in "  # noqa: S608
+                f"(select username from {self.config.table})"
+            )
+
+    def mutate_user(
+        self,
+        expected: ProviderUsers,
+        username: str,
+        replacement: SFTPUser | None,
+        *,
+        migrate_schema: bool = False,
+    ) -> None:
+        """Hold the SQLite write transaction across comparison and the user/key edit."""
+        with (
+            self.writer_lock(),
+            closing(self._connect(self.ensure_exists(), write=True)) as connection,
+        ):
+            connection.execute("begin immediate")
+            source_schema = self.config.user_schema if migrate_schema else expected.schema_version
+            current = self._read_users(connection, source_schema)
+            merged, migrated = prepare_user_mutation(
+                current, expected, username, replacement, migrate_schema=migrate_schema
+            )
+            if migrated:
+                self._replace_users(connection, merged)
+            elif replacement is None:
+                connection.execute(
+                    f"delete from {self.config.table} where username = ?",  # noqa: S608
+                    (username,),
+                )
+                if schema_uses_key_table(current.schema_version):
+                    connection.execute(
+                        f"delete from {sql_user_keys_table(self.config.table)} where username = ?",  # noqa: S608
+                        (username,),
+                    )
+            else:
+                upsert_sqlite_users(
+                    connection,
+                    self.config.table,
+                    ProviderUsers(schema_version=current.schema_version, users=[replacement]),
+                    schema_version=current.schema_version,
+                )
+            connection.commit()
+
+    def replace_if_unchanged(self, expected: ProviderUsers, replacement: ProviderUsers) -> None:
+        """Atomically compare and replace an import or schema migration snapshot."""
+        with (
+            self.writer_lock(),
+            closing(self._connect(self.ensure_exists(), write=True)) as connection,
+        ):
+            connection.execute("begin immediate")
+            require_unchanged_snapshot(
+                self._read_users(connection, expected.schema_version), expected
+            )
+            self._replace_users(connection, replacement)
+            connection.commit()
+
+    def _upsert_user(self, user: SFTPUser) -> None:
         """Create or update one SQLite user row.
 
         Parameters
@@ -119,7 +186,7 @@ class SQLiteProvider(FileProvider):
             connection.commit()
         chmod_private(path)
 
-    def remove_user(self, username: str) -> None:
+    def _remove_user(self, username: str) -> None:
         """Remove one SQLite user row.
 
         Parameters
@@ -181,19 +248,15 @@ class SQLiteProvider(FileProvider):
 
     def create_table(self) -> None:
         """Create the configured SQLite users table."""
-        path = self.ensure_parent_dir()
-        validate_sql_table(self.config.table)
-        with closing(self._connect(path, write=True)) as connection:
-            ensure_sqlite_schema(
-                connection,
-                self.config.table,
-                schema_version=self.config.user_schema,
-            )
-            connection.commit()
-        chmod_private(path)
+        self.ensure_schema_storage(self.config.user_schema)
 
     def ensure_schema_storage(self, schema_version: int) -> None:
-        """Ensure tables required by a user schema exist."""
+        """Serialize explicit initialization/migration with provider mutations."""
+        with self.writer_lock():
+            self._ensure_schema_storage(schema_version)
+
+    def _ensure_schema_storage(self, schema_version: int) -> None:
+        """Ensure tables required by a user schema exist while holding the writer lock."""
         path = self.ensure_parent_dir()
         validate_sql_table(self.config.table)
         with closing(self._connect(path, write=True)) as connection:
@@ -202,7 +265,12 @@ class SQLiteProvider(FileProvider):
         chmod_private(path)
 
     def _connect(self, path: Path, *, write: bool = False) -> sqlite3.Connection:
-        connection = sqlite3.connect(path)
+        """Open a configured SQLite connection with safe runtime pragmas."""
+        connection = (
+            sqlite3.connect(path)
+            if write
+            else sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)
+        )
         connection.row_factory = sqlite3.Row
         connection.execute("pragma busy_timeout = 5000")
         if write:
@@ -290,7 +358,10 @@ def replace_sqlite_user_keys(
 ) -> None:
     """Replace schema v2 SQLite key rows for a desired user set."""
     key_table = sql_user_keys_table(table)
-    connection.execute(f"delete from {key_table}")  # noqa: S608
+    connection.executemany(
+        f"delete from {key_table} where username = ?",  # noqa: S608
+        [(user.username,) for user in users.users],
+    )
     key_rows = [
         sqlite_user_key_row(user.username, key)
         for user in users.users

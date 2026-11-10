@@ -61,18 +61,22 @@ class LaunchdWatcher(BaseWatcher):
 
     @classmethod
     def is_supported(cls) -> bool:
+        """Return whether launchd is available on the current host."""
         return system_is("Darwin") and shutil.which("launchctl") is not None
 
     @classmethod
     def path(cls) -> Path:
+        """Return the generated launchd property-list path."""
         return launchd_plist_path()
 
     @classmethod
     def render(cls, *, image: str | None = None) -> str:
+        """Render the launchd watcher property list."""
         return render_launchd_plist()
 
     @classmethod
     def commands(cls, *, image: str | None = None) -> list[list[str]]:
+        """Return commands that install and load the launchd watcher."""
         target = launchd_target_path()
         return [
             ["mkdir", "-p", str(Path(target).parent)],
@@ -82,6 +86,7 @@ class LaunchdWatcher(BaseWatcher):
 
     @classmethod
     def uninstall_commands(cls, *, path: Path | None = None) -> list[list[str]]:
+        """Return commands that unload and remove the launchd watcher."""
         target = launchd_target_path()
         return [
             ["launchctl", "unload", "-w", target],

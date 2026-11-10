@@ -1,3 +1,5 @@
+"""CLI prompts and presentation around user refresh and watcher services."""
+
 from __future__ import annotations
 
 from rich.prompt import Confirm
@@ -52,6 +54,7 @@ def print_refresh_after_user_change(entry: ContextEntry) -> None:
 
 
 def _kubernetes_config(entry: ContextEntry) -> SFTPWardenConfig | None:
+    """Return project config only for Kubernetes deployment contexts."""
     if not entry.config:
         return None
     config = load_config(entry.config)

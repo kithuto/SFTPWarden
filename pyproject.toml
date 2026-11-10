@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sftpwarden"
-version = "1.3.0"
-description = "Container-native SFTP gateway with OpenSSH, chroot isolation, and declarative user provisioning."
+version = "1.4.0"
+description = "Container-native SFTP gateway with OpenSSH, chroot isolation and declarative user provisioning."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -25,6 +25,7 @@ classifiers = [
   "Topic :: System :: Systems Administration",
 ]
 dependencies = [
+  "packaging>=24.2",
   "passlib",
   "pydantic",
   "pyyaml",
@@ -36,10 +37,14 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "build",
+  "mypy>=1.15",
   "pytest>=9.0.3",
   "pytest-cov",
   "ruff",
   "tox",
+  "types-passlib",
+  "types-PyMySQL",
+  "types-PyYAML",
 ]
 docs = [
   "myst-parser",
@@ -47,13 +52,13 @@ docs = [
   "sphinx-rtd-theme",
 ]
 mysql = [
-  "pymysql",
+  "pymysql>=1.2.0",
 ]
 mariadb = [
-  "pymysql",
+  "pymysql>=1.2.0",
 ]
 mongodb = [
-  "pymongo",
+  "pymongo>=4.2",
 ]
 postgres = [
   "psycopg[binary]",
@@ -61,7 +66,7 @@ postgres = [
 
 [project.urls]
 Homepage = "https://github.com/kithuto/sftpwarden"
-Documentation = "https://kithuto.github.io/sftpwarden/"
+Documentation = "http://sftpwarden.espacionacho.com/"
 Issues = "https://github.com/kithuto/sftpwarden/issues"
 
 [project.scripts]
@@ -79,7 +84,7 @@ source = ["sftpwarden"]
 
 [tool.coverage.report]
 show_missing = true
-fail_under = 90
+fail_under = 95
 
 [tool.ruff]
 line-length = 100
@@ -87,8 +92,10 @@ target-version = "py311"
 exclude = ["old"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "S", "SIM"]
+select = ["E", "F", "I", "B", "UP", "S", "SIM", "D"]
 ignore = [
+  "D100",
+  "D104",
   "S101",
   "S104",
   "S105",
@@ -96,6 +103,20 @@ ignore = [
   "S607",
 ]
 
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.per-file-ignores]
+"docs/conf.py" = ["D"]
+"tests/**/*.py" = ["D"]
+
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.mypy]
+python_version = "3.11"
+files = ["sftpwarden"]
+strict = true
+pretty = true
+show_error_codes = true

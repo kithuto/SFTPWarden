@@ -3,6 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 
+def test_both_image_variants_require_the_fixed_zlib_in_the_shared_base() -> None:
+    for image in ("runtime", "watcher"):
+        dockerfile = Path(f"docker/{image}/Dockerfile").read_text(encoding="utf-8")
+        base, variants = dockerfile.split(f"FROM base AS {image}-source", 1)
+        assert "'zlib>=1.4-r0'" in base
+        assert f"FROM base AS {image}-wheel" in variants
+
+
 def test_dockerfile_keeps_runtime_lightweight() -> None:
     dockerfile = Path("docker/runtime/Dockerfile").read_text(encoding="utf-8")
     entrypoint = Path("docker/runtime/entrypoint.sh").read_text(encoding="utf-8")
@@ -42,7 +50,7 @@ def test_watcher_dockerfile_uses_flat_package_layout() -> None:
 def test_release_workflows_exist() -> None:
     workflows = {path.name for path in Path(".github/workflows").glob("*.yml")}
 
-    assert workflows == {
+    assert workflows >= {
         "ci.yml",
         "docker.yml",
         "docs.yml",

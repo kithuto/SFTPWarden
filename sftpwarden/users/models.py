@@ -8,32 +8,12 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from sftpwarden.users.public_keys import PUBLIC_KEY_PREFIXES as PUBLIC_KEY_PREFIXES
+from sftpwarden.users.public_keys import normalize_public_key as normalize_public_key
 from sftpwarden.utils.validation import validate_relative_safe_path
 
 USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 KEY_NAME_RE = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
-PUBLIC_KEY_PREFIXES = (
-    "ecdsa-sha2-nistp256 ",
-    "ecdsa-sha2-nistp384 ",
-    "ecdsa-sha2-nistp521 ",
-    "sk-ecdsa-sha2-nistp256@openssh.com ",
-    "sk-ssh-ed25519@openssh.com ",
-    "ssh-ed25519 ",
-    "ssh-rsa ",
-)
-
-
-def normalize_public_key(value: str) -> str:
-    """Validate and normalize an SSH public key string."""
-    stripped = value.strip()
-    if not stripped.startswith(PUBLIC_KEY_PREFIXES):
-        raise ValueError("Unsupported or invalid SSH public key.")
-    parts = stripped.split()
-    try:
-        base64.b64decode(parts[1].encode("ascii"), validate=True)
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError("Unsupported or invalid SSH public key.") from exc
-    return stripped
 
 
 def public_key_fingerprint(public_key: str) -> str:
@@ -199,7 +179,7 @@ class SFTPUser(BaseModel):
 
     @model_validator(mode="after")
     def ensure_auth_present(self) -> SFTPUser:
-        """Ensure the user has at least one usable authentication method.
+        """Validate credentials, including an intentional deny-only policy.
 
         Returns
         -------
@@ -209,13 +189,12 @@ class SFTPUser(BaseModel):
         if self.keys and not self.public_keys:
             self.public_keys = [key.public_key for key in self.keys]
         self._validate_unique_keys()
-        if not self.public_keys and not self.keys and not self.password_hash:
-            raise ValueError("User requires at least one public key or a password_hash.")
         if self.password_hash and not self.password_hash.startswith(("$y$", "$6$", "!", "*")):
             raise ValueError("password_hash must be a system password hash, never plaintext.")
         return self
 
     def _validate_unique_keys(self) -> None:
+        """Reject duplicate key names and fingerprints."""
         names = [key.name for key in self.keys]
         if len(names) != len(set(names)):
             raise ValueError("User contains duplicate key names.")

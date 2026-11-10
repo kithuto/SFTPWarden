@@ -1,0 +1,5 @@
+# newusers writes new shadow entries locked. Keep its PAM password stage a no-op:
+# reconciliation sets encrypted credentials with chpasswd only after isolation
+# and group membership are ready. This policy applies only to the root-only
+# provisioning tool; it is not an SSH authentication policy.
+password required pam_permit.so

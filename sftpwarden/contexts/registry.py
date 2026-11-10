@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import re
 import tomllib
-from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -15,6 +14,8 @@ from sftpwarden.config import ProviderType, RemoteStorage, load_config
 from sftpwarden.utils.constants import CONFIG_FILENAME, DEFAULT_SSH_PORT, PRODUCTION_NAMES
 from sftpwarden.utils.errors import ContextError
 from sftpwarden.utils.paths import contexts_path, expand_path
+from sftpwarden.utils.persistence import atomic_bytes
+from sftpwarden.utils.state_transactions import serialized_state, state_transaction
 
 
 class ContextType(StrEnum):
@@ -172,6 +173,9 @@ def load_registry(path: Path | None = None) -> ContextRegistry:
 def save_registry(registry: ContextRegistry, path: Path | None = None) -> None:
     """Persist the context registry.
 
+    This is a full replacement. Read-modify-write callers must hold
+    ``state_transaction`` from before loading through this save.
+
     Parameters
     ----------
     registry
@@ -180,22 +184,22 @@ def save_registry(registry: ContextRegistry, path: Path | None = None) -> None:
         Optional registry path.
     """
     registry_path = path or contexts_path()
-    registry_path.parent.mkdir(parents=True, exist_ok=True)
-    registry_path.write_text(
-        tomli_w.dumps(registry.model_dump(mode="json", exclude_none=True)),
-        encoding="utf-8",
-    )
-    with suppress(OSError):
-        os.chmod(registry_path, 0o600)
+    with state_transaction(registry_path):
+        atomic_bytes(
+            registry_path,
+            tomli_w.dumps(registry.model_dump(mode="json", exclude_none=True)).encode("utf-8"),
+        )
 
 
-def has_initialized_context(*, cwd: Path | None = None) -> bool:
+def has_initialized_context(*, cwd: Path | None = None, read_only: bool = False) -> bool:
     """Return whether at least one context or local project exists.
 
     Parameters
     ----------
     cwd
         Optional working directory used to detect an initialized local project.
+    read_only
+        Inspect the registry without pruning entries or acquiring a writer lock.
 
     Returns
     -------
@@ -203,27 +207,29 @@ def has_initialized_context(*, cwd: Path | None = None) -> bool:
         ``True`` when the registry has contexts or the working directory contains
         ``sftpwarden.yaml``.
     """
-    registry = _registry_after_pruning_missing_contexts()
+    registry = load_registry() if read_only else _registry_after_pruning_missing_contexts()
     if registry.contexts:
         return True
     working_dir = cwd or Path.cwd()
     return (working_dir / CONFIG_FILENAME).exists()
 
 
-def require_initialized_context(*, cwd: Path | None = None) -> None:
+def require_initialized_context(*, cwd: Path | None = None, read_only: bool = False) -> None:
     """Require that SFTPWarden has been initialized at least once.
 
     Parameters
     ----------
     cwd
         Optional working directory used to detect an initialized local project.
+    read_only
+        Inspect initialization without mutating the registry.
 
     Raises
     ------
     ContextError
         Raised when no context registry entry or local project config exists.
     """
-    if has_initialized_context(cwd=cwd):
+    if has_initialized_context(cwd=cwd, read_only=read_only):
         return
     raise ContextError(
         "No SFTPWarden context has been initialized.",
@@ -231,6 +237,7 @@ def require_initialized_context(*, cwd: Path | None = None) -> None:
     )
 
 
+@serialized_state(contexts_path)
 def register_context(entry: ContextEntry) -> ContextRegistry:
     """Register or replace a context.
 
@@ -252,6 +259,7 @@ def register_context(entry: ContextEntry) -> ContextRegistry:
     return registry
 
 
+@serialized_state(contexts_path)
 def remove_context(name: str) -> ContextRegistry:
     """Remove a registered context.
 
@@ -275,6 +283,7 @@ def remove_context(name: str) -> ContextRegistry:
     return registry
 
 
+@serialized_state(contexts_path)
 def set_default_context(name: str) -> ContextRegistry:
     """Set the default context.
 
@@ -296,7 +305,9 @@ def set_default_context(name: str) -> ContextRegistry:
     return registry
 
 
-def reconcile_registered_context(registry: ContextRegistry, name: str) -> ContextEntry:
+def reconcile_registered_context(
+    registry: ContextRegistry, name: str, *, persist: bool = True
+) -> ContextEntry:
     """Sync registry metadata from the local project config when available.
 
     Parameters
@@ -317,7 +328,18 @@ def reconcile_registered_context(registry: ContextRegistry, name: str) -> Contex
         Raised when a manually changed project name conflicts with another
         registered context.
     """
-    entry = reconcile_registered_paths(registry, name)
+    if persist:
+        with state_transaction(contexts_path()):
+            current = load_registry()
+            before = current.model_copy(deep=True)
+            if name not in current.contexts:
+                raise ContextError(f"Unknown context: {name}")
+            updated = reconcile_registered_context(current, name, persist=False)
+            if current != before:
+                save_registry(current)
+            registry.contexts, registry.default = current.contexts, current.default
+            return updated
+    entry = reconcile_registered_paths(registry, name, persist=False)
     if not entry.config:
         return entry
 
@@ -345,11 +367,12 @@ def reconcile_registered_context(registry: ContextRegistry, name: str) -> Contex
             registry.default = updated.name
     else:
         registry.contexts[name] = updated
-    save_registry(registry)
     return updated
 
 
-def reconcile_registered_paths(registry: ContextRegistry, name: str) -> ContextEntry:
+def reconcile_registered_paths(
+    registry: ContextRegistry, name: str, *, persist: bool = True
+) -> ContextEntry:
     """Detect and reconcile safe root/config path changes.
 
     Parameters
@@ -369,6 +392,17 @@ def reconcile_registered_paths(registry: ContextRegistry, name: str) -> ContextE
     ContextError
         Raised when a manual root edit needs an explicit migration command.
     """
+    if persist:
+        with state_transaction(contexts_path()):
+            current = load_registry()
+            before = current.model_copy(deep=True)
+            if name not in current.contexts:
+                raise ContextError(f"Unknown context: {name}")
+            updated = reconcile_registered_paths(current, name, persist=False)
+            if current != before:
+                save_registry(current)
+            registry.contexts, registry.default = current.contexts, current.default
+            return updated
     entry = registry.contexts[name]
     if not entry.root or not entry.config:
         return entry
@@ -382,7 +416,6 @@ def reconcile_registered_paths(registry: ContextRegistry, name: str) -> ContextE
     if expected_config.exists():
         updated = entry.model_copy(update={"config": str(expected_config)})
         registry.contexts[name] = updated
-        save_registry(registry)
         return updated
 
     if config_path.exists():
@@ -402,6 +435,7 @@ def resolve_context(
     context_name: str | None = None,
     cwd: Path | None = None,
     reconcile_config: bool = False,
+    read_only: bool = False,
 ) -> ContextEntry:
     """Resolve the active context.
 
@@ -438,11 +472,11 @@ def resolve_context(
             provider=config.provider.type,
         )
     requested = context_name or os.environ.get("SFTPWARDEN_CONTEXT")
-    registry = _registry_after_pruning_missing_contexts()
+    registry = load_registry() if read_only else _registry_after_pruning_missing_contexts()
     if requested:
         try:
             if reconcile_config:
-                return reconcile_registered_context(registry, requested)
+                return reconcile_registered_context(registry, requested, persist=not read_only)
             return registry.contexts[requested]
         except KeyError as exc:
             raise ContextError(
@@ -450,7 +484,7 @@ def resolve_context(
             ) from exc
     if registry.default and registry.default in registry.contexts:
         if reconcile_config:
-            return reconcile_registered_context(registry, registry.default)
+            return reconcile_registered_context(registry, registry.default, persist=not read_only)
         return registry.contexts[registry.default]
     local_config = working_dir / CONFIG_FILENAME
     if local_config.exists():
@@ -470,6 +504,7 @@ def resolve_context(
 
 
 def _registry_after_pruning_missing_contexts() -> ContextRegistry:
+    """Load the registry after pruning contexts with missing roots."""
     from sftpwarden.services.context_cleanup import prune_missing_contexts
 
     return prune_missing_contexts().registry

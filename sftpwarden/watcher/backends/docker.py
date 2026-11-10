@@ -214,11 +214,20 @@ def render_docker_watcher_compose(*, image: str | None = None) -> str:
         ),
         *docker_watcher_project_volumes(),
         *docker_watcher_ssh_volumes(),
+        docker_bind_mount(
+            app_home() / "watcher" / "checkpoints",
+            f"{CONTAINER_WATCHER_HOME}/watcher/checkpoints",
+            read_only=False,
+        ),
     ]
     image_reference = watcher_image_reference(image)
     service = {
         "image": image_reference.image,
-        "environment": {"SFTPWARDEN_HOME": CONTAINER_WATCHER_HOME},
+        "environment": {
+            "SFTPWARDEN_HOME": CONTAINER_WATCHER_HOME,
+            "TMPDIR": CONTAINER_SSH_TMPFS,
+            "SFTPWARDEN_SHARED_CHECKPOINTS": "1",
+        },
         "volumes": unique_mounts(volumes),
         "tmpfs": [CONTAINER_SSH_TMPFS, "/root/.ssh"],
         "restart": "unless-stopped",
@@ -246,18 +255,22 @@ class DockerWatcher(BaseWatcher):
 
     @classmethod
     def is_supported(cls) -> bool:
+        """Return whether Docker is available on the current host."""
         return shutil.which("docker") is not None
 
     @classmethod
     def path(cls) -> Path:
+        """Return the generated Docker Compose file path."""
         return docker_watcher_compose_path()
 
     @classmethod
     def render(cls, *, image: str | None = None) -> str:
+        """Render the Docker Compose watcher configuration."""
         return render_docker_watcher_compose(image=image)
 
     @classmethod
     def commands(cls, *, image: str | None = None) -> list[list[str]]:
+        """Return Docker Compose commands that activate the watcher."""
         image_reference = watcher_image_reference(image)
         compose_command = ["docker", "compose", "-f", str(docker_watcher_compose_path())]
         commands = []
@@ -271,10 +284,13 @@ class DockerWatcher(BaseWatcher):
 
     @classmethod
     def uninstall_commands(cls, *, path: Path | None = None) -> list[list[str]]:
+        """Return the Docker Compose command that stops the watcher."""
         compose_path = path or docker_watcher_compose_path()
         return [["docker", "compose", "-f", str(compose_path), "down"]]
 
     @classmethod
     def write(cls, *, image: str | None = None) -> Path:
+        """Write Docker watcher contexts and Compose configuration."""
         write_docker_watcher_contexts()
+        (app_home() / "watcher" / "checkpoints").mkdir(mode=0o700, parents=True, exist_ok=True)
         return super().write(image=image)

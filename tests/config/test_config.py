@@ -19,6 +19,17 @@ from sftpwarden.runtime import render_sshd_config_text
 from sftpwarden.utils.errors import ConfigError
 
 
+@pytest.mark.parametrize(
+    "content", [b"provider: [private-sentinel", b"provider: \xffprivate-sentinel"]
+)
+def test_malformed_configuration_is_a_private_domain_error(tmp_path, content):
+    path = tmp_path / "invalid.yaml"
+    path.write_bytes(content)
+    with pytest.raises(ConfigError, match="Invalid YAML") as caught:
+        load_config(path)
+    assert "private-sentinel" not in str(caught.value)
+
+
 def write_yaml(path: Path, data: dict) -> None:
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
@@ -188,6 +199,14 @@ def test_upload_dir_rejects_traversal() -> None:
                 "isolation": {"upload_dir": "../upload"},
                 "provider": {"type": "yaml", "path": "/etc/sftpwarden/users.yaml"},
             }
+        )
+
+
+@pytest.mark.parametrize("field", ["root_owner", "root_group"])
+def test_chroot_ownership_rejects_unsupported_non_root_identity(field: str) -> None:
+    with pytest.raises(ValidationError):
+        SFTPWardenConfig.model_validate(
+            {"project": {"name": "unsafe-owner"}, "isolation": {field: "daemon"}}
         )
 
 

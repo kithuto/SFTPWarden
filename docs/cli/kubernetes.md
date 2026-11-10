@@ -2,8 +2,12 @@
 
 `sftpwarden kube` is for projects configured for Kubernetes manifest mode. These
 commands use values from `sftpwarden.yaml`, especially `deploy.target`,
-`kubernetes.mode`, `kubernetes.namespace`, `kubernetes.release`, and
+`kubernetes.mode`, `kubernetes.namespace`, `kubernetes.release` and
 `kubernetes.kube_context`.
+
+Use [Operations](../operations.md#kubernetes-deploy) for a first cluster
+deployment. Examples below are alternative invocations. Rendering is a preview;
+apply can replace the Pod and interrupt transfers.
 
 ## `sftpwarden kube`
 
@@ -16,6 +20,7 @@ sftpwarden kube --help
 Subcommands:
 
 - `render`
+- `prepare`
 - `apply`
 - `status`
 - `logs`
@@ -42,9 +47,31 @@ sftpwarden kube render --config ./sftpwarden.yaml
 
 ### Effects
 
-Read-only. It prints rendered manifest YAML.
+Read-only. It prints rendered manifest YAML. Offline rendering does not verify
+live identity, retained storage or provider credentials.
+
+## `sftpwarden kube prepare`
+
+Privately captures the running server identity into its selected durable source
+and prepares provider credentials before a direct manifest or Helm upgrade.
+It prepares a legacy StatefulSet for explicit activation without replacing the
+running Pod and rejects concurrent workload changes. The same preparation runs
+during CLI deploy.
+
+```bash
+sftpwarden kube prepare --context prod --dry-run
+sftpwarden kube prepare --context prod
+```
+
+Options are `--context`/`-c`, `--dry-run` and `--json`. Dry-run reports unverified
+live prerequisites; it is not evidence that identity has been preserved. Follow
+the ordered [upgrade procedure](../recovery.md) before using raw Kubernetes tools.
 
 ## `sftpwarden kube apply`
+
+Shares deploy's version inspection, backup recommendation, migration confirmation
+and activated-version verification. Official images advance and custom images
+remain unchanged. See [deploy](core.md#sftpwarden-deploy) and [Upgrade](upgrade.md).
 
 Applies rendered Kubernetes manifests with `kubectl` and restarts the runtime
 StatefulSet so deployment changes are remounted or reloaded.
@@ -73,7 +100,8 @@ A real apply can:
 - migrate provider data forward when `provider.user_schema` requires it;
 - write `kubernetes.yml` in the project root;
 - run `kubectl apply -f kubernetes.yml` with configured namespace/context;
-- run `kubectl rollout restart statefulset/<release>`;
+- explicitly replace the Pod after preparing identity and updating resources;
+- verify replacement readiness, applied configuration and host-key fingerprints;
 - sync YAML/CSV provider data into the provider PVC as part of the deployment plan.
 
 ## `sftpwarden kube status`
@@ -91,7 +119,7 @@ sftpwarden kube status --json
 | Flag | Value | Default | What it does |
 | --- | --- | --- | --- |
 | `--context`, `-c` | `TEXT` | active context | Selects a registered context. |
-| `--json` | flag | false | Prints namespace, release, and check results as JSON. |
+| `--json` | flag | false | Prints namespace, release and check results as JSON. |
 
 ### Checks
 
@@ -149,10 +177,21 @@ The command checks:
 
 - `kubectl version --client`;
 - configured namespace;
-- host-key secret for the release;
+- configured host-key Secret (`kubernetes.host_keys_secret`), or the
+  `<release>-host-keys` PVC when no Secret is configured;
 - configured storage class, when `kubernetes.storage_class` is set.
 
 Provider and probe configuration are validated during manifest rendering.
+
+The identity check uses the configured namespace and Kubernetes context. A missing
+or inaccessible resource produces a `warn` in text output and a nonzero
+`returncode` in that check's JSON result. The command itself retains its diagnostic
+exit status: inspect individual checks even when it exits successfully.
+
+This check confirms that the identity resource exists and can be queried. It does
+not validate Secret contents, PVC binding or the keys loaded by the running server.
+Use runtime health and trusted fingerprints to verify the active server identity;
+do not create an empty Secret to silence a warning.
 
 ## `sftpwarden kube delete`
 
@@ -174,6 +213,7 @@ sftpwarden kube delete --yes
 
 ### Effects
 
-A real delete writes the current `kubernetes.yml`, then runs
-`kubectl delete -f kubernetes.yml --ignore-not-found` with the configured
-namespace/context.
+A real delete first prepares identity, then removes the runtime StatefulSet,
+Service and configuration/bootstrap resources. It retains the namespace,
+data/state/provider/host-key PVCs and identity Secrets. Intentional storage
+deletion is a separate operator action.

@@ -8,14 +8,14 @@ from pathlib import Path
 import pytest
 
 from .conftest import (
-    FAKE_KEY_1,
+    PUBLIC_KEY_1,
     TEST_HASH,
     CleanupStack,
     CliResult,
     ReleaseCli,
     assert_failed,
     assert_ok,
-    free_tcp_port,
+    remove_docker_container,
     require_executable,
     run_external,
 )
@@ -35,7 +35,10 @@ class DatabaseCase:
 DATABASE_CASES = [
     DatabaseCase(
         provider="postgresql",
-        image="postgres:16-alpine",
+        image=(  # 16.15 / Alpine 3.24
+            "postgres:16-alpine@sha256:"
+            "aa6cb33cf4c19c765cefcf48d96176258800870a9a1e930ad126200f9d825139"
+        ),
         internal_port=5432,
         environment={
             "POSTGRES_DB": "sftpwarden",
@@ -46,7 +49,9 @@ DATABASE_CASES = [
     ),
     DatabaseCase(
         provider="mysql",
-        image="mysql:8",
+        image=(  # 8.4.13
+            "mysql:8@sha256:a81d043930e51745522bd5c430961cf8286f0a23f0a9a2a6e0108f7ea71b0902"
+        ),
         internal_port=3306,
         environment={
             "MYSQL_ROOT_PASSWORD": "sftpwarden-root",
@@ -58,7 +63,9 @@ DATABASE_CASES = [
     ),
     DatabaseCase(
         provider="mariadb",
-        image="mariadb:11",
+        image=(  # 11.8.9
+            "mariadb:11@sha256:c4124d1afa875e47f2892edf26b482fa54f796e2f342d3717a04ca091a22a9bd"
+        ),
         internal_port=3306,
         environment={
             "MARIADB_ROOT_PASSWORD": "sftpwarden-root",
@@ -70,7 +77,9 @@ DATABASE_CASES = [
     ),
     DatabaseCase(
         provider="mongodb",
-        image="mongo:7",
+        image=(  # 7.0.45
+            "mongo:7@sha256:8bb4442761a63a8dda452744082cdac9644b429807eb977b42324a63cef59ca4"
+        ),
         internal_port=27017,
         environment={},
         dsn_template="mongodb://127.0.0.1:{port}/sftpwarden",
@@ -84,7 +93,8 @@ def start_database_container(
     name: str,
     host_port: int,
     cleanup_stack: CleanupStack,
-) -> None:
+    arguments: tuple[str, ...] = (),
+) -> int:
     """Start one provider database in Docker and register cleanup."""
     image_existed = (
         run_external(
@@ -107,12 +117,18 @@ def start_database_container(
     for key, value in case.environment.items():
         command.extend(["-e", f"{key}={value}"])
     command.append(case.image)
+    command.extend(arguments)
     if not image_existed:
         cleanup_stack.add(
             lambda: run_external(["docker", "image", "rm", case.image], check=False, timeout=120)
         )
+    cleanup_stack.add(lambda: remove_docker_container(name))
     run_external(command, timeout=300)
-    cleanup_stack.add(lambda: run_external(["docker", "rm", "-f", name], check=False, timeout=60))
+    return int(
+        run_external(["docker", "port", name, f"{case.internal_port}/tcp"])
+        .stdout.strip()
+        .rsplit(":", 1)[1]
+    )
 
 
 def init_when_database_is_ready(
@@ -122,6 +138,7 @@ def init_when_database_is_ready(
     root: Path,
     dsn: str,
     timeout_seconds: int = 180,
+    user_schema: int = 2,
 ) -> CliResult:
     """Retry init until the database accepts connections, failing fast on missing extras."""
     deadline = time.monotonic() + timeout_seconds
@@ -137,6 +154,8 @@ def init_when_database_is_ready(
             "--dsn",
             dsn,
             "--create-table",
+            "--user-schema",
+            str(user_schema),
             "--yes",
             timeout=90,
         )
@@ -170,10 +189,9 @@ def test_real_database_provider_crud_import_export_and_backup(
     require_executable("docker")
     run_external(["docker", "version"], timeout=60)
 
-    host_port = free_tcp_port()
     container_name = f"sftpwarden-{case.provider}-{unique_name}"
-    start_database_container(
-        case, name=container_name, host_port=host_port, cleanup_stack=cleanup_stack
+    host_port = start_database_container(
+        case, name=container_name, host_port=0, cleanup_stack=cleanup_stack
     )
     dsn = case.dsn_template.format(port=host_port)
     root = tmp_path / f"{case.provider}-project"
@@ -201,7 +219,7 @@ def test_real_database_provider_crud_import_export_and_backup(
             "alice",
             "prod-ci",
             "--public-key",
-            FAKE_KEY_1,
+            PUBLIC_KEY_1,
             "--context",
             case.provider,
             "--no-refresh",
@@ -243,8 +261,23 @@ def test_real_database_provider_crud_import_export_and_backup(
         "--json",
         "--no-refresh",
     )
-    assert_ok(imported)
-    assert json.loads(imported.stdout)["destination_count"] == 1
+    if case.provider == "mongodb":
+        assert_failed(imported, "requires a replica set")
+        assert_ok(
+            cli.run(
+                "user",
+                "create",
+                "alice",
+                "--public-key",
+                PUBLIC_KEY_1,
+                "--context",
+                case.provider,
+                "--no-refresh",
+            )
+        )
+    else:
+        assert_ok(imported)
+        assert json.loads(imported.stdout)["destination_count"] == 1
 
     assert_ok(cli.run("backup", "--context", case.provider, "--output", backup_path, "--yes"))
     assert backup_path.exists()

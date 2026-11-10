@@ -1,7 +1,7 @@
-# Contributing, Development, and Testing
+# Contributing, Development and Testing
 
 This guide is for people who want to run SFTPWarden from source, contribute a
-change, build documentation, or validate the project before publishing a release.
+change, build documentation or validate the project before publishing a release.
 
 For the shorter GitHub contribution guide, see
 [CONTRIBUTING.md](https://github.com/kithuto/sftpwarden/blob/dev/CONTRIBUTING.md).
@@ -43,8 +43,6 @@ production updates or public releases.
 git clone https://github.com/kithuto/sftpwarden.git
 cd sftpwarden
 git checkout dev
-python -m venv .venv
-source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev,docs,mysql,postgres,mongodb]"
 sftpwarden --version
@@ -53,93 +51,71 @@ sftpwarden --version
 The `mysql` extra also enables MariaDB because both providers use PyMySQL. The
 `mariadb` extra is an alias for the same dependency.
 
-Use Python 3.11, 3.12, 3.13, or 3.14. Install the Python versions locally before
+Use Python 3.11, 3.12, 3.13 or 3.14. Install the Python versions locally before
 running the full `tox` matrix.
 
 ## Development Workflow
 
-Create a branch from `dev` before changing files:
+Work in a feature or fix branch created from `dev`. Keep changes focused on one
+user-visible outcome and read the relevant implementation before editing it.
 
-```bash
-git checkout dev
-git pull origin dev
-git checkout -b fix/my-change
-```
+For a CLI change, inspect help and run the affected tests. For an operational
+change, also plan a disposable environment that can prove the behavior.
+Use [release validation](https://github.com/kithuto/sftpwarden/blob/dev/tests/release_validation/README.md)
+for prerequisites and cleanup rules.
 
-Run the CLI from the editable install:
-
-```bash
-sftpwarden doctor
-sftpwarden validate --config examples/yaml/sftpwarden.yaml
-```
-
-Build the runtime image when changing Docker/runtime behavior:
-
-```bash
-docker build -t sftpwarden:local -f docker/runtime/Dockerfile .
-docker run --rm --entrypoint sh sftpwarden:local -c 'command -v sshd && command -v sftpwarden'
-```
-
-For Kubernetes, Helm, or runtime changes that affect the container in a cluster,
-run a real Kubernetes or Helm smoke test when feasible. At minimum, render the
-manifests or values, run `helm lint`, and confirm the runtime image builds.
-
-Build the watcher image when changing watcher behavior:
-
-```bash
-docker build -t sftpwarden-watcher:local -f docker/watcher/Dockerfile .
-docker run --rm --entrypoint sh sftpwarden-watcher:local -c 'command -v sftpwarden'
-```
+Image builds, rendered manifests and mocked tests are useful intermediate
+checks. Runtime, authentication, deployment, watcher and recovery changes also
+need real environment checks before they are considered complete. Inspect the
+selected Docker or Kubernetes context before creating resources.
 
 ## Testing
 
-Run the full validation:
+While iterating, use Python 3.14 and the smallest relevant test selection:
+
+```bash
+python -m pytest tests/cli/
+```
+
+Narrow that path to the affected test files when possible. Batch related edits
+before checking them. Repeat passing checks only when a subsequent change or
+failure invalidates the result.
+
+| Change | Typical focused check |
+| --- | --- |
+| CLI/service behavior | Relevant pytest files |
+| Python formatting or imports | `tox -e lint` |
+| Type annotations or typed interfaces | `tox -e mypy` |
+| Sphinx docs or their inputs | `tox -e docs` |
+| Standalone Markdown | Diff, links and structure |
+| Packaging or dependency metadata | Relevant package or audit environment |
+
+After a complete code change is ready, run the full ordinary suite once:
 
 ```bash
 tox
 ```
 
-The default `tox` run covers:
+This covers lint, typing, Python 3.11–3.14 tests, coverage, documentation, package
+checks and dependency audit. Install the supported interpreters first. The
+coverage minimum is 95% and the project target is above 97%. Add meaningful
+behavior and failure-path tests rather than exclusions.
 
-- lint and formatting;
-- tests on Python 3.11, 3.12, 3.13, and 3.14;
-- coverage once, instead of repeating it for every Python version;
-- Sphinx documentation build;
-- package build and wheel content check;
-- dependency audit.
-
-Run one part:
-
-```bash
-tox -e lint
-tox -e py311
-tox -e py312
-tox -e py313
-tox -e py314
-tox -e coverage
-tox -e docs
-tox -e package
-tox -e audit
-tox -e clean
-```
-
-Run pytest directly while iterating:
-
-```bash
-python -m pytest
-python -m pytest tests/test_cli.py
-```
+The ordinary suite excludes opt-in external release validation. Report those
+checks separately and identify any platform you could not verify.
+`tox -e clean` removes artifacts and designated smoke-test images; it is not
+a validation step. Inspect its scope before running it.
 
 ## Documentation
 
-The Sphinx source lives in `docs/`. `docs/index.md` owns the main navigation,
+The Sphinx source lives in `docs/`. `docs/index.md` owns the main navigation
 and static assets live under `docs/_static/`.
 
 Build the Sphinx site locally:
 
 ```bash
 python -m pip install -e ".[docs]"
-sphinx-build -b html docs docs/_build/html
+sphinx-build -W --keep-going -b html docs docs/_build/html
 ```
 
 The CI-friendly validation command is:
@@ -159,25 +135,28 @@ pages:
 - [Security](security.md)
 - [CLI Reference](cli-reference.md)
 
-The public documentation site is published by `.github/workflows/docs.yml`.
-Pushes to `main` that touch `README.md`, `CONTRIBUTING.md`, `SECURITY.md`,
-`CODE_OF_CONDUCT.md`, or `docs/**` build the HTML site on Python 3.14 with:
+The public site is published from `main` by `.github/workflows/docs.yml`.
+Its path filters include the public root documents, `docs/**` and
+`pyproject.toml`, which supplies the documented version. Check that workflow for
+the current publishing commands.
 
-```bash
-sphinx-build -b html docs docs/_build/html
-```
+Use `tox -e docs` for documentation changes. The strict build above also treats
+warnings as errors and leaves HTML available for review. Check links and read
+rendered pages at desktop and narrow widths; a successful Sphinx build does not
+prove that every external URL or documented procedure works.
 
-The workflow uploads `docs/_build/html` as a GitHub Pages artifact and deploys it
-with `actions/deploy-pages`. Documentation-only pull requests should still run
-`tox -e docs` before review so broken links, invalid MyST, and Sphinx warnings
-are caught before the workflow publishes from `main`.
+Write in English. Start tutorials with the simplest working path, explain the
+expected result and link to deeper reference material. Avoid serial commas before
+`and` or `or`, required virtual environments and version-pinned basic installation.
+Keep examples consistent with the password-first Alice tutorial and default YAML
+provider.
 
 ## Adding or Changing Features
 
 Keep public behavior stable unless the change is intentional and documented:
 
 - CLI command names and option names should remain compatible.
-- `sftpwarden.yaml`, provider files, SQL schemas, and context registry formats
+- `sftpwarden.yaml`, provider files, SQL schemas and context registry formats
   should remain compatible.
 - Runtime state should remain readable across upgrades.
 - JSON output should stay parseable.
@@ -186,11 +165,11 @@ For user/provider changes, add tests that cover both service behavior and CLI
 behavior when the CLI output matters.
 
 For remote/deploy/watcher changes, include dry-run coverage so generated SSH,
-rsync/scp, Docker, and scheduler commands stay reviewable.
+rsync/scp, Docker and scheduler commands stay reviewable.
 
-Tox cleans Python caches, coverage output, docs output, and package artifacts
-after the environments that generate them. Run `tox -e clean` to clean the same
-local artifacts plus Docker smoke-test images.
+Tox environments clean their generated artifacts. Separate `tox -e clean`
+cleanup also removes designated Docker smoke-test images; inspect its scope
+before using it and preserve unrelated operator resources.
 
 ## Pull Request Checklist
 
@@ -199,35 +178,47 @@ Before opening a PR:
 - target `dev`, not `main`;
 - for docs-only changes, run `tox -e docs`;
 - for code changes, run `tox`;
-- for Docker/runtime changes, build the affected Docker image locally;
+- verify affected runtime or deployment behavior in a disposable environment;
 - update README/docs when adoption or operations behavior changes;
 - update examples when configuration changes;
 - redact secrets from logs and screenshots;
-- describe the user-facing behavior, validation performed, and any known limits.
+- describe the user-facing behavior, validation performed and any known limits.
 
 ## Release Readiness
 
-Before a public release:
+Release validation is broader than the ordinary test suite. Follow the
+[release-validation guide](https://github.com/kithuto/sftpwarden/blob/dev/tests/release_validation/README.md)
+for required infrastructure, supported subsets and cleanup.
 
-```bash
-tox
-python -m build
-docker build -t sftpwarden:local -f docker/runtime/Dockerfile .
-docker build -t sftpwarden-watcher:local -f docker/watcher/Dockerfile .
-sftpwarden validate --config examples/yaml/sftpwarden.yaml
-sftpwarden validate --config examples/csv/sftpwarden.yaml
-sftpwarden validate --config examples/sqlite/sftpwarden.yaml
-SFTPWARDEN_MYSQL_DSN=mysql://user:pass@localhost/sftp \
-  sftpwarden validate --config examples/mysql/sftpwarden.yaml
-SFTPWARDEN_MARIADB_DSN=mariadb://user:pass@localhost/sftp \
-  sftpwarden validate --config examples/mariadb/sftpwarden.yaml
-SFTPWARDEN_POSTGRES_DSN=postgresql://user:pass@localhost/sftp \
-  sftpwarden validate --config examples/postgres/sftpwarden.yaml
-SFTPWARDEN_MONGODB_DSN=mongodb://localhost:27017/sftp \
-  sftpwarden validate --config examples/mongodb/sftpwarden.yaml
-helm lint charts/sftpwarden
-helm template sftpwarden charts/sftpwarden --namespace sftpwarden
-```
+The release workflow validates candidate packages, images and the chart before
+publication. Promotion must use those same artifacts and recorded hashes.
+Do not rebuild a validated candidate during publication or overwrite a conflicting
+versioned artifact.
 
-Also check the repository-level security workflow before publishing: dependency
-audit, container scan, SBOM generation, and OpenSSF Scorecard.
+Documentation-only diffs run Sphinx without the Python or infrastructure test
+matrix. Code, dependency, test and workflow changes require full validation.
+For a `dev` → `main` PR or the subsequent main push, CI can reuse a successful
+dev push candidate whose complete Git tree matches. It checks the validation
+receipt and artifact hashes, then refreshes the security scans without rebuilding
+the images. Missing or expired evidence requires full validation; a matching
+failed candidate blocks promotion. Manual release-workflow runs force full
+validation. Require `Release aggregate` in branch protection, since individual
+jobs intentionally skip when another validation route applies.
+
+See the root [contribution guide](https://github.com/kithuto/sftpwarden/blob/dev/CONTRIBUTING.md)
+for the exact routing, wait limits and trusted-candidate requirements.
+
+The deployment release group rehearses image/index and chart publication in a
+disposable registry, including safe retries and conflicting-artifact rejection.
+If production publication fails partway through, rerun the failed jobs from that
+same workflow run so they reuse its verified artifacts. Starting a new run may
+rebuild candidates if trusted dev artifacts are unavailable, and may correctly
+reject bytes that differ from files already published under that version.
+
+Review dependency and container scans, SBOM results and required platform gates.
+Missing infrastructure or skipped checks are unverified scope, not passing
+evidence. Keep release-specific results in the active release plan.
+
+When publishing, move the shipped version out of the README roadmap and keep
+only the next two future versions there. Record released behavior in the
+changelog. Keep the project licensed under MIT.

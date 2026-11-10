@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from sftpwarden.config import ProviderType, default_project_config, write_config
+from sftpwarden.config import ProviderConfig, ProviderType, default_project_config, write_config
 from sftpwarden.contexts import ContextEntry, ContextRegistry, local_context, save_registry
 from sftpwarden.providers import empty_provider_text
 from sftpwarden.render.compose import write_compose
@@ -18,6 +18,52 @@ from sftpwarden.users import ProviderUsers, SFTPUser
 TEST_HASH = "$6$rounds=500000$saltstring$hashvalue"
 
 RELEASE_VALIDATION_DIR = Path(__file__).parent / "release_validation"
+
+
+@pytest.fixture(autouse=True)
+def isolated_upgrade_inspection(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    """Keep the new deployment inspection boundary off real infrastructure in fast tests.
+
+    Upgrade contract tests override these responses for failure and legacy cases;
+    opt-in release tests always execute the real probes.
+    """
+    if Path(str(request.node.path)).is_relative_to(RELEASE_VALIDATION_DIR):
+        return
+    from sftpwarden.services import deployment_upgrade
+    from sftpwarden.system.commands import CommandResult
+    from sftpwarden.utils._version import get_version
+
+    def pin(config):
+        selected = config.model_copy(deep=True)
+        selected.kubernetes.kube_context = selected.kubernetes.kube_context or "test-cluster"
+        return selected
+
+    monkeypatch.setattr(deployment_upgrade, "pin_context", pin)
+
+    def inspect(command, **_kwargs):
+        parts = command if command[0] != "ssh" else command[-1].split()
+        if command[0] == "ssh" and command[-1].startswith("head -c "):
+            output = default_project_config("remote-test").model_dump_json()
+        elif "exec" in parts:
+            output = get_version()
+        elif "--quiet" in parts or "--ignore-not-found" in parts:
+            output = "test-runtime"
+        else:
+            raise AssertionError(f"Unexpected external upgrade probe: {command}")
+        return CommandResult(command, 0, output, "")
+
+    monkeypatch.setattr(deployment_upgrade, "run", inspect)
+
+
+@pytest.fixture
+def applied_runtime_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Exercise applied snapshots in private temporary paths without host sshd mutation."""
+    from sftpwarden.runtime import configuration
+
+    monkeypatch.setattr(configuration, "APPLIED_CONFIG_PATH", tmp_path / "applied-config.json")
+    monkeypatch.setattr(configuration, "SSHD_CONFIG_PATH", tmp_path / "applied-sshd-config")
+    monkeypatch.setattr(configuration, "validate_sshd_candidate", lambda _path: None)
+    return configuration.prepare_runtime_configuration
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -32,6 +78,15 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 def pytest_configure(config: pytest.Config) -> None:
     """Document release validation markers for explicit runs."""
+    if os.environ.get("SFTPWARDEN_TEST_INSTALLED_ARTIFACT") == "1":
+        import sftpwarden
+
+        source_root = Path(__file__).resolve().parents[1]
+        package_path = Path(sftpwarden.__file__).resolve()
+        if package_path.is_relative_to(source_root):
+            raise pytest.UsageError(
+                "Artifact validation imported the checkout instead of the installed candidate."
+            )
     config.addinivalue_line(
         "markers",
         "release_validation: opt-in end-to-end release validation tests",
@@ -55,6 +110,14 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers",
         "release_databases: release validation tests that start provider databases in Docker",
+    )
+    config.addinivalue_line(
+        "markers",
+        "release_systemd: native Linux systemd lifecycle in an explicitly disposable runner",
+    )
+    config.addinivalue_line(
+        "markers",
+        "release_upgrade: upgrade from the published amd64 1.3.0 runtime",
     )
 
 
@@ -107,6 +170,8 @@ class MemoryProvider:
     """Mutable in-memory provider used by provider-transfer tests."""
 
     def __init__(self, users: ProviderUsers) -> None:
+        self.config = ProviderConfig(type=ProviderType.YAML, user_schema=users.schema_version)
+        self.path = None
         self.users = users
         self.writes: list[ProviderUsers] = []
 
@@ -118,6 +183,13 @@ class MemoryProvider:
         """Replace current provider users."""
         self.users = users
         self.writes.append(users)
+
+    def replace_if_unchanged(self, expected: ProviderUsers, replacement: ProviderUsers) -> None:
+        """Model checked replacement for workflow tests without a storage backend."""
+        from sftpwarden.providers.mutations import require_unchanged_snapshot
+
+        require_unchanged_snapshot(self.users, expected)
+        self.write(replacement)
 
 
 @pytest.fixture
@@ -168,6 +240,9 @@ class FakeMongoCursor(list[dict[str, Any]]):
         reverse = direction < 0
         return FakeMongoCursor(sorted(self, key=lambda document: document[key], reverse=reverse))
 
+    def close(self) -> None:
+        """Match the explicit metadata-cursor cleanup contract."""
+
 
 class FakeDeleteResult:
     """Tiny MongoDB delete result fake."""
@@ -187,7 +262,7 @@ class FakeMongoCollection:
         """Record requested indexes."""
         self.indexes.append((key, unique))
 
-    def find(self, _query: dict, projection: dict[str, bool]) -> FakeMongoCursor:
+    def find(self, _query: dict, projection: dict[str, bool], **_kwargs: Any) -> FakeMongoCursor:
         """Return all visible documents."""
         documents = []
         for document in self.documents.values():
@@ -197,13 +272,33 @@ class FakeMongoCollection:
             documents.append(visible)
         return FakeMongoCursor(documents)
 
-    def replace_one(self, query: dict, document: dict[str, Any], *, upsert: bool) -> None:
-        """Replace one document by id."""
-        if not upsert and query["_id"] not in self.documents:
-            return
-        self.documents[query["_id"]] = dict(document)
+    def find_one(self, query: dict) -> dict[str, Any] | None:
+        """Return a detached document for comparison."""
+        document = self.documents.get(query["_id"])
+        return dict(document) if document is not None else None
 
-    def delete_many(self, query: dict) -> None:
+    def insert_one(self, document: dict[str, Any]) -> None:
+        """Reject duplicate document identities."""
+        if document["_id"] in self.documents:
+            raise ValueError("Duplicate test document")
+        self.documents[document["_id"]] = dict(document)
+
+    def _matches(self, query: dict) -> bool:
+        document = self.documents.get(query["_id"])
+        return document is not None and (
+            "$expr" not in query or query["$expr"]["$eq"][1]["$literal"] == document
+        )
+
+    def replace_one(
+        self, query: dict, document: dict[str, Any], *, upsert: bool = False, **_kwargs: Any
+    ) -> Any:
+        """Replace one document by id."""
+        if not upsert and not self._matches(query):
+            return types.SimpleNamespace(matched_count=0)
+        self.documents[query["_id"]] = dict(document)
+        return types.SimpleNamespace(matched_count=1)
+
+    def delete_many(self, query: dict, **_kwargs: Any) -> None:
         """Delete many documents."""
         if not query:
             self.documents.clear()
@@ -215,8 +310,9 @@ class FakeMongoCollection:
 
     def delete_one(self, query: dict) -> FakeDeleteResult:
         """Delete one document by id."""
-        deleted = int(query["_id"] in self.documents)
-        self.documents.pop(query["_id"], None)
+        deleted = int(self._matches(query))
+        if deleted:
+            self.documents.pop(query["_id"], None)
         return FakeDeleteResult(deleted)
 
 
@@ -225,6 +321,7 @@ class FakeMongoDatabase:
 
     def __init__(self) -> None:
         self.collections: dict[str, FakeMongoCollection] = {}
+        self.client: Any = None
 
     def __getitem__(self, name: str) -> FakeMongoCollection:
         """Return a collection by name."""
@@ -233,6 +330,15 @@ class FakeMongoDatabase:
     def list_collection_names(self) -> list[str]:
         """Return existing collection names."""
         return list(self.collections)
+
+    def list_collections(self, *, filter: dict[str, str]) -> FakeMongoCursor:
+        return FakeMongoCursor(
+            [
+                {"name": name, "info": {"uuid": id(collection)}}
+                for name, collection in self.collections.items()
+                if name == filter["name"]
+            ]
+        )
 
     def create_collection(self, name: str) -> None:
         """Create a collection if needed."""
@@ -245,16 +351,40 @@ def install_fake_pymongo(
 ) -> Callable[[], dict[tuple[str, str], FakeMongoDatabase]]:
     """Return a helper that installs a fake pymongo module."""
 
-    def install() -> dict[tuple[str, str], FakeMongoDatabase]:
+    def install(*, replica_set: bool = True) -> dict[tuple[str, str], FakeMongoDatabase]:
         databases: dict[tuple[str, str], FakeMongoDatabase] = {}
         pymongo = types.ModuleType("pymongo")
 
+        class Session:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def start_transaction(self):
+                from contextlib import nullcontext
+
+                return nullcontext()
+
         class FakeMongoClient:
-            def __init__(self, dsn: str) -> None:
+            def __init__(self, dsn: str, **kwargs: Any) -> None:
                 self.dsn = dsn
+                self.options = kwargs
+                self.admin = types.SimpleNamespace(
+                    command=lambda _command: {"setName": "test"} if replica_set else {}
+                )
 
             def __getitem__(self, name: str) -> FakeMongoDatabase:
-                return databases.setdefault((self.dsn, name), FakeMongoDatabase())
+                database = databases.setdefault((self.dsn, name), FakeMongoDatabase())
+                database.client = self
+                return database
+
+            def start_session(self):
+                return Session()
+
+            def close(self):
+                pass
 
         pymongo.MongoClient = FakeMongoClient  # type: ignore[attr-defined]
         monkeypatch.setitem(sys.modules, "pymongo", pymongo)

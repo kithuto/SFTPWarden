@@ -17,10 +17,12 @@ from sftpwarden.contexts import (
     save_registry,
 )
 from sftpwarden.remote.deploy import remote_shell_command
+from sftpwarden.remote.ssh import remote_path_expression
 from sftpwarden.system.commands import CommandResult, command_text, run
 from sftpwarden.utils.constants import CONFIG_FILENAME
 from sftpwarden.utils.errors import ContextError, RuntimeError, SFTPWardenError
-from sftpwarden.utils.paths import expand_path
+from sftpwarden.utils.paths import contexts_path, expand_path
+from sftpwarden.utils.state_transactions import serialized_state
 
 COMPOSE_WORKING_DIR_LABEL = "com.docker.compose.project.working_dir"
 REMOTE_ROOT_MISSING_EXIT_CODE = 42
@@ -29,7 +31,9 @@ REMOTE_ROOT_MISSING_EXIT_CODE = 42
 class CleanupRunner(Protocol):
     """Callable used to run cleanup commands."""
 
-    def __call__(self, args: list[str], *, cwd: str | None = None) -> CommandResult: ...
+    def __call__(self, args: list[str], *, cwd: str | None = None) -> CommandResult:
+        """Execute one cleanup command and return its result."""
+        ...
 
 
 @dataclass(frozen=True)
@@ -54,6 +58,7 @@ class MissingContextCleanupReport:
     watcher_message: str | None = None
 
 
+@serialized_state(contexts_path)
 def prune_missing_contexts(*, runner: CleanupRunner = run) -> MissingContextCleanupReport:
     """Remove registry entries whose entire local context folder disappeared.
 
@@ -84,6 +89,7 @@ def prune_missing_contexts(*, runner: CleanupRunner = run) -> MissingContextClea
     )
 
 
+@serialized_state(contexts_path)
 def remove_context_with_cleanup(
     name: str,
     *,
@@ -145,7 +151,7 @@ def ensure_remote_only_root_available(
             f"{entry.remote.remote_root!r}"
         )
     command = (
-        f"if [ -d {shlex.quote(remote_root)} ]; then "
+        f"if [ -d {remote_path_expression(remote_root)} ]; then "
         "exit 0; "
         f"else exit {REMOTE_ROOT_MISSING_EXIT_CODE}; fi"
     )
@@ -153,7 +159,7 @@ def ensure_remote_only_root_available(
     if result.returncode == 0:
         return
     if result.returncode == REMOTE_ROOT_MISSING_EXIT_CODE:
-        remove_stale_context_entry(entry.name)
+        remove_stale_context_entry(entry.name, expected=entry)
         raise ContextError(
             f"Remote project root for context {entry.name} no longer exists.",
             suggestion=(
@@ -172,11 +178,19 @@ def ensure_remote_only_root_available(
     )
 
 
-def remove_stale_context_entry(name: str) -> ContextRegistry:
+@serialized_state(contexts_path)
+def remove_stale_context_entry(
+    name: str, *, expected: ContextEntry | None = None
+) -> ContextRegistry:
     """Remove one stale context entry without touching local or remote project files."""
     registry = load_registry()
     if name not in registry.contexts:
         return registry
+    if expected is not None and registry.contexts[name] != expected:
+        raise ContextError(
+            f"Context {name} changed while checking its remote root.",
+            suggestion="Retry using the updated context; the registry entry was preserved.",
+        )
     del registry.contexts[name]
     _repair_default(registry)
     save_registry(registry)
@@ -303,12 +317,12 @@ def cleanup_watcher_if_unused(registry: ContextRegistry) -> str | None:
     """Uninstall or refresh watcher files after registry changes."""
     from sftpwarden.config.global_config import load_global_config
     from sftpwarden.watcher import (
-        WatcherInstallMode,
         run_watcher_commands,
         uninstall_watcher,
         watcher_install_plan,
         write_watcher_files,
     )
+    from sftpwarden.watcher.base import WatcherInstallMode
 
     watcher = load_global_config().watcher
     if not watcher.installed:
@@ -329,15 +343,18 @@ def cleanup_watcher_if_unused(registry: ContextRegistry) -> str | None:
 
 
 def _context_root_missing(entry: ContextEntry) -> bool:
+    """Return whether a configured context root no longer exists."""
     return bool(entry.root) and not expand_path(entry.root).exists()
 
 
 def _repair_default(registry: ContextRegistry) -> None:
+    """Select a valid default after registry entries are removed."""
     if registry.default is not None and registry.default not in registry.contexts:
         registry.default = next(iter(registry.contexts), None)
 
 
 def _local_root_shared(registry: ContextRegistry, name: str, entry: ContextEntry) -> bool:
+    """Return whether another context references the same local root."""
     if not entry.root:
         return False
     root = expand_path(entry.root).resolve(strict=False)
@@ -350,12 +367,14 @@ def _local_root_shared(registry: ContextRegistry, name: str, entry: ContextEntry
 
 
 def _entry_config_path(entry: ContextEntry) -> Path:
+    """Return the explicit or root-relative config path for a context."""
     if entry.config:
         return expand_path(entry.config)
     return expand_path(entry.root) / CONFIG_FILENAME
 
 
 def _safe_local_project_root(entry: ContextEntry) -> Path | None:
+    """Return a verified project root that is safe to delete."""
     if not entry.root:
         return None
     root = expand_path(entry.root)
@@ -380,12 +399,14 @@ def _safe_local_project_root(entry: ContextEntry) -> Path | None:
 
 
 def _compose_file_from_config(config_path: Path) -> str:
+    """Return the Compose filename declared by a project config."""
     from sftpwarden.config import load_config
 
     return load_config(config_path).docker.compose_file
 
 
 def _docker_ids(command: list[str], runner: CleanupRunner) -> list[str]:
+    """Return Docker object identifiers emitted by a successful command."""
     result = runner(command)
     if result.returncode != 0:
         return []

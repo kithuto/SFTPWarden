@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
-import sftpwarden.utils.files as file_utils
 from sftpwarden.config import ProviderConfig, ProviderType
 from sftpwarden.providers import (
     CSVProvider,
@@ -66,15 +66,9 @@ def test_provider_registry_returns_registered_classes() -> None:
     assert provider_class(ProviderType.POSTGRESQL) is PostgreSQLProvider
 
 
-def test_csv_provider_round_trip(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_csv_provider_round_trip(tmp_path: Path) -> None:
     path = tmp_path / "users.csv"
     provider = CSVProvider(config=ProviderConfig(type=ProviderType.CSV), path=path)
-    chmods: list[tuple[Path, int]] = []
-    monkeypatch.setattr(
-        file_utils.os,
-        "chmod",
-        lambda chmod_path, mode: chmods.append((Path(chmod_path), mode)),
-    )
     users = ProviderUsers(
         users=[
             SFTPUser(
@@ -96,13 +90,16 @@ def test_csv_provider_round_trip(tmp_path, monkeypatch: pytest.MonkeyPatch) -> N
     assert loaded.users[0].gid == 10002
     assert loaded.users[0].upload_dir == "dropbox"
     assert loaded.users[0].comment == "Finance dropbox"
-    assert chmods == [(path, 0o600)]
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o777 == 0o600
 
 
 def test_yaml_and_csv_providers_round_trip_schema_v2_named_keys(tmp_path: Path) -> None:
     key = SFTPUserKey(
         name="prod-ci",
-        public_key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests",
+        public_key=(
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFMsDFmvcbuEKKQ2nRx6M4jxyJuS9KoOesN7GyrXw+d+"
+        ),
         comment="CI deploy",
     )
     users = ProviderUsers(

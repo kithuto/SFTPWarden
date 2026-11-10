@@ -309,15 +309,16 @@ def test_project_health_edges_and_runtime_context_commands(
         health_services.runtime_health_from_context(local_context("dev", root, ProviderType.YAML))[
             0
         ].status
-        == "warn"
+        == "fail"
     )
 
 
 def test_runtime_health_success_and_failures(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    applied_runtime_config,
 ) -> None:
-    """Runtime health validates config, runtime dirs, provider readability and sshd config."""
+    """Directories alone never establish health; current lifecycle evidence is required."""
     invalid = runtime_health(tmp_path / "missing.yaml")
     assert not invalid.healthy
 
@@ -331,6 +332,7 @@ def test_runtime_health_success_and_failures(
     for path in (config.server.state_dir, config.server.data_dir, config.server.host_keys_dir):
         Path(path).mkdir()
     write_config(root / "sftpwarden.yaml", config)
+    applied_runtime_config(root / "sftpwarden.yaml")
     (root / "users.yaml").write_text(
         empty_provider_text(config.provider.type, user_schema=config.provider.user_schema),
         encoding="utf-8",
@@ -343,6 +345,9 @@ def test_runtime_health_success_and_failures(
     monkeypatch.setattr(health_services, "RUNTIME_SSHD_CONFIG", sshd_config)
 
     report = runtime_health(root / "sftpwarden.yaml")
+    assert not report.healthy
+    monkeypatch.setattr(health_services, "probe_runtime", lambda *args, **kwargs: (True, "ready"))
+    report = runtime_health(root / "sftpwarden.yaml")
     assert report.healthy
 
     Path(config.server.state_dir).rmdir()
@@ -350,8 +355,11 @@ def test_runtime_health_success_and_failures(
     assert any(check.name == "state-dir" and check.status == "fail" for check in missing_dir.checks)
 
     (root / "users.yaml").unlink()
+    monkeypatch.setattr(
+        health_services, "probe_runtime", lambda *args, **kwargs: (False, "unapplied failure")
+    )
     failed = runtime_health(root / "sftpwarden.yaml")
-    assert any(check.name == "provider" and check.status == "fail" for check in failed.checks)
+    assert any(check.name == "readiness" and check.status == "fail" for check in failed.checks)
 
 
 def test_health_cli_output_and_error_modes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -374,16 +382,18 @@ def test_health_cli_output_and_error_modes(monkeypatch: pytest.MonkeyPatch) -> N
     )
     assert runner.invoke(app, ["health"]).exit_code == 1
 
-    monkeypatch.setattr(runtime_commands, "runtime_health_report", lambda _config: healthy)
+    monkeypatch.setattr(
+        runtime_commands, "runtime_health_report", lambda _config, **kwargs: healthy
+    )
     assert runner.invoke(app, ["runtime", "health", "--config", "x"]).exit_code == 0
     runtime_json = runner.invoke(app, ["runtime", "health", "--config", "x", "--json"])
     assert json.loads(runtime_json.output)["healthy"]
 
-    monkeypatch.setattr(runtime_commands, "runtime_health_report", lambda _config: failed)
+    monkeypatch.setattr(runtime_commands, "runtime_health_report", lambda _config, **kwargs: failed)
     assert runner.invoke(app, ["runtime", "health", "--config", "x", "--json"]).exit_code == 1
     monkeypatch.setattr(
         runtime_commands,
         "runtime_health_report",
-        lambda _config: (_ for _ in ()).throw(RuntimeError("runtime failed")),
+        lambda _config, **kwargs: (_ for _ in ()).throw(RuntimeError("runtime failed")),
     )
     assert runner.invoke(app, ["runtime", "health", "--config", "x"]).exit_code == 1

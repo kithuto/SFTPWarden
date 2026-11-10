@@ -6,6 +6,7 @@ APP_NAME = "sftpwarden"
 CONFIG_FILENAME = "sftpwarden.yaml"
 CONTAINER_CONFIG_PATH = "/etc/sftpwarden/sftpwarden.yaml"
 CONTAINER_PROVIDER_DIR = "/etc/sftpwarden"
+CONTAINER_PROVIDER_DATA_DIR = "/etc/sftpwarden/provider-data"
 DEFAULT_GROUP = "sftpwarden_users"
 DEFAULT_HOME = "~/.sftpwarden"
 DEFAULT_LOCAL_ROOT = "~/sftpwarden"
@@ -68,6 +69,8 @@ PROJECT_CONFIG_PATHS = [
     "kubernetes.service_type",
     "kubernetes.storage_class",
     "kubernetes.data_storage_size",
+    "kubernetes.host_keys_secret",
+    "kubernetes.provider_dsn_secret",
     "kubernetes.startup_probe.period_seconds",
     "kubernetes.startup_probe.timeout_seconds",
     "kubernetes.startup_probe.failure_threshold",

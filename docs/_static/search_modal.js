@@ -106,7 +106,7 @@
     const shortcut = createElement("span", "doc-search-shortcut", shortcutText());
     searchBox.append(input, shortcut);
 
-    const status = createElement("div", "doc-search-status", "Search commands, providers, deploy, watcher, or security.");
+    const status = createElement("div", "doc-search-status", "Search commands, providers, deploy, watcher or security.");
     status.id = "doc-search-status";
 
     const results = createElement("div", "doc-search-results");
@@ -148,7 +148,7 @@
       search(initialQuery);
     } else if (!input.value) {
       clearResults();
-      setStatus("Search commands, providers, deploy, watcher, or security.");
+      setStatus("Search commands, providers, deploy, watcher or security.");
     }
 
     requestAnimationFrame(() => {

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import tomllib
-from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +17,8 @@ from sftpwarden.utils.constants import (
 )
 from sftpwarden.utils.errors import ConfigError
 from sftpwarden.utils.paths import app_home, global_config_path
+from sftpwarden.utils.persistence import atomic_bytes
+from sftpwarden.utils.state_transactions import state_transaction
 
 
 class DefaultsConfig(BaseModel):
@@ -45,6 +46,13 @@ class WatcherState(BaseModel):
     activated: bool | None = None
 
 
+class UpdateConfig(BaseModel):
+    """Operator preferences for advisory release checks."""
+
+    model_config = ConfigDict(extra="forbid")
+    check_enabled: bool = True
+
+
 class GlobalConfig(BaseModel):
     """Global SFTPWarden CLI configuration."""
 
@@ -54,6 +62,7 @@ class GlobalConfig(BaseModel):
     default_provider: ProviderType | None = None
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     watcher: WatcherState = Field(default_factory=WatcherState)
+    updates: UpdateConfig = Field(default_factory=UpdateConfig)
 
 
 def load_global_config(path: Path | None = None) -> GlobalConfig:
@@ -87,6 +96,9 @@ def load_global_config(path: Path | None = None) -> GlobalConfig:
 def save_global_config(config: GlobalConfig, path: Path | None = None) -> None:
     """Save global CLI configuration.
 
+    This is a full replacement. Read-modify-write callers must hold
+    ``state_transaction`` from before loading through this save.
+
     Parameters
     ----------
     config
@@ -95,12 +107,11 @@ def save_global_config(config: GlobalConfig, path: Path | None = None) -> None:
         Optional config path.
     """
     config_path = path or global_config_path()
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(
-        tomli_w.dumps(config.model_dump(mode="json", exclude_none=True)), encoding="utf-8"
-    )
-    with suppress(OSError):
-        os.chmod(config_path, 0o600)
+    with state_transaction(config_path):
+        atomic_bytes(
+            config_path,
+            tomli_w.dumps(config.model_dump(mode="json", exclude_none=True)).encode("utf-8"),
+        )
 
 
 def ensure_home() -> None:

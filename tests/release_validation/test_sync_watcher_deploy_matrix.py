@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import json
+import platform
 from pathlib import Path
 
 import pytest
 import yaml
+from typer.testing import CliRunner
 
-from .conftest import TEST_HASH, ReleaseCli, assert_ok
+from sftpwarden.cli import app
+from sftpwarden.config import default_project_config
+from sftpwarden.services import deployment_upgrade
+from sftpwarden.utils._version import get_version
+
+from .conftest import TEST_HASH, CliResult, ReleaseCli, assert_ok
 
 WATCHER_MODES = [
     "systemd",
@@ -170,24 +177,78 @@ def test_sync_targets_distinguish_local_remote_local_sync_and_remote_only(
 def test_deploy_dry_run_contracts_for_compose_remote_kube_and_helm(
     cli: ReleaseCli,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Each deploy target should produce the resources and commands it promises."""
+    """Inspect deterministic target metadata, then exercise installed CLI planning.
+
+    This infrastructure-free contract replaces only read-only version/cluster
+    probes. Real SSH and cluster gates verify those probes against live targets.
+    """
+    monkeypatch.chdir(cli.cwd)
+    probes = []
+
+    def inspect(command, **kwargs):
+        probes.append(command)
+        if command[0] == "ssh" and command[-1].startswith("head -c "):
+            return default_project_config("remoteonly").model_dump_json()
+        text = " ".join(command)
+        if "exec" in text:
+            return get_version()
+        if "--quiet" in text or "--ignore-not-found" in text:
+            return "existing-runtime"
+        raise AssertionError(f"Unexpected deployment inspection: {command}")
+
+    def pin(config):
+        result = config.model_copy(deep=True)
+        result.kubernetes.kube_context = "contract-cluster"
+        return result
+
+    monkeypatch.setattr(deployment_upgrade, "request", inspect)
+    monkeypatch.setattr(deployment_upgrade, "pin_context", pin)
+
+    def preview(name):
+        def inputs():
+            return {
+                path: path.read_bytes()
+                for path in tmp_path.rglob("*")
+                if path.is_file() and path.suffix in {".yaml", ".yml", ".toml"}
+            }
+
+        before = inputs()
+        args = ["deploy", "--context", name, "--dry-run", "--json"]
+        result = CliRunner().invoke(app, args, env=cli.env)
+        captured = CliResult(args, result.exit_code, result.stdout, result.stderr, cli.cwd)
+        assert_ok(captured)
+        assert inputs() == before, "Preview changed project or registry inputs"
+        assert captured.json()["upgrade"]["source"] == get_version()
+        assert captured.json()["upgrade"]["kind"] == "redeploy"
+        return captured
+
     compose_root = tmp_path / "compose"
     remote_root = tmp_path / "remote"
     kube_root = tmp_path / "kube"
     helm_root = tmp_path / "helm"
 
     assert_ok(cli.run("init", "compose", "--root", compose_root, "--yes"))
-    compose_plan = cli.run("deploy", "--context", "compose", "--dry-run", "--json")
+    compose_plan = preview("compose")
     assert_ok(compose_plan)
     compose_data = json_data(compose_plan)["plan"]
     compose_commands = [" ".join(action["command"] or []) for action in compose_data["actions"]]
     assert compose_data["target"] == "compose"
-    assert any(
-        "docker compose -f docker-compose.yml up -d --build" in command
-        for command in compose_commands
+    up = next(
+        action["command"]
+        for action in compose_data["actions"]
+        if action["command"]
+        and action["command"][:6] == ["docker", "compose", "-f", "docker-compose.yml", "up", "-d"]
     )
+    assert {"--force-recreate", "--wait", "--wait-timeout", "90"} <= set(up)
     assert (compose_root / "docker-compose.yml").exists()
+    service = yaml.safe_load((compose_root / "docker-compose.yml").read_text())["services"][
+        "sftpwarden"
+    ]
+    assert ("--build" in up) == ("build" in service)
+    if "build" not in service:
+        assert "docker compose -f docker-compose.yml pull" in compose_commands
 
     assert_ok(
         cli.run(
@@ -206,13 +267,14 @@ def test_deploy_dry_run_contracts_for_compose_remote_kube_and_helm(
             "--yes",
         )
     )
-    remote_plan = cli.run("deploy", "--context", "remotels", "--dry-run", "--json")
+    remote_plan = preview("remotels")
     assert_ok(remote_plan)
     remote_commands = [
         " ".join(action["command"] or []) for action in json_data(remote_plan)["plan"]["actions"]
     ]
     assert any("mkdir -p /opt/sftpwarden" in command for command in remote_commands)
-    assert any(command.startswith("rsync ") for command in remote_commands)
+    transport = "scp " if platform.system() in {"Darwin", "Windows"} else "rsync "
+    assert any(command.startswith(transport) for command in remote_commands)
     assert any(
         "docker compose -f docker-compose.yml pull" in command for command in remote_commands
     )
@@ -234,7 +296,7 @@ def test_deploy_dry_run_contracts_for_compose_remote_kube_and_helm(
             "--yes",
         )
     )
-    remote_only_plan = cli.run("deploy", "--context", "remoteonly", "--dry-run", "--json")
+    remote_only_plan = preview("remoteonly")
     assert_ok(remote_only_plan)
     remote_only_commands = [
         " ".join(action["command"] or [])
@@ -262,7 +324,7 @@ def test_deploy_dry_run_contracts_for_compose_remote_kube_and_helm(
         )
     )
     kube_render = cli.run("kube", "render", "--context", "kube")
-    kube_plan = cli.run("deploy", "--context", "kube", "--dry-run", "--json")
+    kube_plan = preview("kube")
     kube_user_change = cli.run(
         "user",
         "create",
@@ -297,7 +359,7 @@ def test_deploy_dry_run_contracts_for_compose_remote_kube_and_helm(
         )
     )
     helm_values = cli.run("helm", "values", "--context", "helm", "--write")
-    helm_plan = cli.run("deploy", "--context", "helm", "--dry-run", "--json")
+    helm_plan = preview("helm")
     helm_user_change = cli.run(
         "user",
         "create",
@@ -317,3 +379,4 @@ def test_deploy_dry_run_contracts_for_compose_remote_kube_and_helm(
     assert helm_data["namespace"] == "release-helm"
     assert values["kubernetes"]["namespace"] == "release-helm"
     assert "sftpwarden helm upgrade --install" in normalized_output(helm_user_change)
+    assert {command[0] for command in probes} == {"docker", "ssh", "kubectl"}

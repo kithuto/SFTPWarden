@@ -46,6 +46,7 @@ class SystemdWatcher(BaseWatcher):
 
     @classmethod
     def is_supported(cls) -> bool:
+        """Return whether systemd is available on the current host."""
         return (
             system_is("Linux")
             and shutil.which("systemctl") is not None
@@ -54,14 +55,17 @@ class SystemdWatcher(BaseWatcher):
 
     @classmethod
     def path(cls) -> Path:
+        """Return the generated systemd unit path."""
         return systemd_unit_path()
 
     @classmethod
     def render(cls, *, image: str | None = None) -> str:
+        """Render the systemd watcher service unit."""
         return render_systemd_unit()
 
     @classmethod
     def commands(cls, *, image: str | None = None) -> list[list[str]]:
+        """Return commands that install and start the systemd watcher."""
         return [
             [
                 "sudo",
@@ -77,6 +81,7 @@ class SystemdWatcher(BaseWatcher):
 
     @classmethod
     def uninstall_commands(cls, *, path: Path | None = None) -> list[list[str]]:
+        """Return commands that stop and remove the systemd watcher."""
         return [
             ["sudo", "systemctl", "disable", "--now", f"{SERVICE_NAME}.service"],
             ["sudo", "rm", "-f", f"/etc/systemd/system/{SERVICE_NAME}.service"],

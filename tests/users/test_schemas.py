@@ -29,7 +29,7 @@ from sftpwarden.users.schemas.v2 import UserSchemaV2
 from sftpwarden.utils.errors import ProviderError, RuntimeError
 
 TEST_HASH = "$6$rounds=500000$saltstring$hashvalue"
-TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests"
+TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFMsDFmvcbuEKKQ2nRx6M4jxyJuS9KoOesN7GyrXw+d+"
 
 
 def test_user_schema_registry_resolves_versions_and_capabilities() -> None:

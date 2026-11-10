@@ -246,7 +246,7 @@ def test_watch_sql_provider_has_no_user_file_targets(
     assert targets == []
 
 
-def test_watch_skips_missing_local_provider_file(
+def test_watch_retains_missing_provider_as_a_pending_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home = tmp_path / "home"
@@ -269,7 +269,8 @@ def test_watch_skips_missing_local_provider_file(
 
     targets = derive_watch_targets()
 
-    assert targets == []
+    assert len(targets) == 1
+    assert targets[0].local_path == project / "users.yaml"
 
 
 def test_watch_derivation_skips_non_sync_or_incomplete_contexts(
@@ -457,6 +458,8 @@ def test_init_remote_shortcut_creates_local_sync_context_from_current_directory(
             "deploy@example.com:/opt/sftpwarden",
             "--critical",
             "--skip-checks",
+            "--watcher",
+            "systemd",
             "--yes",
         ],
     )

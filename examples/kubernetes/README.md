@@ -1,79 +1,114 @@
 # Kubernetes Example
 
-This example shows SFTPWarden Kubernetes manifest and Helm workflows. Use it when
-you want cluster-managed storage, probes, namespace handling, and a
-database-backed provider for production-style deployments.
+Deploy one SFTP runtime with persistent storage using Kubernetes manifests or
+Helm. Choose one workflow; they are alternatives.
 
-Create a Kubernetes manifest project:
+You need a cluster with a usable StorageClass, `kubectl` configured for that
+cluster and permission to create the required resources. Helm mode also needs
+Helm. Cluster nodes must be able to pull the runtime image.
+
+## Choose a workflow
+
+### Kubernetes manifests
 
 ```bash
-sftpwarden init prod --deploy kube --yes
-sftpwarden kube render
+mkdir -p ~/sftpwarden-cluster
+cd ~/sftpwarden-cluster
+sftpwarden init cluster --deploy kube --yes
+sftpwarden user create alice --no-refresh
 sftpwarden deploy --dry-run
 sftpwarden kube apply
 ```
 
-Create a Helm project:
+### Helm
 
 ```bash
-sftpwarden init prod --deploy helm --yes
-sftpwarden helm values --write
-sftpwarden helm template
+mkdir -p ~/sftpwarden-helm
+cd ~/sftpwarden-helm
+sftpwarden init helm-demo --deploy helm --yes
+sftpwarden user create alice --no-refresh
+sftpwarden helm lint
 sftpwarden deploy --dry-run
 sftpwarden helm upgrade --install
 ```
 
-`init` checks the Kubernetes namespace for both manifest and Helm projects. If
-the namespace does not exist, interactive init asks whether to create it; `--yes`
-creates the default `sftpwarden` namespace automatically. Use
-`--namespace <name>` for another namespace, or `--no-create-namespace` when
-cluster policy requires the namespace to be created beforehand.
+Both use YAML by default. Enter Alice's password when prompted.
+Init checks the namespace; `--yes` accepts creating the default `sftpwarden`
+namespace if it is missing. Use `--namespace NAME` for another namespace or
+`--no-create-namespace` when it must already exist.
 
-The SFTP upload PVC defaults to `10Gi`. For generated SFTPWarden projects,
-increase it before deploying with:
+## Verify the server
+
+```bash
+sftpwarden kube status
+sftpwarden health
+kubectl get service --namespace sftpwarden
+```
+
+For the default ClusterIP Service, forward a local port in a separate terminal:
+
+```bash
+kubectl port-forward --namespace sftpwarden service/cluster 2222:2222
+```
+
+For the Helm example, use `service/helm-demo` instead. Then connect with
+`sftp -P 2222 alice@127.0.0.1`. Compare the presented server
+fingerprint with the matching host key in the trusted Pod before accepting it.
+Upload and download a file, then follow
+[Alice's SSH key setup](../../docs/getting-started.md#use-an-ssh-key-recommended).
+For YAML here, deploy after adding the key to deliver the local provider change.
+
+The default Service is private to the cluster. Permanent external access
+requires your cluster's Service/network configuration.
+
+## Provider updates and storage
+
+YAML/CSV files are copied into the provider PVC on deployment. Editing a local
+file requires `deploy`, `kube apply` or `helm upgrade --install`.
+Refresh only reloads users already visible in the Pod. Rendered manifests and
+values contain those user entries; protect them like the provider.
+
+Database providers let account changes reach the runtime independently of
+deployment. SQLite requires an explicitly initialized provider PVC and is
+appropriate only for single-Pod labs; local SQLite files are not bootstrapped.
+
+SFTP user storage defaults to `10Gi`. To request more:
 
 ```bash
 sftpwarden config kubernetes.data_storage_size 50Gi
 sftpwarden deploy --dry-run
+sftpwarden deploy
 ```
 
-Probe timings are configurable in generated projects before deploy:
+Your StorageClass must support expansion. Shrinking existing PVCs is unsupported.
+The runtime supports one replica in 1.4.0.
+
+## PostgreSQL values example
+
+`values-postgresql.yaml` is a direct Helm example for an existing schema-v2
+database. Prepare its user and key tables and provision a Secret named
+`sftpwarden-provider` with the `SFTPWARDEN_PROVIDER_DSN` key through your secret
+management workflow. Database connectivity must work from the Pod.
+
+From the repository root, review the example's namespace and StorageClass before
+a **new** installation:
 
 ```bash
-sftpwarden config kubernetes.startup_probe.failure_threshold 60
-sftpwarden config kubernetes.liveness_probe.period_seconds 45
-sftpwarden deploy --dry-run
-```
-
-YAML and CSV providers are declarative in Kubernetes examples. After editing
-`users.yaml` or `users.csv`, run `sftpwarden deploy`, `sftpwarden kube apply`, or
-`sftpwarden helm upgrade --install`; the rollout copies the rendered provider
-file into the provider PVC. `sftpwarden refresh` reloads users already visible in
-the pod, but it does not copy local YAML/CSV files into the cluster. Keep those
-provider files and generated manifests or values in the same review process,
-because the rendered deployment contains the user entries that will be copied.
-
-The PostgreSQL values example expects a Secret named `sftpwarden-provider`:
-
-```bash
-kubectl create namespace sftpwarden
-kubectl create secret generic sftpwarden-provider \
-  --namespace sftpwarden \
-  --from-literal=SFTPWARDEN_PROVIDER_DSN='postgresql://user:password@db:5432/sftpwarden'
+helm lint charts/sftpwarden -f examples/kubernetes/values-postgresql.yaml
 helm upgrade --install sftpwarden charts/sftpwarden \
   --namespace sftpwarden \
   -f examples/kubernetes/values-postgresql.yaml
 ```
 
-Use PostgreSQL, MariaDB/MySQL, or MongoDB providers for production Kubernetes
-deployments, especially when user data must update outside deploy cycles. The
-runtime reads those providers directly and can reconcile them through its sync
-loop or an explicit refresh. YAML/CSV are best for GitOps-style deployments, and
-SQLite is only for single-pod lab use.
+The namespace must exist because it contains the prepared Secret. Do not put
+real DSNs into values files or command history.
 
-The checked-out PostgreSQL values example sets `provider.user_schema: 2` in the
-embedded `sftpwardenConfig`. If you create SQL tables manually, include the
-`sftp_user_keys` table from the provider examples.
+## Existing installations
 
-SFTPWarden v1.3 supports `replicas: 1` only. Higher replica counts are reserved
-for future multi-node work and are rejected by the CLI and Helm chart schema.
+Direct Helm and manifest upgrades need identity preparation and explicit Pod
+activation. Follow [Recovery](../../docs/recovery.md#kubernetes-identity-and-storage)
+before changing an existing release. CLI deploy performs these steps for its
+registered project. Host keys use retained storage by default; preserve it with
+the data and runtime state.
+
+See the [chart guide](../../charts/sftpwarden/README.md) for direct Helm settings.

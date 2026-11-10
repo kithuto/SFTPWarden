@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import types
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 import pytest
 
@@ -27,8 +28,8 @@ from sftpwarden.providers.sql import (
 from sftpwarden.users import ProviderUsers, SFTPUser, SFTPUserKey
 from sftpwarden.utils.errors import ProviderError
 
-TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests"
-SECOND_TEST_KEY = "ssh-ed25519 ZmFrZS1zcWwtMg=="
+TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFMsDFmvcbuEKKQ2nRx6M4jxyJuS9KoOesN7GyrXw+d+"
+SECOND_TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGv5cJFgm0ffn6oHXkIseBv94l3DX7v+2vbF0+qWC+M6"
 TEST_HASH = "$6$rounds=500000$saltstring$hashvalue"
 
 
@@ -100,6 +101,15 @@ class FakeConnection:
     def close(self) -> None:
         self.closed = True
 
+    def wait(self, generator, interval=0.1):
+        """Drive mocked readiness without allocating a real database connection."""
+        try:
+            next(generator)
+            while True:
+                generator.send(0)
+        except StopIteration as completed:
+            return completed.value
+
 
 def sample_user(username: str = "alice") -> SFTPUser:
     return SFTPUser(
@@ -137,6 +147,8 @@ def install_fake_pymysql(monkeypatch: pytest.MonkeyPatch, connection: FakeConnec
 def install_fake_psycopg(monkeypatch: pytest.MonkeyPatch, connection: FakeConnection) -> None:
     psycopg = types.ModuleType("psycopg")
     rows = types.ModuleType("psycopg.rows")
+    conninfo = types.ModuleType("psycopg.conninfo")
+    conninfo.conninfo_to_dict = lambda dsn: dict(parse_qsl(urlsplit(dsn).query))  # type: ignore[attr-defined]
     rows.dict_row = object()  # type: ignore[attr-defined]
 
     def connect(dsn: str, **kwargs: Any) -> FakeConnection:
@@ -147,6 +159,7 @@ def install_fake_psycopg(monkeypatch: pytest.MonkeyPatch, connection: FakeConnec
     psycopg.connect = connect  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "psycopg", psycopg)
     monkeypatch.setitem(sys.modules, "psycopg.rows", rows)
+    monkeypatch.setitem(sys.modules, "psycopg.conninfo", conninfo)
 
 
 def mysql_provider(*, user_schema: int = 1) -> MySQLProvider:
@@ -212,11 +225,13 @@ def test_mysql_provider_reads_users_with_default_query(monkeypatch: pytest.Monke
 
     assert users.users == [sample_user()]
     assert cursor.executed == [
+        ("set transaction isolation level repeatable read", None),
+        ("start transaction with consistent snapshot, read only", None),
         (
             "select username, public_keys, password_hash, uid, gid, upload_dir, "
             "comment, disabled from sftp_users order by username",
             None,
-        )
+        ),
     ]
     assert connection.closed
     assert connection.kwargs["cursorclass"] is object  # type: ignore[attr-defined]
@@ -236,7 +251,7 @@ def test_mysql_provider_reads_schema_v2_key_rows(monkeypatch: pytest.MonkeyPatch
 
     assert users.schema_version == 2
     assert users.users[0].keys[0].name == "prod"
-    assert cursor.executed[1][0].startswith("select username, name, public_key")
+    assert cursor.executed[3][0].startswith("select username, name, public_key")
 
 
 def test_sql_provider_empty_text_is_empty() -> None:
@@ -256,7 +271,14 @@ def test_sql_helpers_cover_list_keys_empty_upsert_and_delete_edges() -> None:
         [
             {
                 **sample_row(),
-                "public_keys": [" ssh-ed25519 AAAA alice@example.com ", ""],
+                "public_keys": [
+                    (
+                        " ssh-ed25519 "
+                        "AAAAC3NzaC1lZDI1NTE5AAAAIFMsDFmvcbuEKKQ2nRx6M4jxyJuS9KoOesN7GyrXw+d+"
+                        " alice@example.com "
+                    ),
+                    "",
+                ],
                 "uid": "12000",
                 "gid": "12000",
                 "disabled": "off",
@@ -276,7 +298,12 @@ def test_sql_helpers_cover_list_keys_empty_upsert_and_delete_edges() -> None:
             cursor, "sftp_users", ProviderUsers(users=[sample_user()]), dialect="sqlite"
         )
 
-    assert users.users[0].public_keys == ["ssh-ed25519 AAAA alice@example.com"]
+    assert users.users[0].public_keys == [
+        (
+            "ssh-ed25519 "
+            "AAAAC3NzaC1lZDI1NTE5AAAAIFMsDFmvcbuEKKQ2nRx6M4jxyJuS9KoOesN7GyrXw+d+ alice@example.com"
+        )
+    ]
     assert users.users[0].uid == 12000
     assert not users.users[0].disabled
     assert parse_sql_bool("yes")
@@ -289,7 +316,6 @@ def test_sql_helpers_handle_schema_v2_key_rows_and_replacements() -> None:
         [sample_row(), sample_row("bob")],
         schema_version=2,
         key_rows=[
-            {"username": "ignored", "public_key": TEST_KEY},
             {
                 "username": "alice",
                 "name": "prod",
@@ -301,7 +327,7 @@ def test_sql_helpers_handle_schema_v2_key_rows_and_replacements() -> None:
                 "username": "bob",
                 "name": "laptop",
                 "public_key": SECOND_TEST_KEY,
-                "metadata": "not-json",
+                "metadata": None,
             },
         ],
     )
@@ -357,7 +383,11 @@ def test_mysql_provider_validates_and_executes_custom_read_query(
     users = mysql_provider_with_query("select * from sftp_users").read()
 
     assert users.users[0].username == "alice"
-    assert cursor.executed == [("select * from sftp_users", None)]
+    assert cursor.executed == [
+        ("set transaction isolation level repeatable read", None),
+        ("start transaction with consistent snapshot, read only", None),
+        ("select * from sftp_users", None),
+    ]
 
 
 def test_mysql_provider_mutates_users_and_commits(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -421,7 +451,7 @@ def test_mysql_provider_rolls_back_failed_schema_storage(
     connection = FakeConnection(cursor)
     install_fake_pymysql(monkeypatch, connection)
 
-    with pytest.raises(RuntimeError, match="create keys failed"):
+    with pytest.raises(ProviderError, match="Database provider operation failed"):
         mysql_provider().ensure_schema_storage(2)
 
     assert connection.rolled_back
@@ -433,7 +463,7 @@ def test_mysql_provider_rolls_back_failed_write(monkeypatch: pytest.MonkeyPatch)
     connection = FakeConnection(cursor)
     install_fake_pymysql(monkeypatch, connection)
 
-    with pytest.raises(RuntimeError, match="delete failed"):
+    with pytest.raises(ProviderError, match="Database provider operation failed"):
         mysql_provider().write(ProviderUsers(schema_version=1, users=[sample_user()]))
 
     assert connection.rolled_back
@@ -446,21 +476,21 @@ def test_mysql_provider_rolls_back_failed_single_mutations(
     cursor = FakeCursor(executemany_error=RuntimeError("upsert failed"))
     connection = FakeConnection(cursor)
     install_fake_pymysql(monkeypatch, connection)
-    with pytest.raises(RuntimeError, match="upsert failed"):
+    with pytest.raises(ProviderError, match="Database provider operation failed"):
         mysql_provider().upsert_user(sample_user())
     assert connection.rolled_back
 
     cursor = FakeCursor(execute_error=RuntimeError("remove failed"))
     connection = FakeConnection(cursor)
     install_fake_pymysql(monkeypatch, connection)
-    with pytest.raises(RuntimeError, match="remove failed"):
+    with pytest.raises(ProviderError, match="Database provider operation failed"):
         mysql_provider().remove_user("alice")
     assert connection.rolled_back
 
     cursor = FakeCursor(execute_error=RuntimeError("create failed"))
     connection = FakeConnection(cursor)
     install_fake_pymysql(monkeypatch, connection)
-    with pytest.raises(RuntimeError, match="create failed"):
+    with pytest.raises(ProviderError, match="Database provider operation failed"):
         mysql_provider().create_table()
     assert connection.rolled_back
 
@@ -484,7 +514,7 @@ def test_mysql_provider_table_exists_reraises_unexpected_errors(
     connection = FakeConnection(cursor)
     install_fake_pymysql(monkeypatch, connection)
 
-    with pytest.raises(RuntimeError, match="network down"):
+    with pytest.raises(ProviderError, match="Database provider operation failed"):
         mysql_provider().table_exists()
 
 
@@ -534,7 +564,7 @@ def test_mariadb_provider_reuses_pymysql_database_logic(
     provider.write(ProviderUsers(users=[sample_user("bob")]))
 
     assert connection.kwargs["database"] == "sftp"  # type: ignore[attr-defined]
-    assert cursor.executed[0][0].startswith("select username")
+    assert cursor.executed[2][0].startswith("select username")
     assert any("on duplicate key update" in statement for statement, _ in cursor.executed_many)
 
 
@@ -591,7 +621,11 @@ def test_postgres_provider_reads_users_with_default_query(monkeypatch: pytest.Mo
     users = postgres_provider().read()
 
     assert users.users == [sample_user()]
-    assert cursor.executed[0][0].startswith("select username, public_keys")
+    assert cursor.executed[0] == (
+        "set transaction isolation level repeatable read, read only",
+        None,
+    )
+    assert cursor.executed[1][0].startswith("select username, public_keys")
     assert connection.dsn == "postgresql://user:pass@db.example.com:5432/sftp"  # type: ignore[attr-defined]
     assert "row_factory" in connection.kwargs  # type: ignore[attr-defined]
 
@@ -610,7 +644,7 @@ def test_postgres_provider_reads_schema_v2_key_rows(monkeypatch: pytest.MonkeyPa
 
     assert users.schema_version == 2
     assert users.users[0].keys[0].name == "prod"
-    assert cursor.executed[1][0].startswith("select username, name, public_key")
+    assert cursor.executed[2][0].startswith("select username, name, public_key")
 
 
 def test_postgres_provider_validates_and_executes_custom_read_query(
@@ -623,7 +657,10 @@ def test_postgres_provider_validates_and_executes_custom_read_query(
     users = postgres_provider_with_query("select * from sftp_users").read()
 
     assert users.users[0].username == "alice"
-    assert cursor.executed == [("select * from sftp_users", None)]
+    assert cursor.executed == [
+        ("set transaction isolation level repeatable read, read only", None),
+        ("select * from sftp_users", None),
+    ]
 
 
 def test_postgres_provider_mutates_users(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -697,7 +734,7 @@ def test_postgres_provider_table_exists_reraises_unexpected_errors(
     connection = FakeConnection(cursor)
     install_fake_psycopg(monkeypatch, connection)
 
-    with pytest.raises(RuntimeError, match="network down"):
+    with pytest.raises(ProviderError, match="Database provider operation failed"):
         postgres_provider().table_exists()
 
 

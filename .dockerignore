@@ -3,11 +3,14 @@
 !pyproject.toml
 !README.md
 !LICENSE
+!dist/
+!dist/*.whl
 
 !sftpwarden
 !sftpwarden/**
 
 !docker
+!docker/release-constraints.txt
 !docker/runtime
 !docker/runtime/**
 !docker/watcher

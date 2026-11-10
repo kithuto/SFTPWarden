@@ -1,11 +1,18 @@
 # Helm Commands
 
 `sftpwarden helm` is for projects configured with Kubernetes Helm mode. The
-commands use `helm`, values rendered from `sftpwarden.yaml`, and the configured
+commands use `helm`, values rendered from `sftpwarden.yaml` and the configured
 Kubernetes namespace/release.
 
 Source checkouts use the local `charts/sftpwarden` chart. Installed packages use
 the published OCI chart reference pinned to the installed SFTPWarden version.
+
+For a first deployment, follow [Operations](../operations.md#helm). The examples
+below are alternatives. A real upgrade can interrupt transfers.
+
+CLI upgrade prepares host identity and explicitly replaces the Pod. Direct Helm
+uses an `OnDelete` StatefulSet and requires the ordered
+[preparation and activation procedure](../recovery.md#kubernetes-identity-and-storage).
 
 ## `sftpwarden helm`
 
@@ -66,7 +73,7 @@ sftpwarden helm template --json
 
 ### Effects
 
-Writes current `values.yaml` in the project root, runs `helm template`, and
+Writes current `values.yaml` in the project root, runs `helm template` and
 prints the rendered manifests. It does not apply anything to a cluster.
 
 ## `sftpwarden helm lint`
@@ -91,6 +98,10 @@ linting. For published charts, it pulls the chart to a temporary directory befor
 running lint.
 
 ## `sftpwarden helm upgrade`
+
+Shares deploy's version inspection, backup recommendation, migration confirmation
+and activated-version verification. Required image/chart preflight precedes an
+upgrade's migrations. See [deploy](core.md#sftpwarden-deploy) and [Upgrade](upgrade.md).
 
 Installs or upgrades the Helm release and restarts the runtime StatefulSet after
 Helm succeeds.
@@ -119,8 +130,9 @@ A real upgrade can:
 
 - migrate provider data forward when `provider.user_schema` requires it;
 - write `values.yaml`;
-- run `helm upgrade` or `helm upgrade --install` with configured chart, namespace, and values;
-- run `kubectl rollout restart statefulset/<release>`;
+- run `helm upgrade` or `helm upgrade --install` with configured chart, namespace and values;
+- prepare and verify durable host identity before updating resources;
+- explicitly replace the Pod and verify applied configuration and fingerprints;
 - sync YAML/CSV provider data into the provider PVC as part of the deployment plan.
 
 ## `sftpwarden helm uninstall`
@@ -145,3 +157,9 @@ sftpwarden helm uninstall --yes
 
 A real uninstall runs `helm uninstall <release> --namespace <namespace>` with
 the configured kube context when one is set.
+
+Before uninstall, the CLI verifies that the installed Helm release records the
+retention policy for PVCs and Secrets. A live annotation alone is insufficient.
+Complete the prepared upgrade first for a legacy release. Retained claims can be
+reused under the same release name and namespace; do not delete them to resolve
+an ownership error. See [Recovery and upgrades](../recovery.md).

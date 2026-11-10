@@ -15,10 +15,13 @@ from sftpwarden.users.schemas.base import (
     KEY_LIFECYCLE,
     NAMED_KEY_METADATA,
     NAMED_KEYS,
+    SFTPUserAuthFields,
     UserSchema,
+    parse_csv_disabled,
 )
 from sftpwarden.users.schemas.registry import register_user_schema
 from sftpwarden.utils.errors import ProviderError
+from sftpwarden.utils.json import strict_json_value, validate_finite_json_numbers
 
 CSV_V2_FIELDNAMES = [
     "username",
@@ -56,8 +59,11 @@ class UserSchemaV2(UserSchema):
             if not isinstance(raw_user, dict):
                 raise ProviderError("Provider users must be mappings.")
             record = dict(raw_user)
-            keys = record.get("keys") or []
-            if not keys and record.get("public_keys"):
+            explicit_keys = "keys" in record
+            keys = record.get("keys", [])
+            if not isinstance(keys, list):
+                raise ProviderError("Schema v2 keys must be a list.")
+            if not explicit_keys and record.get("public_keys"):
                 keys = [
                     SFTPUserKey(
                         name=deterministic_key_name(public_key, prefix="key"),
@@ -66,6 +72,9 @@ class UserSchemaV2(UserSchema):
                     ).model_dump(mode="json", exclude_none=True)
                     for public_key in record.get("public_keys") or []
                 ]
+            if explicit_keys:
+                # An explicit named-key list, including [], is the authoritative policy.
+                record.pop("public_keys", None)
             record["keys"] = keys
             normalized_users.append(record)
         return ProviderUsers.model_validate(
@@ -81,6 +90,8 @@ class UserSchemaV2(UserSchema):
 
     def user_to_mapping(self, user: SFTPUser) -> dict[str, Any]:
         """Serialize one user as schema v2."""
+        for key in user.key_objects():
+            validate_finite_json_numbers(key.metadata)
         data = user.model_dump(mode="json", exclude_none=True, exclude={"public_keys"})
         data["keys"] = [
             key.model_dump(mode="json", exclude_none=True) for key in user.key_objects()
@@ -98,11 +109,11 @@ class UserSchemaV2(UserSchema):
     def user_from_csv_row(self, row: dict[str, str]) -> SFTPUser:
         """Deserialize one schema v2 CSV row."""
         try:
-            raw_keys = json.loads(row.get("keys") or "[]")
-        except json.JSONDecodeError as exc:
-            raise ProviderError(f"Invalid CSV keys JSON for user {row['username']}.") from exc
+            raw_keys = strict_json_value(row.get("keys") or "[]")
+        except ValueError:
+            raise ProviderError("Invalid CSV keys JSON.") from None
         if not isinstance(raw_keys, list):
-            raise ProviderError(f"CSV keys JSON must be a list for user {row['username']}.")
+            raise ProviderError("CSV keys JSON must be a list.")
         keys = [SFTPUserKey.model_validate(raw_key) for raw_key in raw_keys]
         return SFTPUser(
             username=row["username"],
@@ -113,14 +124,14 @@ class UserSchemaV2(UserSchema):
             gid=int(row["gid"]) if row.get("gid") else None,
             upload_dir=row.get("upload_dir") or "upload",
             comment=row.get("comment") or None,
-            disabled=(row.get("disabled") or "").lower() in {"1", "true", "yes"},
+            disabled=parse_csv_disabled(row.get("disabled")),
         )
 
     def csv_row_from_user(self, user: SFTPUser) -> dict[str, str | int | bool | None]:
         """Serialize one user to a schema v2 CSV row."""
         data = self.user_to_mapping(user)
         row = {field: data.get(field, "") for field in self.csv_fieldnames()}
-        row["keys"] = json.dumps(data.get("keys") or [], sort_keys=True)
+        row["keys"] = json.dumps(data.get("keys") or [], sort_keys=True, allow_nan=False)
         return row
 
     def auth_fields_from_public_keys(
@@ -128,7 +139,7 @@ class UserSchemaV2(UserSchema):
         public_keys: list[str],
         *,
         source: str,
-    ) -> dict[str, object]:
+    ) -> SFTPUserAuthFields:
         """Return schema v2 auth fields for public key input."""
         return {
             "public_keys": [],

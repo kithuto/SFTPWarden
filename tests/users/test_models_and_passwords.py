@@ -15,8 +15,8 @@ from sftpwarden.users.service import remove_user
 from sftpwarden.utils.errors import ProviderError
 
 TEST_HASH = "$6$rounds=500000$saltstring$hashvalue"
-TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForTests"
-SECOND_TEST_KEY = "ssh-ed25519 ZmFrZS11c2VyLW1vZGVsLTI="
+TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFMsDFmvcbuEKKQ2nRx6M4jxyJuS9KoOesN7GyrXw+d+"
+SECOND_TEST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGv5cJFgm0ffn6oHXkIseBv94l3DX7v+2vbF0+qWC+M6"
 
 
 def test_password_helpers_validate_inputs() -> None:
@@ -30,8 +30,7 @@ def test_password_helpers_validate_inputs() -> None:
 
 
 def test_user_model_validation_edges() -> None:
-    with pytest.raises(ValidationError, match="requires at least one"):
-        SFTPUser(username="empty")
+    assert SFTPUser(username="empty").key_objects() == []
     with pytest.raises(ValidationError, match="Username"):
         SFTPUser(username="BadUser", password_hash=TEST_HASH)
     with pytest.raises(ValidationError, match="SSH public key"):
@@ -86,7 +85,7 @@ def test_named_key_model_derives_fingerprint_and_validates_duplicates() -> None:
             username="alice",
             keys=[
                 SFTPUserKey(name="prod-ci", public_key=TEST_KEY),
-                SFTPUserKey(name="prod-ci", public_key=TEST_KEY.replace("Tests", "Test2")),
+                SFTPUserKey(name="prod-ci", public_key=SECOND_TEST_KEY),
             ],
         )
     with pytest.raises(ValidationError, match="duplicate key fingerprints"):

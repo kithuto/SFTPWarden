@@ -84,12 +84,14 @@ def first_schema_with_capability(capability: str, *, from_version: int = 1) -> i
 
 
 def _supported_versions() -> tuple[int, ...]:
+    """Return registered provider user schema versions."""
     from sftpwarden.users.schemas.registry import supported_user_schemas
 
     return supported_user_schemas()
 
 
 def _next_migration(source_version: int, target_version: int) -> UserSchemaMigration:
+    """Return the next forward migration toward the target schema."""
     candidates = [
         migration_class
         for (from_version, to_version), migration_class in _MIGRATIONS.items()

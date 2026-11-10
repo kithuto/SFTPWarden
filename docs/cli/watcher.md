@@ -1,12 +1,29 @@
 # Watcher And Sync Commands
 
+`upgrade` replaces an installed managed watcher while preserving checkpoints and
+activation preferences. Repeating installation for the same backend also checks
+whether replacement is needed. An inactive installation stays inactive; custom
+Docker images remain unchanged. A current verified installation is a no-op.
+Process startup is verified before replacement is recorded as complete.
+
+The 1.4.0 file-delivery watcher requires the 1.4.0 runtime protocol and provider
+directory layout. Upgrade inspects contexts before changing anything and requires
+explicit all-context deployment consent when compatibility cannot be preserved.
+See [Upgrade](upgrade.md) for this confirmation and interrupted-operation recovery.
+
 The watcher exists for remote `local-sync` contexts. It syncs editable user
 provider files from the local project to the remote project. It does not sync
-`sftpwarden.yaml`, and it does not apply deployment-level config changes. Use
+`sftpwarden.yaml` and it does not apply deployment-level config changes. Use
 `sftpwarden deploy` for config changes.
 
-Editable provider files are derived by code from the provider type and project
-config. The watcher targets YAML, CSV, and SQLite providers when the provider
+Choose `sync` to inspect eligible files, `watch` to run in the foreground or
+`watcher install` to manage a background service. `sync` alone never copies files.
+Use [Operations](../operations.md#watcher) for the installation procedure.
+
+Examples below are alternatives. A foreground watch keeps running until stopped
+with Ctrl+C; do not expect the next shell command to start automatically.
+
+Editable provider files are selected from the provider type and project config. The watcher targets YAML, CSV and SQLite providers when the provider
 file exists locally.
 
 ## `sftpwarden sync`
@@ -52,12 +69,13 @@ sftpwarden watch --dry-run
 
 ### Effects
 
-This command keeps running until stopped. It uses `scp` on Windows and `rsync`
-elsewhere, according to the implementation.
+This command keeps running until stopped. It sends validated provider snapshots
+through native SSH on Linux, macOS and Windows, then verifies their visibility
+inside the runtime before acknowledging delivery.
 
 ## `sftpwarden watcher`
 
-Command group for installing, inspecting, and uninstalling a local watcher
+Command group for installing, inspecting and uninstalling a local watcher
 backend.
 
 ```bash
@@ -83,7 +101,7 @@ sftpwarden watcher status --json
 
 | Flag | Value | Default | What it does |
 | --- | --- | --- | --- |
-| `--json` | flag | false | Prints installed state, mode, path, activation state, and targets as JSON. |
+| `--json` | flag | false | Prints installed state, mode, path, activation state and targets as JSON. |
 
 ### Effects
 
@@ -107,7 +125,7 @@ sftpwarden watcher install --dry-run
 
 | Flag | Value | Default | What it does |
 | --- | --- | --- | --- |
-| `--watcher`, `--mode` | `auto`, `systemd`, `openrc`, `runit`, `supervisord`, `launchd`, `windows-task`, or `docker` | configured default, normally `auto` | Watcher backend to install. `--mode` is an alias. |
+| `--watcher`, `--mode` | `auto`, `systemd`, `openrc`, `runit`, `supervisord`, `launchd`, `windows-task` or `docker` | configured default, normally `auto` | Watcher backend to install. `--mode` is an alias. |
 | `--image` | Docker image reference | none | Docker watcher image override. Valid only when the resolved watcher mode is `docker`. |
 | `--activate` / `--no-activate` | flag pair | `--activate` in the CLI command | Controls whether SFTPWarden starts/enables the watcher after writing files. |
 | `--yes`, `-y` | flag | false | Accepts replacement prompts and allows Docker fallback when `auto` finds no native scheduler. |
@@ -143,4 +161,4 @@ sftpwarden watcher uninstall --dry-run
 ### Effects
 
 A real uninstall deactivates the scheduler if the watcher was activated, removes
-the generated watcher file, and clears watcher metadata.
+the generated watcher file and clears watcher metadata.

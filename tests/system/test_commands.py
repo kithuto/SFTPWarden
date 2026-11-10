@@ -49,3 +49,26 @@ def test_command_text_quotes_arguments() -> None:
     assert command_text(["ssh", "host", "cd /tmp/path with space"]) == (
         "ssh host 'cd /tmp/path with space'"
     )
+
+
+def test_private_standard_input_is_delivered_without_error_disclosure():
+    secret = "synthetic-private-value"
+    result = run_checked(
+        [sys.executable, "-c", "import sys; print(len(sys.stdin.read()))"],
+        input_text=secret,
+        error_type=RuntimeError,
+        message="failed",
+        fallback_suggestion="retry",
+    )
+    assert result.stdout.strip() == str(len(secret))
+    with pytest.raises(RuntimeError) as error:
+        run_checked(
+            [sys.executable, "-c", "import sys; sys.stderr.write(sys.stdin.read()); sys.exit(1)"],
+            input_text=secret,
+            private_output=True,
+            error_type=RuntimeError,
+            message="failed",
+            fallback_suggestion="retry",
+        )
+    assert secret not in str(error.value)
+    assert error.value.suggestion == "retry"

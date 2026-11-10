@@ -1,0 +1,70 @@
+name: External candidate checks
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  external:
+    name: ${{ matrix.group }} / ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [policy, deployment, delivery, databases, recovery]
+        arch: [amd64, arm64]
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      SFTPWARDEN_TEST_INSTALLED_ARTIFACT: "1"
+      SFTPWARDEN_DISPOSABLE_SYSTEMD_RUNNER: "1"
+      SFTPWARDEN_RELEASE_RUNTIME_IMAGE: sftpwarden-candidate:${{ github.sha }}-${{ matrix.arch }}
+      SFTPWARDEN_RELEASE_WATCHER_IMAGE: sftpwarden-watcher-candidate:${{ github.sha }}-${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        if: matrix.group == 'deployment'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-packages
+          path: dist
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-images-${{ matrix.arch }}
+          path: candidate-images
+      - name: Load exact candidate bytes and install the wheel
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          python tools/release_artifacts.py verify dist --commit "$GITHUB_SHA"
+          python tools/release_artifacts.py verify candidate-images --commit "$GITHUB_SHA"
+          docker load --input "candidate-images/runtime-$ARCH.tar.gz"
+          docker load --input "candidate-images/watcher-$ARCH.tar.gz"
+          python -m pip install --constraint docker/release-constraints.txt "$(find dist -maxdepth 1 -name '*.whl')[mysql,postgres,mongodb]" pytest
+      - name: Run the assigned real-environment group
+        env:
+          ARCH: ${{ matrix.arch }}
+          GROUP: ${{ matrix.group }}
+        run: |
+          selection="release_external"
+          if [ "$ARCH" = arm64 ]; then selection="$selection and not release_upgrade"; fi
+          python -I tools/run_release_gates.py "$GROUP" -m "$selection" --maxfail=1 --junitxml=external-results.xml -o junit_family=xunit1 -vv --tb=short
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: candidate-external-${{ matrix.arch }}-${{ matrix.group }}
+          path: external-results.xml
+          if-no-files-found: error

@@ -13,11 +13,13 @@ from sftpwarden.cli_commands.output import (
     runtime_plan_to_json,
 )
 from sftpwarden.runtime import (
-    apply_once,
     build_runtime_plan,
     load_runtime_inputs,
     run_sync_loop,
 )
+from sftpwarden.runtime.configuration import check_desired_provider
+from sftpwarden.runtime.execution import execute_pass as apply_once
+from sftpwarden.runtime.probes import Probe
 from sftpwarden.services.health import runtime_health as runtime_health_report
 from sftpwarden.utils.console import console, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
@@ -26,6 +28,12 @@ from sftpwarden.utils.errors import SFTPWardenError
 @runtime_app.command("refresh")
 def runtime_refresh(
     config: Annotated[str, typer.Option("--config")] = "/etc/sftpwarden/sftpwarden.yaml",
+    desired_provider_fingerprint: Annotated[
+        str | None, typer.Option("--desired-provider-fingerprint", hidden=True)
+    ] = None,
+    desired_config_fingerprint: Annotated[
+        str | None, typer.Option("--desired-config-fingerprint", hidden=True)
+    ] = None,
 ) -> None:
     """Force one runtime synchronization pass.
 
@@ -35,9 +43,19 @@ def runtime_refresh(
         Runtime config path inside the container.
     """
     try:
+        if desired_provider_fingerprint is not None or desired_config_fingerprint is not None:
+            deploy_required = check_desired_provider(
+                config,
+                desired_provider_fingerprint=desired_provider_fingerprint,
+                desired_config_fingerprint=desired_config_fingerprint,
+            )
+        else:
+            deploy_required = check_desired_provider(config)
         with terminal_status("Refreshing runtime users"):
             output = apply_once(config, force=True)
         console.print(output)
+        if deploy_required:
+            console.print("Pending configuration changes require `sftpwarden deploy`.")
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -93,6 +111,7 @@ def runtime_sync(
 def runtime_health(
     config: Annotated[str, typer.Option("--config")] = "/etc/sftpwarden/sftpwarden.yaml",
     json_output: Annotated[bool, typer.Option("--json")] = False,
+    probe: Annotated[Probe, typer.Option("--probe")] = "readiness",
 ) -> None:
     """Check runtime-internal health without applying changes.
 
@@ -102,9 +121,11 @@ def runtime_health(
         Runtime config path inside the container.
     json_output
         Whether to emit JSON.
+    probe
+        Select readiness, liveness, or startup semantics.
     """
     try:
-        report = runtime_health_report(config)
+        report = runtime_health_report(config, probe=probe)
         if json_output:
             print_json(report.as_dict())
             raise typer.Exit(0 if report.healthy else 1)

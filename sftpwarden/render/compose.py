@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from typing import Any
 
 import yaml
 
 from sftpwarden.config import FILE_PROVIDER_TYPES, SFTPWardenConfig, provider_local_path
+from sftpwarden.security.environment import dsn_environment_names
 from sftpwarden.utils._version import get_version
-from sftpwarden.utils.constants import CONTAINER_CONFIG_PATH
+from sftpwarden.utils.constants import CONTAINER_CONFIG_PATH, CONTAINER_PROVIDER_DATA_DIR
+from sftpwarden.utils.errors import ConfigError
 from sftpwarden.utils.paths import expand_path, source_root
+from sftpwarden.utils.persistence import atomic_bytes
 
 DEFAULT_LOCAL_RUNTIME_IMAGE = "sftpwarden:local"
 GHCR_RUNTIME_IMAGE_REPOSITORY = "ghcr.io/kithuto/sftpwarden"
@@ -51,7 +55,7 @@ def compose_model(
     project_root: str | Path = ".",
     *,
     allow_local_build: bool = True,
-) -> dict:
+) -> dict[str, Any]:
     """Build a Docker Compose model for the runtime.
 
     Parameters
@@ -72,19 +76,37 @@ def compose_model(
     image = runtime_image_reference(config, allow_local_build=allow_local_build)
     volumes = [
         f"./sftpwarden.yaml:{CONTAINER_CONFIG_PATH}:ro",
-        "./data:/data",
-        "./state:/var/lib/sftpwarden",
-        "./host_keys:/etc/sftpwarden/host_keys",
+        f"./data:{config.server.data_dir}",
+        f"./state:{config.server.state_dir}",
+        f"./host_keys:{config.server.host_keys_dir}",
     ]
     if config.provider.type in FILE_PROVIDER_TYPES:
         provider_path = provider_local_path(root, config)
-        volumes.insert(1, f"./{provider_path.name}:{config.provider.path}:ro")
+        if PurePosixPath(config.provider.path).parent == PurePosixPath(CONTAINER_PROVIDER_DATA_DIR):
+            volumes.insert(1, f"./provider:{CONTAINER_PROVIDER_DATA_DIR}:ro")
+        else:
+            volumes.insert(1, f"./{provider_path.name}:{config.provider.path}:ro")
     healthcheck = config.healthcheck
+    environment = {
+        "SFTPWARDEN_CONFIG": CONTAINER_CONFIG_PATH,
+        "SFTPWARDEN_HOST_KEYS_DIR": config.server.host_keys_dir,
+    }
+    for name in dsn_environment_names(config.provider.dsn or ""):
+        if name in environment:
+            raise ConfigError("Provider DSN references a reserved runtime environment variable.")
+        environment[name] = f"${{{name}:?Required provider environment variable is missing}}"
     service = {
         "container_name": config.docker.container_name,
         "image": image.image,
-        "ports": [f"{config.server.port}:22"],
-        "environment": {"SFTPWARDEN_CONFIG": CONTAINER_CONFIG_PATH},
+        "ports": [
+            {
+                "target": 22,
+                "published": str(config.server.port),
+                "host_ip": config.server.host,
+                "protocol": "tcp",
+            }
+        ],
+        "environment": environment,
         "volumes": volumes,
         "restart": config.docker.restart,
         "read_only": False,
@@ -163,7 +185,5 @@ def write_compose(
     """
     root = expand_path(project_root)
     target = root / config.docker.compose_file
-    target.write_text(
-        compose_text(config, root, allow_local_build=allow_local_build), encoding="utf-8"
-    )
+    atomic_bytes(target, compose_text(config, root, allow_local_build=allow_local_build).encode())
     return target

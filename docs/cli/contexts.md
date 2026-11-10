@@ -2,7 +2,15 @@
 
 A context is a named environment registered on the operator machine. It tells
 SFTPWarden where the project lives, which provider it uses, whether it is local
-or remote, and how remote sync should work.
+or remote and how remote sync should work.
+
+Changing your shell directory does not change the active context.
+`context use` selects an installation; `context clear` only clears that
+selection. `context remove` is a cleanup operation that can stop a runtime and
+delete a project directory. Read its effects before using it.
+
+Examples below are alternatives. Inspect `context show` before commands that
+change an installation.
 
 ## `sftpwarden context`
 
@@ -49,7 +57,7 @@ removes stale local registry and watcher traces but does not connect to the
 remote host or delete remote files.
 
 Remote-only contexts have no local project folder to prune. Real remote commands
-such as `deploy`, `refresh`, `health`, or `backup` detect missing remote roots
+such as `deploy`, `refresh`, `health` or `backup` detect missing remote roots
 when they connect.
 
 ## `sftpwarden context current`
@@ -142,7 +150,7 @@ sftpwarden context add archive deploy@example.com:/opt/sftpwarden --remote-only 
 | Flag | Value | Default | What it does |
 | --- | --- | --- | --- |
 | `--root` | `PATH` | `.` | Local project root for local and remote local-sync contexts. |
-| `--provider` | `yaml`, `csv`, `sqlite`, `mysql`, `mariadb`, `postgresql`, `mongodb` | provider from local config, or global default for remote | Provider type stored in the registry. |
+| `--provider` | `yaml`, `csv`, `sqlite`, `mysql`, `mariadb`, `postgresql`, `mongodb` | provider from local config or global default for remote | Provider type stored in the registry. |
 | `--user` | `TEXT` | parsed from remote URL or SSH default | Remote SSH user. |
 | `--port` | `INTEGER` | global SSH default | Remote SSH port. |
 | `--remote-root` | `PATH` | global remote root | Explicit remote project root. |
@@ -238,7 +246,7 @@ sftpwarden context type local --yes
 
 | Argument | Required | Value | What it means |
 | --- | --- | --- | --- |
-| `FIELD` | Yes | one supported field command | Registry field command, such as `root`, `type`, or `remote-root`. |
+| `FIELD` | Yes | one supported field command | Registry field command, such as `root`, `type` or `remote-root`. |
 | `VALUE` | No | YAML-like scalar text | Replacement value. Omit it to read the current value. |
 
 ### Options
@@ -253,7 +261,7 @@ sftpwarden context type local --yes
 | `--remote-root` | `PATH` | existing or default remote root | Remote root used by type conversion. |
 | `--remote-only` | flag | false | Creates a remote-only registry entry when converting to remote. |
 | `--delete-old-root` | flag | false | Deletes the previous local root after copying it during `root` migration. |
-| `--yes`, `-y` | flag | false | Accepts prompts for root copy/delete, remote-root updates, type conversion, and watcher cleanup. |
+| `--yes`, `-y` | flag | false | Accepts prompts for root copy/delete, remote-root updates, type conversion and watcher cleanup. |
 
 ### Supported Field Commands
 

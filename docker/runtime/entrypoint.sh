@@ -1,7 +1,6 @@
 #!/bin/sh
 set -eu
 
-HOST_KEYS_DIR="${SFTPWARDEN_HOST_KEYS_DIR:-/etc/sftpwarden/host_keys}"
 NOFILE_LIMIT="${SFTPWARDEN_NOFILE_LIMIT:-65536}"
 
 case "$NOFILE_LIMIT" in
@@ -21,18 +20,8 @@ if [ "$CURRENT_NOFILE" = "unlimited" ] || [ "$CURRENT_NOFILE" -gt "$NOFILE_LIMIT
   ulimit -n "$NOFILE_LIMIT"
 fi
 
-mkdir -p "$HOST_KEYS_DIR" /etc/sftpwarden/authorized_keys /var/lib/sftpwarden /data /run/sshd
-chmod 700 "$HOST_KEYS_DIR"
+mkdir -p /etc/sftpwarden/authorized_keys /var/lib/sftpwarden /data /run/sshd
+python -m sftpwarden.runtime.recovery
+python -m sftpwarden.runtime.host_keys
 
-if [ ! -f "$HOST_KEYS_DIR/ssh_host_ed25519_key" ]; then
-  ssh-keygen -q -t ed25519 -N "" -f "$HOST_KEYS_DIR/ssh_host_ed25519_key"
-fi
-
-if [ ! -f "$HOST_KEYS_DIR/ssh_host_rsa_key" ]; then
-  ssh-keygen -q -t rsa -b 4096 -N "" -f "$HOST_KEYS_DIR/ssh_host_rsa_key"
-fi
-
-sftpwarden runtime refresh --config "$SFTPWARDEN_CONFIG"
-sftpwarden runtime sync --config "$SFTPWARDEN_CONFIG" &
-
-exec "$@"
+exec python -m sftpwarden.runtime.supervisor "$@"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated
 
@@ -12,8 +13,8 @@ from sftpwarden.cli_commands.app import app, user_app, user_key_app
 from sftpwarden.cli_commands.errors import handle_error
 from sftpwarden.cli_commands.output import print_json
 from sftpwarden.cli_commands.prompts import prompt_password_hash
-from sftpwarden.services.cli_workflows import print_refresh_after_user_change
-from sftpwarden.services.users import UserService
+from sftpwarden.cli_commands.workflows import print_refresh_after_user_change
+from sftpwarden.services.users import UserKeyMutationResult, UserService
 from sftpwarden.users.schemas import (
     KEY_LIFECYCLE,
     first_schema_with_capability,
@@ -596,7 +597,7 @@ def user_key_import(
             dry_run=dry_run,
         )
         report_key_mutation("Imported", username, f"{len(key_files)} key(s)", result)
-        if not no_refresh and result.runtime_changed and not dry_run:
+        if not no_refresh and result.runtime_changed and not dry_run and not result.schema_migrated:
             print_refresh_after_user_change(service.context)
     except SFTPWardenError as exc:
         handle_error(exc)
@@ -612,7 +613,7 @@ def mutate_advanced_key(
     yes: bool,
     dry_run: bool,
     no_refresh: bool,
-    operation,
+    operation: Callable[[UserService], UserKeyMutationResult],
 ) -> None:
     """Run a key operation that requires schema v2 metadata."""
     try:
@@ -620,7 +621,7 @@ def mutate_advanced_key(
         confirm_key_schema_migration(service, label.lower(), yes=yes, dry_run=dry_run)
         result = operation(service)
         report_key_mutation(label, username, key_name, result)
-        if not no_refresh and result.runtime_changed and not dry_run:
+        if not no_refresh and result.runtime_changed and not dry_run and not result.schema_migrated:
             print_refresh_after_user_change(service.context)
     except SFTPWardenError as exc:
         handle_error(exc)
@@ -658,13 +659,20 @@ def confirm_key_schema_migration(
         raise typer.Exit(1)
 
 
-def report_key_mutation(label: str, username: str, key_name: str, result) -> None:
+def report_key_mutation(
+    label: str, username: str, key_name: str, result: UserKeyMutationResult
+) -> None:
     """Print a standard key mutation message."""
     prefix = "Dry run: would" if result.dry_run else label
     migration = " after migrating provider to schema v2" if result.schema_migrated else ""
     console.print(
         f"{prefix} key [bold]{key_name}[/bold] for user [bold]{username}[/bold]{migration}."
     )
+    if result.schema_migrated and not result.dry_run:
+        console.print(
+            "Provider schema and configuration were updated. Run `sftpwarden deploy` "
+            "to apply this change to the runtime."
+        )
 
 
 def key_import_entries(from_dir: Path, *, explicit_name: str | None) -> list[tuple[str, str]]:

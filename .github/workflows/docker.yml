@@ -1,181 +1,98 @@
-name: Docker
+name: Candidate images
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "docker/**"
-      - "sftpwarden/**"
-      - "charts/**"
-      - "pyproject.toml"
-      - ".dockerignore"
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
 
 permissions:
   contents: read
-  packages: write
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-  WATCHER_IMAGE_NAME: ${{ github.repository }}-watcher
+defaults:
+  run:
+    shell: bash
 
 jobs:
-  version:
-    runs-on: ubuntu-latest
-    outputs:
-      changed: ${{ steps.version.outputs.changed }}
-      version: ${{ steps.version.outputs.version }}
-
+  images:
+    name: Build and verify ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      SFTPWARDEN_TEST_INSTALLED_ARTIFACT: "1"
+      SFTPWARDEN_DISPOSABLE_SYSTEMD_RUNNER: "1"
+      SFTPWARDEN_RELEASE_RUNTIME_IMAGE: sftpwarden-candidate:${{ github.sha }}-${{ matrix.arch }}
+      SFTPWARDEN_RELEASE_WATCHER_IMAGE: sftpwarden-watcher-candidate:${{ github.sha }}-${{ matrix.arch }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          fetch-depth: 0
-
-      - name: Check package version change
-        id: version
+          python-version: "3.14"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: candidate-packages
+          path: dist
+      - name: Verify candidate package bytes
+        run: python tools/release_artifacts.py verify dist --commit "$GITHUB_SHA"
+      - name: Build each image once from the candidate wheel
         env:
-          BEFORE_SHA: ${{ github.event.before }}
+          VERSION: ${{ inputs.version }}
         run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          import os
-          import subprocess
-          import tomllib
-          from pathlib import Path
-
-          def read_version(text: str) -> str:
-              return tomllib.loads(text)["project"]["version"]
-
-          current = read_version(Path("pyproject.toml").read_text(encoding="utf-8"))
-          previous = ""
-          before = os.environ.get("BEFORE_SHA", "")
-          if before and before != "0" * 40:
-              result = subprocess.run(
-                  ["git", "show", f"{before}:pyproject.toml"],
-                  capture_output=True,
-                  check=False,
-                  text=True,
-              )
-              if result.returncode == 0:
-                  previous = read_version(result.stdout)
-
-          changed = previous != current
-          print(f"version={current}")
-          print(f"previous_version={previous}")
-          print(f"changed={str(changed).lower()}")
-          PY
-
-  build:
-    needs: version
-    if: needs.version.outputs.changed == 'true'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7.0.0
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4.2.0
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v4.4.0
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Runtime metadata
-        id: runtime-meta
-        uses: docker/metadata-action@v6.2.0
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=${{ needs.version.outputs.version }}
-            type=raw,value=latest
-
-      - name: Watcher metadata
-        id: watcher-meta
-        uses: docker/metadata-action@v6.2.0
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.WATCHER_IMAGE_NAME }}
-          tags: |
-            type=raw,value=${{ needs.version.outputs.version }}
-            type=raw,value=latest
-
-      - name: Build runtime image
-        uses: docker/build-push-action@v7.3.0
-        with:
-          context: .
-          file: docker/runtime/Dockerfile
-          load: true
-          tags: sftpwarden:ci
-
-      - name: Runtime smoke test
+          docker build --target runtime-wheel --label "org.opencontainers.image.version=$VERSION" --label "org.opencontainers.image.revision=$GITHUB_SHA" -t "$SFTPWARDEN_RELEASE_RUNTIME_IMAGE" -f docker/runtime/Dockerfile .
+          docker build --target watcher-wheel --label "org.opencontainers.image.version=$VERSION" --label "org.opencontainers.image.revision=$GITHUB_SHA" -t "$SFTPWARDEN_RELEASE_WATCHER_IMAGE" -f docker/watcher/Dockerfile .
+      - name: Install the candidate, not an editable checkout
         run: |
-          docker run --rm --entrypoint sh sftpwarden:ci -c 'command -v sshd && command -v sftpwarden && sftpwarden --version && grep -q "^Port 22$" /etc/ssh/sshd_config'
-
-      - name: Build watcher image
-        uses: docker/build-push-action@v7.3.0
-        with:
-          context: .
-          file: docker/watcher/Dockerfile
-          load: true
-          tags: sftpwarden-watcher:ci
-
-      - name: Watcher smoke test
+          python -m pip install --constraint docker/release-constraints.txt "$(find dist -maxdepth 1 -name '*.whl')[mysql,postgres,mongodb]" pytest pip-audit
+          python -I -c "import pathlib,sftpwarden; assert not pathlib.Path(sftpwarden.__file__).is_relative_to(pathlib.Path.cwd())"
+          python -m pip_audit
+      - name: Check bounded load before the expensive external groups
         run: |
-          docker run --rm --entrypoint sh sftpwarden-watcher:ci -c 'command -v sftpwarden && sftpwarden --version && test ! -S /var/run/docker.sock'
-
-      - name: Publish runtime image
-        uses: docker/build-push-action@v7.3.0
+          python -I tools/run_release_gates.py load --junitxml=load-results.xml -o junit_family=xunit1 -vv --tb=short
+      - name: Verify watcher artifact
+        run: docker run --rm --entrypoint sftpwarden "$SFTPWARDEN_RELEASE_WATCHER_IMAGE" --version
+      - name: Record the tested runtime dependency inventory
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
-          context: .
-          file: docker/runtime/Dockerfile
-          push: true
-          tags: ${{ steps.runtime-meta.outputs.tags }}
-          labels: ${{ steps.runtime-meta.outputs.labels }}
-
-      - name: Publish watcher image
-        uses: docker/build-push-action@v7.3.0
+          image: ${{ env.SFTPWARDEN_RELEASE_RUNTIME_IMAGE }}
+          output-file: runtime-sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Record the tested watcher dependency inventory
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
-          context: .
-          file: docker/watcher/Dockerfile
-          push: true
-          tags: ${{ steps.watcher-meta.outputs.tags }}
-          labels: ${{ steps.watcher-meta.outputs.labels }}
-
-  publish-helm-chart:
-    needs: [version, build]
-    if: needs.version.outputs.changed == 'true'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7.0.0
-
-      - name: Set up Helm
-        uses: azure/setup-helm@v5.0.1
-
-      - name: Verify Helm chart version
+          image: ${{ env.SFTPWARDEN_RELEASE_WATCHER_IMAGE }}
+          output-file: watcher-sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Save the candidate images for parallel validation without rebuilding
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ inputs.version }}
         run: |
-          python tools/verify_helm_release_metadata.py --version "$VERSION"
-
-      - name: Log in to GHCR for Helm
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "$GITHUB_TOKEN" | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
-
-      - name: Publish Helm chart
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-          OWNER: ${{ github.repository_owner }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          owner="${OWNER,,}"
-          mkdir -p dist
-          helm lint charts/sftpwarden
-          helm package charts/sftpwarden --destination dist --version "$VERSION" --app-version "$VERSION"
-          helm push "dist/sftpwarden-${VERSION}.tgz" "oci://ghcr.io/${owner}/charts"
+          mkdir candidate-images
+          docker save "$SFTPWARDEN_RELEASE_RUNTIME_IMAGE" | gzip -n > "candidate-images/runtime-$ARCH.tar.gz"
+          docker save "$SFTPWARDEN_RELEASE_WATCHER_IMAGE" | gzip -n > "candidate-images/watcher-$ARCH.tar.gz"
+          docker image inspect "$SFTPWARDEN_RELEASE_RUNTIME_IMAGE" "$SFTPWARDEN_RELEASE_WATCHER_IMAGE" > candidate-images/image-identities.json
+          cp runtime-sbom.spdx.json watcher-sbom.spdx.json load-results.xml candidate-images/
+          python tools/release_artifacts.py record candidate-images --commit "$GITHUB_SHA" --version "$VERSION"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: candidate-images-${{ matrix.arch }}
+          path: candidate-images/*
+          if-no-files-found: error
+      - name: Retain failure evidence without test homes or credentials
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: candidate-failure-${{ matrix.arch }}
+          path: |
+            load-results.xml

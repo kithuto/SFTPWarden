@@ -14,21 +14,28 @@ from sftpwarden.cli_commands.deploy_schema import (
     apply_provider_schema_before_deploy,
     provider_schema_deploy_text,
 )
+from sftpwarden.cli_commands.deploy_upgrade import prepare_upgrade
 from sftpwarden.cli_commands.errors import handle_error
 from sftpwarden.cli_commands.output import print_json
-from sftpwarden.config import SFTPWardenConfig, load_config
-from sftpwarden.contexts import resolve_context
+from sftpwarden.cli_commands.update_notice import notify_update
+from sftpwarden.config import KubernetesMode, SFTPWardenConfig, load_config
+from sftpwarden.contexts import ContextEntry, resolve_context
 from sftpwarden.render.kubernetes import HELM_VALUES_FILE, helm_values_text, write_helm_values
 from sftpwarden.services.deploy import (
+    DeploymentPlan,
     HelmChartReference,
+    apply_kubernetes_deployment,
     helm_chart_reference,
     helm_command,
     helm_deployment_plan,
     translate_command_failure,
 )
+from sftpwarden.services.deployment_upgrade import begin_upgrade, complete_upgrade
 from sftpwarden.system.commands import CommandResult, run
 from sftpwarden.utils.console import console, print_success, terminal_status
 from sftpwarden.utils.errors import SFTPWardenError
+from sftpwarden.utils.paths import contexts_path
+from sftpwarden.utils.state_transactions import serialized_state
 
 
 @helm_app.command("values")
@@ -112,6 +119,7 @@ def helm_lint(
 
 
 @helm_app.command("upgrade")
+@serialized_state(contexts_path)
 def helm_upgrade(
     context: Annotated[str | None, typer.Option("--context", "-c")] = None,
     install: Annotated[bool, typer.Option("--install")] = False,
@@ -121,8 +129,20 @@ def helm_upgrade(
 ) -> None:
     """Install or upgrade the Helm release."""
     try:
-        entry, loaded = _load_context_config(context, None)
-        schema_result = apply_provider_schema_before_deploy(entry, loaded, dry_run=dry_run, yes=yes)
+        entry, loaded = _load_context_config(context, None, read_only=dry_run)
+        upgrade = prepare_upgrade(
+            entry,
+            dry_run=dry_run,
+            yes=yes,
+            json_output=json_output,
+            kubernetes_mode=KubernetesMode.HELM,
+        )
+        if not dry_run:
+            begin_upgrade(entry, upgrade)
+            loaded = load_config(entry.config)
+        schema_result = apply_provider_schema_before_deploy(
+            entry, loaded, dry_run=dry_run, yes=True
+        )
         plan = helm_deployment_plan(entry, loaded)
         commands = _helm_upgrade_commands(plan, install=install)
         if not commands:
@@ -133,6 +153,7 @@ def helm_upgrade(
                     {
                         "dry_run": True,
                         "plan": plan.as_dict(),
+                        "upgrade": upgrade.as_dict(),
                         "command": commands[0],
                         "commands": commands,
                         "provider_schema": (
@@ -146,29 +167,27 @@ def helm_upgrade(
                 console.print(schema_text)
             console.print("\n".join(" ".join(command) for command in commands))
             return
-        if entry.root:
-            if schema_result and schema_result.changed:
-                print_success(provider_schema_deploy_text(schema_result))
-                if schema_result.backup_path:
-                    console.print(f"Backup: {schema_result.backup_path}")
-            write_helm_values(loaded, entry.root)
-        results = []
+        if entry.root and schema_result and schema_result.changed and not json_output:
+            print_success(provider_schema_deploy_text(schema_result))
+            if schema_result.backup_path:
+                console.print(f"Backup: {schema_result.backup_path}")
         with terminal_status("Applying Helm release"):
-            for command in commands:
-                result = run(command, cwd=entry.root)
-                if result.returncode != 0:
-                    raise translate_command_failure(result)
-                results.append(result.stdout.strip())
+            result = apply_kubernetes_deployment(
+                entry, loaded, mode=KubernetesMode.HELM, install=install, runner=run
+            )
+            upgraded = complete_upgrade(entry, upgrade)
         if json_output:
             print_json(
                 {
                     "dry_run": False,
                     "plan": plan.as_dict(),
-                    "result": "\n".join(output for output in results if output),
+                    "result": result,
+                    "upgrade": upgraded,
                 }
             )
             return
         print_success("Helm release applied.")
+        notify_update()
     except SFTPWardenError as exc:
         handle_error(exc)
 
@@ -181,7 +200,11 @@ def helm_uninstall(
 ) -> None:
     """Uninstall the Helm release with explicit confirmation."""
     try:
-        _entry, loaded = _load_context_config(context, None)
+        _entry, loaded = _load_context_config(context, None, read_only=dry_run)
+        if not dry_run:
+            from sftpwarden.services.kubernetes_identity import pin_context
+
+            loaded = pin_context(loaded)
         command = helm_command(
             loaded,
             ["uninstall", loaded.kubernetes.release, "--namespace", loaded.kubernetes.namespace],
@@ -191,16 +214,29 @@ def helm_uninstall(
             return
         if not yes and not Confirm.ask("Uninstall Helm release?", default=False):
             raise typer.Exit(1)
-        result = run(command)
-        if result.returncode != 0:
-            raise translate_command_failure(result)
+        from sftpwarden.services.kubernetes_identity import ensure_release_retention
+        from sftpwarden.services.kubernetes_lock import operation_lock
+
+        with operation_lock(loaded, "uninstall"):
+            ensure_release_retention(loaded)
+            result = run(command)
+            if result.returncode != 0:
+                raise translate_command_failure(result)
         print_success("Helm release uninstalled.")
     except SFTPWardenError as exc:
         handle_error(exc)
 
 
-def _load_context_config(context: str | None, config: str | None):
-    entry = resolve_context(config_path=config, context_name=context, reconcile_config=True)
+def _load_context_config(
+    context: str | None,
+    config: str | None,
+    *,
+    read_only: bool = False,
+) -> tuple[ContextEntry, SFTPWardenConfig]:
+    """Resolve a context and load its required local configuration."""
+    entry = resolve_context(
+        config_path=config, context_name=context, reconcile_config=True, read_only=read_only
+    )
     if not entry.config:
         raise SFTPWardenError(
             f"Context {entry.name} has no local sftpwarden.yaml.",
@@ -209,7 +245,8 @@ def _load_context_config(context: str | None, config: str | None):
     return entry, load_config(entry.config)
 
 
-def _helm_upgrade_commands(plan, *, install: bool) -> list[list[str]]:
+def _helm_upgrade_commands(plan: DeploymentPlan, *, install: bool) -> list[list[str]]:
+    """Return Helm upgrade commands with the requested install behavior."""
     commands = [list(action.command) for action in plan.actions if action.command]
     if install:
         return commands
