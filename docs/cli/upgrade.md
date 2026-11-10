@@ -12,7 +12,7 @@ sftpwarden deploy --context prod --dry-run
 sftpwarden deploy --context prod
 ```
 
-The command first appeared in 1.3.1. To reach 1.3.1 from an older CLI, update it
+The command first appeared in 1.4.0. To reach 1.4.0 from an older CLI, update it
 with its original installer first; see [the upgrade runbook](../recovery.md#upgrade-from-130).
 
 ## Options
@@ -46,7 +46,7 @@ sftpwarden upgrade --yes --deploy-all --json
 deployments restore compatibility. A failed step leaves an incomplete result with
 recovery information; it is not reported as a completed update.
 
-In particular, the 1.3.1 file-delivery watcher requires the 1.3.1 runtime protocol
+In particular, the 1.4.0 file-delivery watcher requires the 1.4.0 runtime protocol
 and dedicated provider-directory mounts. A watched 1.3.0 deployment requires the
 coordinated deployment path. It cannot safely use the new watcher unchanged.
 

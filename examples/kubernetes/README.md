@@ -81,7 +81,7 @@ sftpwarden deploy
 ```
 
 Your StorageClass must support expansion. Shrinking existing PVCs is unsupported.
-The runtime supports one replica in 1.3.1.
+The runtime supports one replica in 1.4.0.
 
 ## PostgreSQL values example
 

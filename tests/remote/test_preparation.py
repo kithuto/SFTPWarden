@@ -131,7 +131,7 @@ def test_remote_preparation_migrates_then_releases_edits_only_on_completion(tmp_
         relative_config=path.name,
         compose_file="selected compose.yml",
         host_root="/srv/remote",
-        image="example.invalid/sftpwarden:1.3.1",
+        image="example.invalid/sftpwarden:1.4.0",
         owner="1000:1000",
     )
     assert not (tmp_path / "provider").exists()
@@ -171,7 +171,7 @@ def test_bootstrap_forwards_only_referenced_env_without_reading_database(tmp_pat
         relative_config="sftpwarden.yaml",
         compose_file="compose.yml",
         host_root="/srv/project",
-        image="candidate:1.3.1",
+        image="candidate:1.4.0",
         owner="1000:1000",
     )
     text = (tmp_path / PREPARATION_FILE).read_text()
@@ -192,7 +192,7 @@ def test_remote_preparation_rejects_artifact_conflicts_before_any_changes(tmp_pa
             relative_config=path.name,
             compose_file=filename,
             host_root="/srv/project",
-            image="candidate:1.3.1",
+            image="candidate:1.4.0",
             owner="1000:1000",
         )
     assert path.read_bytes() == before
@@ -207,7 +207,7 @@ def test_remote_preparation_keeps_leading_dash_filenames_as_option_values(tmp_pa
         relative_config=path.name,
         compose_file="-runtime.yml",
         host_root="/srv/project",
-        image="candidate:1.3.1",
+        image="candidate:1.4.0",
         owner="1000:1000",
     )
     helper = yaml.safe_load((tmp_path / PREPARATION_FILE).read_text())

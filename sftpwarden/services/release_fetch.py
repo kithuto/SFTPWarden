@@ -50,7 +50,7 @@ def main() -> int:
 
         version = select_release(fetch(PYPI_PROJECT), fetch(GITHUB_RELEASES), target)
         result: dict[str, Any] = {"version": version}
-        if Version(version) >= Version("1.3.1"):
+        if Version(version) >= Version("1.4.0"):
             result["compatibility"] = validate_compatibility(
                 fetch(
                     f"https://raw.githubusercontent.com/kithuto/SFTPWarden/v{version}/sftpwarden/release_compatibility.json"

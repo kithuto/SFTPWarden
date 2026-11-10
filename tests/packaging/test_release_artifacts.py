@@ -21,8 +21,8 @@ def test_candidate_verification_rejects_changed_inputs(artifacts, tmp_path, chan
     artifact = tmp_path / "package.whl"
     artifact.write_bytes(b"candidate bytes")
     commit = "a" * 40
-    artifacts.record(tmp_path, commit, "1.3.1")
-    assert artifacts.verify(tmp_path, commit)["version"] == "1.3.1"
+    artifacts.record(tmp_path, commit, "1.4.0")
+    assert artifacts.verify(tmp_path, commit)["version"] == "1.4.0"
     if change == "changed":
         artifact.write_bytes(b"different bytes")
     elif change == "missing":
@@ -37,6 +37,6 @@ def test_candidate_verification_rejects_changed_inputs(artifacts, tmp_path, chan
 
 def test_candidate_record_cannot_overwrite_existing_provenance(artifacts, tmp_path):
     (tmp_path / "package.whl").write_bytes(b"candidate bytes")
-    artifacts.record(tmp_path, "a" * 40, "1.3.1")
+    artifacts.record(tmp_path, "a" * 40, "1.4.0")
     with pytest.raises(FileExistsError):
-        artifacts.record(tmp_path, "b" * 40, "1.3.1")
+        artifacts.record(tmp_path, "b" * 40, "1.4.0")

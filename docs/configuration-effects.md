@@ -15,7 +15,7 @@ Use the activation column after changing a setting. For example, saving
 Changing `auth.recommended` only changes metadata and cannot disable passwords.
 
 A **compatibility field** is accepted in configuration but has no active effect
-in 1.3.1. Follow the alternative stated in its row.
+in 1.4.0. Follow the alternative stated in its row.
 
 ## Project settings
 

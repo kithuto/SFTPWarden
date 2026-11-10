@@ -58,12 +58,12 @@ def test_plans_only_the_owning_manager(package_environment, manager):
         )
     if manager == "uv":
         (prefix / "uv-receipt.toml").write_text("[tool]\n")
-    plan = installation.installation_plan("1.3.2")
+    plan = installation.installation_plan("1.4.1")
     assert plan.manager == manager and Path(plan.prefix) == prefix
     assert plan.python == str(prefix / "bin/python")
     assert plan.drivers == ["PyMySQL"]
     if manager != "pipx":
-        assert plan.command[-1] == "sftpwarden[mysql]==1.3.2"
+        assert plan.command[-1] == "sftpwarden[mysql]==1.4.1"
     assert not list(prefix.glob("**/management.json"))
 
 
@@ -103,7 +103,7 @@ def test_unsupported_owners_fail_before_mutation(package_environment, monkeypatc
         (prefix / "uv-receipt.toml").write_text("[tool]\n")
         monkeypatch.setattr(installation.shutil, "which", lambda _: None)
     with pytest.raises(SFTPWardenError):
-        installation.installation_plan("1.3.2")
+        installation.installation_plan("1.4.1")
 
 
 def test_uv_advances_only_package_pin_and_preserves_options_and_extras(tmp_path):
@@ -114,7 +114,7 @@ def test_uv_advances_only_package_pin_and_preserves_options_and_extras(tmp_path)
     receipt = {
         "tool": {
             "requirements": [
-                {"name": "sftpwarden", "specifier": "==1.3.1", "extras": ["postgres"]},
+                {"name": "sftpwarden", "specifier": "==1.4.0", "extras": ["postgres"]},
                 {"name": "an-extra", "specifier": ">=2"},
             ],
             "options": {"index-url": "https://private.invalid/simple"},
@@ -129,8 +129,8 @@ def test_uv_advances_only_package_pin_and_preserves_options_and_extras(tmp_path)
         command=["own-uv"],
         drivers=["PyMySQL"],
     )
-    command = installation.installer_command(plan, "1.3.2", tmp_path, {})
-    assert command[-1] == "sftpwarden[mysql,postgres]==1.3.2"
+    command = installation.installer_command(plan, "1.4.1", tmp_path, {})
+    assert command[-1] == "sftpwarden[mysql,postgres]==1.4.1"
     assert command[command.index("--with") + 1] == "an-extra>=2"
     assert command[command.index("--python") + 1] == "own-python"
     assert "https://private.invalid/simple" in (tmp_path / "uv-options.toml").read_text()
@@ -160,11 +160,11 @@ def test_pip_prepares_private_artifacts_before_touching_owner(tmp_path, monkeypa
     monkeypatch.setattr(installation.subprocess, "run", run)
     if failure:
         with pytest.raises(SFTPWardenError):
-            installation.prepare_installation(plan, "1.3.2", tmp_path, {})
+            installation.prepare_installation(plan, "1.4.1", tmp_path, {})
     else:
-        installation.prepare_installation(plan, "1.3.2", tmp_path, {})
+        installation.prepare_installation(plan, "1.4.1", tmp_path, {})
     assert calls[0][calls[0].index("--target") + 1] == str(tmp_path / "candidate")
-    assert calls[0][-1] == "sftpwarden==1.3.2"
+    assert calls[0][-1] == "sftpwarden==1.4.1"
     assert plan["command"] not in calls
 
 
@@ -173,7 +173,7 @@ def test_worker_verifies_fresh_process_before_recording_success(tmp_path, monkey
     monkeypatch.setenv("SFTPWARDEN_HOME", str(tmp_path / "home"))
     receipt = tmp_path / "management.json"
     plan = {
-        "cli": {"target": "1.3.2"},
+        "cli": {"target": "1.4.1"},
         "installation": {
             "manager": "pip",
             "python": "owner-python",
@@ -196,7 +196,7 @@ def test_worker_verifies_fresh_process_before_recording_success(tmp_path, monkey
         else:
             assert "file:" in kwargs["env"]["PIP_CONSTRAINT"]
         return SimpleNamespace(
-            returncode=int(operation == failure), stdout='{"cli":{"applied":"1.3.2"}}'
+            returncode=int(operation == failure), stdout='{"cli":{"applied":"1.4.1"}}'
         )
 
     monkeypatch.setattr(upgrade_worker.subprocess, "run", run)
@@ -253,8 +253,8 @@ def test_candidate_preparation_preserves_manager_options_in_an_isolated_location
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(installation.subprocess, "run", run)
-    installation.prepare_installation(plan, "1.3.2", tmp_path, {})
-    assert calls[0][0][-1] == "sftpwarden[mysql,postgres]==1.3.2"
+    installation.prepare_installation(plan, "1.4.1", tmp_path, {})
+    assert calls[0][0][-1] == "sftpwarden[mysql,postgres]==1.4.1"
     if owner == "pipx":
         assert "--no-cache-dir" in calls[0][0] and "--target" in calls[0][0]
     else:

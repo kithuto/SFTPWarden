@@ -1,7 +1,7 @@
 # SFTPWarden Examples
 
 Choose one example and follow its steps in a new project directory. These guides
-target SFTPWarden 1.3.1 and use the CLI to generate deployment files.
+target SFTPWarden 1.4.0 and use the CLI to generate deployment files.
 
 If this is your first SFTP server, start with
 [Getting Started](../docs/getting-started.md). It installs the CLI, creates Alice

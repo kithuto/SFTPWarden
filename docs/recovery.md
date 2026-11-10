@@ -194,9 +194,9 @@ not verify restored file contents or client access.
 (upgrade-from-130)=
 ## Upgrade from 1.3.0
 
-The `upgrade` command is new in 1.3.1. First update the CLI with the manager that
+The `upgrade` command is new in 1.4.0. First update the CLI with the manager that
 installed it, preserving the same environment and provider extras. For example,
-use `python -m pip install --upgrade 'sftpwarden[mysql]==1.3.1'` in the owning
+use `python -m pip install --upgrade 'sftpwarden[mysql]==1.4.0'` in the owning
 virtual environment, `pipx upgrade sftpwarden` for pipx, or
 `uv tool upgrade sftpwarden` for an unpinned uv tool. A pinned uv installation
 requires updating its explicit requirement with `uv tool install --force` and
@@ -204,7 +204,7 @@ retaining its original extras/options. Source checkouts and container CLIs use
 their source/image update procedure instead.
 
 Stop an old active watcher before replacing its native CLI installation. After
-installing 1.3.1, preview `sftpwarden upgrade --dry-run`. A file-delivery watcher
+installing 1.4.0, preview `sftpwarden upgrade --dry-run`. A file-delivery watcher
 cannot remain on the legacy runtime protocol: confirm the proposed all-context
 deployment during the maintenance window, or deploy the contexts explicitly
 before replacing the watcher. Read [Upgrade](cli/upgrade.md) for the complete

@@ -8,7 +8,7 @@ OpenSSH server in Docker and manages its users. You will use Docker Compose,
 which runs the container and connects it to persistent folders on your computer.
 User accounts will be stored in a YAML text file.
 
-This tutorial is for **SFTPWarden 1.3.1**. Everything runs on your own computer.
+This tutorial is for **SFTPWarden 1.4.0**. Everything runs on your own computer.
 The server will listen only on `127.0.0.1`, so this is a local learning environment.
 
 ## Before You Start

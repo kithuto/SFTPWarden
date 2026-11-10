@@ -48,7 +48,7 @@ def select_release(packages: dict[str, Any], releases: list[Any], target: str | 
         names = {asset["name"] for asset in release.get("assets", [])}
         # Legacy releases precede artifact inventories; newer releases must publish
         # the verified inventory used by the coordinated publication gate.
-        if version >= Version("1.3.1") and "artifact-manifest.json" not in names:
+        if version >= Version("1.4.0") and "artifact-manifest.json" not in names:
             continue
         completed.add(version)
     candidates = []

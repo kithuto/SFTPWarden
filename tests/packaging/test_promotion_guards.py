@@ -45,7 +45,7 @@ def test_registry_failure_is_not_absence(promotion_tools, monkeypatch, diagnosti
         module.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess([], 1, "", diagnostic)
     )
     with pytest.raises(RuntimeError, match="absence was not established"):
-        module.remote_manifest("registry.invalid/test:1.3.1")
+        module.remote_manifest("registry.invalid/test:1.4.0")
 
 
 @pytest.mark.parametrize("existing", ["same", "different", "missing", "bad-readback"])
@@ -101,7 +101,7 @@ def test_index_checks_child_platform_before_publishing(promotion_tools, monkeypa
 
     monkeypatch.setattr(module, "run", run)
     with pytest.raises(RuntimeError, match="native platform"):
-        module.publish("registry.invalid/test", "1.3.1")
+        module.publish("registry.invalid/test", "1.4.0")
     assert not any("create" in command for command in commands)
 
 
@@ -109,22 +109,22 @@ def test_pypi_partial_publication_only_stages_missing_exact_bytes(
     promotion_tools, monkeypatch, tmp_path
 ):
     module = promotion_tools.pypi_candidate
-    wheel = tmp_path / "sftpwarden-1.3.1-py3-none-any.whl"
-    source = tmp_path / "sftpwarden-1.3.1.tar.gz"
+    wheel = tmp_path / "sftpwarden-1.4.0-py3-none-any.whl"
+    source = tmp_path / "sftpwarden-1.4.0.tar.gz"
     wheel.write_bytes(b"wheel")
     source.write_bytes(b"sdist")
     published = {wheel.name: hashlib.sha256(wheel.read_bytes()).hexdigest()}
     monkeypatch.setattr(module, "published_files", lambda version: published)
     stage = tmp_path / "missing"
-    assert module.check(tmp_path, "1.3.1", output=stage) == 1
+    assert module.check(tmp_path, "1.4.0", output=stage) == 1
     assert [p.name for p in stage.iterdir()] == [source.name]
     with pytest.raises(module.PublicationPending):
-        module.check(tmp_path, "1.3.1")
+        module.check(tmp_path, "1.4.0")
     published[source.name] = hashlib.sha256(source.read_bytes()).hexdigest()
-    assert module.check(tmp_path, "1.3.1") == 0
+    assert module.check(tmp_path, "1.4.0") == 0
     published[wheel.name] = "changed"
     with pytest.raises(ValueError, match="differs"):
-        module.check(tmp_path, "1.3.1", output=tmp_path / "never-created")
+        module.check(tmp_path, "1.4.0", output=tmp_path / "never-created")
     assert not (tmp_path / "never-created").exists()
 
 
@@ -138,9 +138,9 @@ def test_chart_conflict_never_pushes(promotion_tools, monkeypatch, tmp_path):
         module.subprocess, "run", lambda *a, **k: pytest.fail("pushed conflicting chart")
     )
     with pytest.raises(RuntimeError, match="different bytes"):
-        module.promote(candidate, "oci://registry.invalid/charts", "1.3.1")
+        module.promote(candidate, "oci://registry.invalid/charts", "1.4.0")
     published.write_bytes(candidate.read_bytes())
-    module.promote(candidate, "oci://registry.invalid/charts", "1.3.1")
+    module.promote(candidate, "oci://registry.invalid/charts", "1.4.0")
 
 
 def test_github_tag_conflict_refuses_release_reuse(promotion_tools, monkeypatch, tmp_path):
@@ -149,7 +149,7 @@ def test_github_tag_conflict_refuses_release_reuse(promotion_tools, monkeypatch,
         module, "request", lambda path: {"object": {"type": "commit", "sha": "b" * 40}}
     )
     with pytest.raises(RuntimeError, match="different commit"):
-        module.check(tmp_path, "owner/repository", "1.3.1", "a" * 40)
+        module.check(tmp_path, "owner/repository", "1.4.0", "a" * 40)
 
 
 @pytest.mark.parametrize("digest", [None, "sha256:different"])
@@ -166,4 +166,4 @@ def test_github_asset_missing_or_conflicting_digest_stops_promotion(
 
     monkeypatch.setattr(module, "request", request)
     with pytest.raises(RuntimeError, match="assets differ"):
-        module.check(tmp_path, "owner/repository", "1.3.1", "a" * 40)
+        module.check(tmp_path, "owner/repository", "1.4.0", "a" * 40)

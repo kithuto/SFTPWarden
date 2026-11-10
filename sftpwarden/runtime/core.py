@@ -713,7 +713,7 @@ def runtime_update_reason(previous: RuntimeUserState, resolved: ResolvedUser) ->
 def applied_user_fingerprint(resolved: ResolvedUser) -> str:
     """Fingerprint effective policy with the concrete retained identity."""
     user = resolved.spec.model_copy(update={"uid": resolved.uid, "gid": resolved.gid})
-    # Per-user checkpoints are new in 1.3.1. Keep the existing whole-provider
+    # Per-user checkpoints are new in 1.4.0. Keep the existing whole-provider
     # fingerprint unchanged, without paying for a YAML serializer per account.
     canonical = json.dumps(runtime_user_data(user), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

@@ -136,7 +136,7 @@ Kubernetes deployments keep the same boundaries:
 - Host keys persist in a retained PVC by default. An existing operator-managed
   Secret can provide them through `kubernetes.host_keys_secret`. Preserve that
   source during upgrades; never commit private host keys to Git.
-- SFTPWarden v1.3.1 runs one OpenSSH runtime pod per context. `replicas > 1` is
+- SFTPWarden v1.4.0 runs one OpenSSH runtime pod per context. `replicas > 1` is
   reserved and rejected until shared storage, shared host keys, provider-safe
   refresh and UID/GID consistency are implemented.
 - Use PostgreSQL, MariaDB/MySQL or MongoDB providers for production Kubernetes

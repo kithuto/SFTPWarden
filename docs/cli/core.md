@@ -448,7 +448,7 @@ without it, the empty filesystem does not authorize database replacement.
 
 #### Activation and verification
 
-Use a format-2 runtime archive and the 1.3.1 runtime for recovery of a deployed
+Use a format-2 runtime archive and the 1.4.0 runtime for recovery of a deployed
 service. The restored state includes a private metadata retry record. At explicit
 startup, the Linux runtime verifies file contents and retained user IDs, restores
 ownership and modes without following links and only then permits OpenSSH to

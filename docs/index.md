@@ -13,7 +13,7 @@ timing and how changes reach each deployment type.
 
 Start with one server on your computer. The same CLI can manage a Docker server
 over SSH or deploy to Kubernetes with manifests or Helm. This documentation
-covers SFTPWarden **1.3.1**.
+covers SFTPWarden **1.4.0**.
 
 ## Start Here
 

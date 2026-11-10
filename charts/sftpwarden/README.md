@@ -6,7 +6,7 @@ persistent storage.
 
 For a first deployment, use the
 [CLI Helm workflow](../../docs/operations.md#helm). This guide covers direct
-chart use from a source checkout for version 1.3.1.
+chart use from a source checkout for version 1.4.0.
 
 ## Prerequisites
 
@@ -79,7 +79,7 @@ single-Pod labs.
 | `probes.readiness` | Whether the runtime can serve the expected policy. |
 | `probes.liveness` | Whether required runtime processes remain available. |
 | `hostKeys.secretName` | Optional existing host-key Secret; otherwise keys use a retained PVC. |
-| `runtime.replicas` | Must remain `1` in 1.3.1. |
+| `runtime.replicas` | Must remain `1` in 1.4.0. |
 
 Set these in your values file. For example, `persistence.data.size: 50Gi`
 requests more storage. The StorageClass must support expansion; Kubernetes does

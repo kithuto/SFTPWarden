@@ -6,7 +6,7 @@ whether replacement is needed. An inactive installation stays inactive; custom
 Docker images remain unchanged. A current verified installation is a no-op.
 Process startup is verified before replacement is recorded as complete.
 
-The 1.3.1 file-delivery watcher requires the 1.3.1 runtime protocol and provider
+The 1.4.0 file-delivery watcher requires the 1.4.0 runtime protocol and provider
 directory layout. Upgrade inspects contexts before changing anything and requires
 explicit all-context deployment consent when compatibility cannot be preserved.
 See [Upgrade](upgrade.md) for this confirmation and interrupted-operation recovery.

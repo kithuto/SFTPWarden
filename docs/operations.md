@@ -419,7 +419,7 @@ set `provider.dsnSecretName` and reference the same environment variable from
 `sftpwardenConfig`; prefer creating the Secret outside the values file for
 production deployments.
 
-SFTPWarden v1.3.1 supports one runtime pod per context. `kubernetes.replicas` and
+SFTPWarden v1.4.0 supports one runtime pod per context. `kubernetes.replicas` and
 Helm `runtime.replicas` are reserved for future multi-node support and currently
 accept only `1`.
 

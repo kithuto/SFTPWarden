@@ -45,14 +45,36 @@ def metadata_for(versions):
     return packages, public
 
 
+@pytest.mark.parametrize(
+    "version,has_inventory,accepted",
+    [
+        ("1.3.0", False, True),
+        ("1.4.0", False, False),
+        ("1.4.0", True, True),
+        ("1.5.0", False, False),
+    ],
+)
+def test_artifact_inventory_required_from_first_coordinated_release(
+    version, has_inventory, accepted
+):
+    packages, public = metadata_for([version])
+    if not has_inventory:
+        public[0]["assets"] = []
+    if accepted:
+        assert releases.select_release(packages, public, version) == version
+    else:
+        with pytest.raises(SFTPWardenError, match="No completed stable release"):
+            releases.select_release(packages, public, version)
+
+
 def test_release_ordering_and_partial_publication():
-    packages, public = metadata_for(["1.3.1", "1.9.0", "1.10.0", "2.0.0rc1", "2.0.0"])
+    packages, public = metadata_for(["1.4.0", "1.9.0", "1.10.0", "2.0.0rc1", "2.0.0"])
     public[-1]["assets"] = []
     assert releases.select_release(packages, public, None) == "1.10.0"
     packages["releases"]["1.10.0"][0]["yanked"] = True
     assert releases.select_release(packages, public, None) == "1.9.0"
     packages["releases"]["1.9.0"][0]["requires_python"] = ">=99"
-    assert releases.select_release(packages, public, None) == "1.3.1"
+    assert releases.select_release(packages, public, None) == "1.4.0"
     with pytest.raises(SFTPWardenError):
         releases.select_release(packages, public, "1.10.0")
     public[0]["draft"] = True
@@ -64,7 +86,7 @@ def test_release_ordering_and_partial_publication():
 
 
 @pytest.mark.parametrize(
-    "value", ["https://invalid", "1.3.1rc1", "1.3.1.dev1", "1.3.1+local", "1!1.3.1"]
+    "value", ["https://invalid", "1.4.0rc1", "1.4.0.dev1", "1.4.0+local", "1!1.4.0"]
 )
 def test_invalid_upgrade_targets_are_not_requirements(value):
     with pytest.raises(SFTPWardenError):
@@ -76,17 +98,17 @@ def test_discovery_cache_and_fresh_check(monkeypatch):
 
     def fetch(command, **kwargs):
         calls.append((command, kwargs))
-        return SimpleNamespace(returncode=0, stdout='{"version":"1.3.1"}')
+        return SimpleNamespace(returncode=0, stdout='{"version":"1.4.0"}')
 
     monkeypatch.setattr(releases.subprocess, "run", fetch)
-    assert releases.discover_release()["version"] == "1.3.1"
-    assert releases.discover_release()["version"] == "1.3.1"
+    assert releases.discover_release()["version"] == "1.4.0"
+    assert releases.discover_release()["version"] == "1.4.0"
     assert len(calls) == 1
     assert calls[0][1]["timeout"] <= 1.7
     assert releases.discover_release(fresh=True)["status"] == "available"
     assert len(calls) == 2
     assert releases.discover_release(target="1.3.0")["status"] == "unavailable"
-    assert releases.discover_release()["version"] == "1.3.1"
+    assert releases.discover_release()["version"] == "1.4.0"
 
 
 @pytest.mark.parametrize("failure", ["timeout", "malformed", "exit", "unavailable"])
@@ -113,7 +135,7 @@ def test_corrupt_expired_and_wrong_python_cache_are_rechecked(monkeypatch):
     monkeypatch.setattr(
         releases.subprocess,
         "run",
-        lambda *a, **kw: SimpleNamespace(returncode=0, stdout='{"version":"1.3.1"}'),
+        lambda *a, **kw: SimpleNamespace(returncode=0, stdout='{"version":"1.4.0"}'),
     )
     path = releases.cache_path()
     path.parent.mkdir(parents=True)
@@ -123,7 +145,7 @@ def test_corrupt_expired_and_wrong_python_cache_are_rechecked(monkeypatch):
         json.dumps({"checked_at": 0, "status": "available", "python": []}),
     ):
         path.write_text(content)
-        assert releases.discover_release()["version"] == "1.3.1"
+        assert releases.discover_release()["version"] == "1.4.0"
 
 
 def test_fetch_rejects_redirects_and_unapproved_urls():
@@ -142,7 +164,7 @@ def test_fetch_worker_hides_errors(monkeypatch, capsys):
     )
     assert release_fetch.main() == 1
     assert "secret" not in capsys.readouterr().out
-    packages, public = metadata_for(["1.3.1"])
+    packages, public = metadata_for(["1.4.0"])
     monkeypatch.setattr(
         release_fetch,
         "fetch",
@@ -153,15 +175,15 @@ def test_fetch_worker_hides_errors(monkeypatch, capsys):
             if url == releases.GITHUB_RELEASES
             else {
                 "format": 1,
-                "release": "1.3.1",
+                "release": "1.4.0",
                 "minimum_upgrade_runtime": "1.3.0",
-                "watcher_minimum_runtime": "1.3.1",
+                "watcher_minimum_runtime": "1.4.0",
                 "watcher_requires_provider_directory": True,
             }
         ),
     )
     assert release_fetch.main() == 0
-    assert json.loads(capsys.readouterr().out)["version"] == "1.3.1"
+    assert json.loads(capsys.readouterr().out)["version"] == "1.4.0"
 
 
 @pytest.mark.parametrize(
@@ -169,7 +191,7 @@ def test_fetch_worker_hides_errors(monkeypatch, capsys):
     [
         ("ghcr.io/kithuto/sftpwarden:1.3.0", True),
         ("ghcr.io/kithuto/sftpwarden@sha256:abc", True),
-        ("ghcr.io/kithuto/sftpwarden-custom:1.3.1", False),
+        ("ghcr.io/kithuto/sftpwarden-custom:1.4.0", False),
         ("registry.invalid:443/kithuto/sftpwarden:1.3.0", False),
     ],
 )
@@ -202,7 +224,7 @@ def test_upgrade_check_does_not_inspect_or_change_installations(monkeypatch):
 )
 def test_upgrade_confirmation_and_deferred_servers(monkeypatch, args, status):
     plan = {
-        "cli": {"previous": "1.3.0", "target": "1.3.1"},
+        "cli": {"previous": "1.3.0", "target": "1.4.0"},
         "watcher": {"status": "update_required"},
     }
     monkeypatch.setattr(commands, "upgrade_plan", lambda *_args, **_kwargs: plan)
@@ -247,14 +269,14 @@ def test_management_resume_updates_watcher_without_deploy(monkeypatch):
 
 def test_installer_rejects_source_checkout_before_mutation():
     with pytest.raises(SFTPWardenError, match="source"):
-        installation.installation_plan("1.3.1")
+        installation.installation_plan("1.4.0")
 
 
 def test_installer_worker_never_exposes_package_index_errors(tmp_path, monkeypatch):
     path = tmp_path / "receipt.json"
     path.write_text(
         json.dumps(
-            {"plan": {"cli": {"target": "1.3.1"}, "installation": {"command": ["fake-pip"]}}}
+            {"plan": {"cli": {"target": "1.4.0"}, "installation": {"command": ["fake-pip"]}}}
         )
     )
     monkeypatch.setattr(
@@ -378,7 +400,7 @@ def test_watcher_failed_activation_does_not_complete(tmp_path, monkeypatch):
 )
 def test_incompatibility_requires_explicit_all_context_consent(monkeypatch, args, answer, allowed):
     plan = {
-        "cli": {"previous": "1.3.0", "target": "1.3.1"},
+        "cli": {"previous": "1.3.0", "target": "1.4.0"},
         "watcher": {"status": "update_required"},
         "deployments": {
             "requires_deploy_all": True,

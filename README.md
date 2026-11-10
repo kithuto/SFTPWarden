@@ -27,7 +27,7 @@ environment for development. Start with Docker Compose and a YAML file of users.
 Remote servers, database-backed users and Kubernetes are available when your
 environment needs them.
 
-This documentation covers **SFTPWarden 1.3.1**. If you are upgrading an existing
+This documentation covers **SFTPWarden 1.4.0**. If you are upgrading an existing
 installation, read the [recovery and upgrade guide](docs/recovery.md) first.
 
 ## Table of Contents
@@ -211,7 +211,7 @@ Take a verified backup before maintenance.
 If the new watcher is incompatible with a deployment, upgrade warns before making
 changes and asks permission to deploy **all contexts**, which may interrupt
 transfers. See the [update guide](docs/cli/upgrade.md), including the one-time
-installer update needed by CLIs older than 1.3.1.
+installer update needed by CLIs older than 1.4.0.
 
 ## Backup and Restore
 
@@ -255,11 +255,11 @@ The documentation uses Sphinx. Build instructions are in
 These are planned capabilities. See the [changelog](CHANGELOG.md) for release
 history and the longer future roadmap.
 
-### v1.4 - Audit and Transfer Visibility
+### v1.5 - Audit and Transfer Visibility
 
 Audit events, transfer visibility and richer runtime status.
 
-### v1.5 - Security and Client Trust
+### v1.6 - Security and Client Trust
 
 Security check profiles, secret-file support and assisted host-key management.
 

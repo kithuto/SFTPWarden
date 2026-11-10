@@ -190,7 +190,7 @@ how to install it and the shortest safe path to a running deployment.
 
 Use clear English and avoid serial commas before `and` or `or`. Start with the
 simplest working procedure, explain how to verify it and link to advanced detail.
-The current documentation targets 1.3.1; basic installation follows the latest
+The current documentation targets 1.4.0; basic installation follows the latest
 release without a version pin or required virtual environment.
 
 Use `docs/` for detail:

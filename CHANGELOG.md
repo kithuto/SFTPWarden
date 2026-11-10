@@ -22,21 +22,21 @@ and deployment environments, not only mocked tests or rendered configuration.
 
 | Version | Delivery | Planned outcome |
 | --- | --- | --- |
-| v1.4 | Audit and Transfer Visibility | Private segmented audit journal, observed SFTP activity, queries/export and operational status. |
-| v1.5 | Security and Client Trust | Security profiles/checks, secret files, fingerprints, assisted rotation and safe client onboarding. |
-| v1.6 | Diagnostics and Adoption | Local/remote doctor, provider diagnostics, redacted support bundles and adoption runbooks. |
-| v1.7 | Backup and Recovery Operations | Encryption, verified backup destinations, retention, external scheduling and recovery drills. |
-| v1.8 | Access Policies | Explicit, tested allowed/denied SFTP operations for supported access modes. |
-| v1.9 | User Lifecycle and Governance | Account expiry, ownership, tags, reviews and evidence-based inactivity handling. |
-| v1.10 | Metrics and Observability | Default internal metrics, official Grafana dashboard and optional external monitoring integrations. |
-| v1.11 | Storage Usage and Capacity Alerts | Space/file measurement, freshness, thresholds and capacity alerts. |
-| v1.12 | Reliable Notifications | Persistent webhook delivery, bounded retries, inspection and recovery. |
-| v1.13 | Data Retention and Archiving | Reviewed document retention, execution-time checks and restorable archives. |
-| v1.14 | Modular Storage, File Metadata and S3 | Primary document storage with per-user assignments, enforced ownership/permissions and confirmed S3 persistence. |
-| v1.15 | Enforced Storage Quotas | Mandatory byte/file limits with concurrent reservations and recovery on supported managed write paths. |
-| v1.16 | Google Cloud Storage | GCS document backend using the common metadata, permission, quota and recovery contracts. |
-| v1.17 | Azure Blob Storage | Azure Blob document backend through the same contracts. |
-| v1.18 | Enterprise Filesystem Integrations | Qualified shared filesystem and enterprise file-service combinations with explicit limitations. |
+| v1.5 | Audit and Transfer Visibility | Private segmented audit journal, observed SFTP activity, queries/export and operational status. |
+| v1.6 | Security and Client Trust | Security profiles/checks, secret files, fingerprints, assisted rotation and safe client onboarding. |
+| v1.7 | Diagnostics and Adoption | Local/remote doctor, provider diagnostics, redacted support bundles and adoption runbooks. |
+| v1.8 | Backup and Recovery Operations | Encryption, verified backup destinations, retention, external scheduling and recovery drills. |
+| v1.9 | Access Policies | Explicit, tested allowed/denied SFTP operations for supported access modes. |
+| v1.10 | User Lifecycle and Governance | Account expiry, ownership, tags, reviews and evidence-based inactivity handling. |
+| v1.11 | Metrics and Observability | Default internal metrics, official Grafana dashboard and optional external monitoring integrations. |
+| v1.12 | Storage Usage and Capacity Alerts | Space/file measurement, freshness, thresholds and capacity alerts. |
+| v1.13 | Reliable Notifications | Persistent webhook delivery, bounded retries, inspection and recovery. |
+| v1.14 | Data Retention and Archiving | Reviewed document retention, execution-time checks and restorable archives. |
+| v1.15 | Modular Storage, File Metadata and S3 | Primary document storage with per-user assignments, enforced ownership/permissions and confirmed S3 persistence. |
+| v1.16 | Enforced Storage Quotas | Mandatory byte/file limits with concurrent reservations and recovery on supported managed write paths. |
+| v1.17 | Google Cloud Storage | GCS document backend using the common metadata, permission, quota and recovery contracts. |
+| v1.18 | Azure Blob Storage | Azure Blob document backend through the same contracts. |
+| v1.19 | Enterprise Filesystem Integrations | Qualified shared filesystem and enterprise file-service combinations with explicit limitations. |
 | v2.0 | Management API and OpenAPI | Optional API with authentication, operation/context authorization, stable contracts and durable jobs. |
 | v2.1 | Identity and Delegated Administration | Administrative identities, roles, sessions, scoped delegation and optional OIDC. |
 | v2.2 | Infrastructure as Code | Terraform, Ansible and CI with import, idempotency and explicit resource authority. |
@@ -57,7 +57,7 @@ not establish complete client isolation. An end-user file portal, LDAP/AD,
 complex per-path policies and auditing changes outside the runtime are outside
 these scheduled deliveries.
 
-## [1.3.1] - 2026-11-10
+## [1.4.0] - 2026-11-11
 
 ### Added
 

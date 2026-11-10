@@ -157,10 +157,10 @@ def test_kubernetes_candidate_cleanup_is_registered_before_creation(monkeypatch,
 
     monkeypatch.setattr(kube, "write_resource", create)
     monkeypatch.setattr(kube, "get_resource", lambda *a: {**state, "status": {"phase": status}})
-    monkeypatch.setattr(kube, "request", lambda c, args: calls.append(args) or b"1.3.1\n")
+    monkeypatch.setattr(kube, "request", lambda c, args: calls.append(args) or b"1.4.0\n")
     config = SFTPWardenConfig.model_validate({"project": {"name": "test"}})
     if status == "Succeeded":
-        assert update_artifacts.kubernetes_candidate(config, "candidate") == "1.3.1"
+        assert update_artifacts.kubernetes_candidate(config, "candidate") == "1.4.0"
     else:
         with pytest.raises(SFTPWardenError):
             update_artifacts.kubernetes_candidate(config, "candidate")
@@ -171,7 +171,7 @@ def test_kubernetes_candidate_cleanup_is_registered_before_creation(monkeypatch,
 
 def test_preparation_failure_keeps_watcher_running_and_preserves_plan(tmp_path, monkeypatch):
     path = tmp_path / "operation.json"
-    plan = {"cli": {"target": "1.3.1"}, "installation": {"manager": "pip"}}
+    plan = {"cli": {"target": "1.4.0"}, "installation": {"manager": "pip"}}
     path.write_text(json.dumps({"plan": plan}))
     monkeypatch.setattr(watcher, "pause_watcher", lambda: pytest.fail("stopped before preparation"))
     monkeypatch.setattr(
@@ -231,9 +231,9 @@ def test_manager_identity_and_provider_requirement(monkeypatch, tmp_path):
     with pytest.raises(SFTPWardenError, match="does not own"):
         installation.manager_directory(["manager", "dir"], tmp_path / "other")
     requirement = installation.release_requirement(
-        "1.3.1", ["PyMySQL", "psycopg-binary", "pymongo"]
+        "1.4.0", ["PyMySQL", "psycopg-binary", "pymongo"]
     )
-    assert requirement == "sftpwarden[mysql,postgres,mongodb]==1.3.1"
+    assert requirement == "sftpwarden[mysql,postgres,mongodb]==1.4.0"
 
 
 def test_deployment_settings_changed_after_confirmation_are_rejected(

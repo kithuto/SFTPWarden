@@ -529,7 +529,7 @@ generated Helm values.
 probes. They are rendered directly into `kubernetes.yml` and as `probes.startup`,
 `probes.readiness` and `probes.liveness` in generated Helm values.
 
-`kubernetes.replicas` is reserved for future multi-node support. SFTPWarden v1.3.1
+`kubernetes.replicas` is reserved for future multi-node support. SFTPWarden v1.4.0
 accepts only `1`; higher values fail with an explanation because multi-pod
 runtime support requires shared storage, shared host keys, provider-safe refresh
 and UID/GID consistency.

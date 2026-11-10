@@ -141,15 +141,15 @@ def test_artifact_preflight_checks_candidate_before_migration(
         calls.append(command)
         return SimpleNamespace(
             returncode=int(mode == "failure"),
-            stdout="version: 1.3.1\nappVersion: " + ("1.3.0" if mode == "bad_chart" else "1.3.1"),
+            stdout="version: 1.4.0\nappVersion: " + ("1.3.0" if mode == "bad_chart" else "1.4.0"),
         )
 
     monkeypatch.setattr(update_artifacts, "run", run)
-    monkeypatch.setattr(update_artifacts, "kubernetes_candidate", lambda *a: "1.3.1")
+    monkeypatch.setattr(update_artifacts, "kubernetes_candidate", lambda *a: "1.4.0")
     monkeypatch.setattr(
         update_artifacts,
         "probe_version",
-        lambda *a: "invalid" if mode == "invalid" else "1.3.0" if mode == "downgrade" else "1.3.1",
+        lambda *a: "invalid" if mode == "invalid" else "1.3.0" if mode == "downgrade" else "1.4.0",
     )
     if mode in {"failure", "bad_chart", "invalid", "downgrade"}:
         with pytest.raises(SFTPWardenError):
@@ -230,7 +230,7 @@ def test_cli_handoff_cannot_claim_success_without_worker_verification(
 
     def run(command, **kwargs):
         commands.append(command)
-        result = {"cli": {"applied": "1.3.2"}, "watcher": {}, "deployments": {}}
+        result = {"cli": {"applied": "1.4.1"}, "watcher": {}, "deployments": {}}
         upgrade.receipt_path().write_text(
             json.dumps(
                 {
@@ -247,7 +247,7 @@ def test_cli_handoff_cannot_claim_success_without_worker_verification(
         "Popen",
         lambda command, **kw: commands.append(command) or SimpleNamespace(pid=222),
     )
-    plan = {"cli": {"previous": get_version(), "target": "1.3.2", "changed": True}}
+    plan = {"cli": {"previous": get_version(), "target": "1.4.1", "changed": True}}
     if failed and platform == "posix":
         with pytest.raises(SFTPWardenError, match="incomplete"):
             upgrade.apply_management_update(plan, json_output=True)
@@ -258,7 +258,7 @@ def test_cli_handoff_cannot_claim_success_without_worker_verification(
             assert "--parent" in commands[0][-1]
             assert json.loads(upgrade.receipt_path().read_text())["worker_pid"] == 222
         else:
-            assert result["cli"]["applied"] == "1.3.2"
+            assert result["cli"]["applied"] == "1.4.1"
 
 
 @pytest.mark.parametrize("status", [0, 258, None])
@@ -339,11 +339,11 @@ def test_human_results_distinguish_component_status_and_deferred_servers(
         watcher_result["activated"] = False
     command.print_result(
         {
-            "cli": {"applied": "1.3.1"},
+            "cli": {"applied": "1.4.0"},
             "watcher": watcher_result,
             "deployments": {
                 "status": "deferred" if deferred else "complete",
-                "results": [{"context": "prod", "applied": "1.3.1", "status": "complete"}],
+                "results": [{"context": "prod", "applied": "1.4.0", "status": "complete"}],
             },
         }
     )
