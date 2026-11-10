@@ -31,6 +31,28 @@ ARTIFACTS = frozenset(
     }
 )
 FULL_JOBS = frozenset({"ordinary", "packages", "images", "contracts", "external", "cluster"})
+PUBLICATION_JOBS = frozenset(
+    {
+        "version",
+        "gate",
+        "publication-preflight",
+        "publish-python",
+        "publish-images",
+        "publish-chart",
+        "publish-indexes",
+        "published-smoke",
+        "complete-release",
+    }
+)
+
+
+def publication_requested(event: dict, event_name: str, ref: str, changed: bool) -> bool:
+    """Publish version bumps on main or explicitly requested recovery on main."""
+    value = event.get("inputs", {}).get("publish", False)
+    manual = event_name == "workflow_dispatch" and (value is True or value == "true")
+    if manual and ref != "refs/heads/main":
+        raise ValueError("Publication recovery is only allowed on main.")
+    return ref == "refs/heads/main" and ((event_name == "push" and changed) or manual)
 
 
 def git(*args: str) -> str:
@@ -75,16 +97,16 @@ def request(repository: str, path: str) -> dict:
 
 
 def reusable_run(repository: str, tree: str, current_run: int) -> dict | None:
-    """Trust only this repository's dev push workflow, never fork/PR artifacts."""
+    """Trust complete dev push/manual validations, never fork/PR artifacts."""
     for page in range(1, 6):
         runs = request(
             repository,
-            f"actions/workflows/release.yml/runs?branch=dev&event=push&per_page=100&page={page}",
+            f"actions/workflows/release.yml/runs?branch=dev&per_page=100&page={page}",
         )["workflow_runs"]
         for run in runs:
             if (
                 run["id"] == current_run
-                or run.get("event") != "push"
+                or run.get("event") not in {"push", "workflow_dispatch"}
                 or run.get("head_branch") != "dev"
                 or run.get("path") != ".github/workflows/release.yml"
                 or run.get("head_repository", {}).get("full_name", "").lower() != repository.lower()
@@ -151,10 +173,13 @@ def plan(event: dict, event_name: str, ref: str, commit: str, run_id: int, repos
         )
         if result.returncode == 0:
             previous = tomllib.loads(result.stdout)["project"]["version"]
+    changed = previous is not None and previous != version
+    publish = publication_requested(event, event_name, ref, changed)
     result = {
         "mode": "full",
         "version": version,
-        "changed": str(previous is not None and previous != version).lower(),
+        "changed": str(changed).lower(),
+        "publish": str(publish).lower(),
         "tree": git("rev-parse", f"{commit}^{{tree}}"),
         "candidate_commit": commit,
         "source_run_id": str(run_id),
@@ -168,7 +193,7 @@ def plan(event: dict, event_name: str, ref: str, commit: str, run_id: int, repos
         and pr.get("head", {}).get("ref") == "dev"
         and pr.get("head", {}).get("repo", {}).get("full_name", "").lower() == repository.lower()
     )
-    if promotion_pr or (event_name == "push" and ref == "refs/heads/main"):
+    if promotion_pr or (event_name == "push" and ref == "refs/heads/main") or publish:
         source = select_candidate(
             repository, result["tree"], run_id, discovery_seconds=90 if promotion_pr else 0
         )
@@ -200,6 +225,17 @@ def require_results(mode: str, results: dict) -> None:
         raise RuntimeError("Release is blocked by: " + ", ".join(failures))
 
 
+def require_publication(results: dict) -> None:
+    """Reject a requested release if any publication job failed or was skipped."""
+    failures = [
+        name
+        for name in sorted(PUBLICATION_JOBS)
+        if results.get(name, {}).get("result") != "success"
+    ]
+    if failures:
+        raise RuntimeError("Publication is incomplete: " + ", ".join(failures))
+
+
 def verify_receipt(path: Path, commit: str, tree: str, run_id: str) -> None:
     """Match the downloaded full-validation receipt to the selected source run."""
     if path.is_symlink() or json.loads(path.read_text()) != {
@@ -214,8 +250,11 @@ def verify_receipt(path: Path, commit: str, tree: str, run_id: str) -> None:
 def main() -> None:
     """Write workflow outputs or enforce the required route's aggregate check."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=["plan", "gate", "verify"])
+    parser.add_argument("action", choices=["plan", "gate", "verify", "publication-gate"])
     args = parser.parse_args()
+    if args.action == "publication-gate":
+        require_publication(json.loads(os.environ["RESULTS"]))
+        return
     if args.action == "verify":
         verify_receipt(
             Path("candidate-proof/candidate-validation.json"),

@@ -257,9 +257,7 @@ def test_publication_depends_on_complete_candidate_graph_and_never_rebuilds() ->
     assert "ci_candidate.py gate" in str(jobs["gate"]["steps"])
     preflight = jobs["publication-preflight"]
     assert set(preflight["needs"]) == {"version", "gate"}
-    assert "github.ref == 'refs/heads/main'" in preflight["if"]
-    assert "github.event_name == 'push'" in preflight["if"]
-    assert "changed == 'true'" in preflight["if"]
+    assert "needs.version.outputs.publish == 'true'" in preflight["if"]
     for name in ("publish-python", "publish-chart", "publish-images"):
         job = jobs[name]
         assert "publication-preflight" in job["needs"]
@@ -278,6 +276,47 @@ def test_publication_depends_on_complete_candidate_graph_and_never_rebuilds() ->
     assert "--latest" not in str(jobs["publish-indexes"])
     assert "--latest" in str(jobs["complete-release"])
     assert jobs["publish-python"]["permissions"] == {"contents": "read", "id-token": "write"}
+
+
+def test_publication_chain_handles_skipped_ancestors_without_ignoring_failed_gates() -> None:
+    """Main reuse skips build jobs; implicit success() must not skip publication."""
+    jobs = workflow_data("release.yml")["jobs"]
+    for name in (
+        "publication-preflight",
+        "publish-python",
+        "publish-images",
+        "publish-chart",
+        "publish-indexes",
+        "published-smoke",
+        "complete-release",
+    ):
+        condition = jobs[name].get("if", "")
+        assert "!cancelled()" in condition, name
+        assert "needs.version.outputs.publish == 'true'" in condition, name
+        for dependency in jobs[name]["needs"]:
+            assert f"needs.{dependency}.result == 'success'" in condition, (name, dependency)
+
+
+def test_publication_has_an_explicit_recovery_request_and_completion_gate() -> None:
+    workflow = workflow_data("release.yml")
+    option = workflow["on"]["workflow_dispatch"]["inputs"]["publish"]
+    assert option["type"] == "boolean" and option["default"] is False
+    jobs = workflow["jobs"]
+    assert jobs["version"]["outputs"]["publish"] == "${{ steps.version.outputs.publish }}"
+    gate = jobs["publication-gate"]
+    assert set(gate["needs"]) == {
+        "version",
+        "gate",
+        "publication-preflight",
+        "publish-python",
+        "publish-images",
+        "publish-chart",
+        "publish-indexes",
+        "published-smoke",
+        "complete-release",
+    }
+    assert gate["if"] == "always() && needs.version.outputs.publish == 'true'"
+    assert "ci_candidate.py publication-gate" in str(gate["steps"])
 
 
 def test_external_groups_reuse_verified_images_and_do_not_serialize_clusters() -> None:

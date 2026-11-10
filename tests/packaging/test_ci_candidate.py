@@ -108,12 +108,18 @@ def install_api(monkeypatch, routing, runs, *, expired=None, missing=None):
                     if name != missing
                 ]
             }
+        if "event=push&" in path:
+            return {"workflow_runs": [run for run in runs if run["event"] == "push"]}
         return {"workflow_runs": runs}
 
     monkeypatch.setattr(routing, "request", request)
 
 
-def test_only_complete_identical_dev_candidate_can_be_reused(routing, candidate, monkeypatch):
+@pytest.mark.parametrize("event", ["push", "workflow_dispatch"])
+def test_only_complete_identical_dev_candidate_can_be_reused(
+    routing, candidate, monkeypatch, event
+):
+    candidate["event"] = event
     install_api(monkeypatch, routing, [candidate])
     assert routing.reusable_run("test/repo", "b" * 40, 99) == candidate
     assert routing.reusable_run("test/repo", "c" * 40, 99) is None
@@ -323,6 +329,7 @@ def test_event_routing_and_original_candidate_identity(
     assert result["candidate_commit"] == ("a" * 40 if expected == "reuse" else "d" * 40)
     assert result["source_run_id"] == ("40" if expected == "reuse" else "99")
     assert result["changed"] == str(event_name == "push" and paths is not None).lower()
+    assert result["publish"] == str(event_name == "push" and ref == "refs/heads/main").lower()
 
 
 def test_api_errors_cannot_be_treated_as_valid_evidence(routing, monkeypatch):
@@ -385,6 +392,7 @@ def test_workflow_entry_points_with_real_git_and_environment(tmp_path):
         "mode": "docs",
         "version": "1.4.0",
         "changed": "false",
+        "publish": "false",
         "tree": tree,
         "candidate_commit": commit,
         "source_run_id": "99",
@@ -421,6 +429,109 @@ def test_workflow_entry_points_with_real_git_and_environment(tmp_path):
     assert run("verify").returncode == 0
     env["SOURCE_RUN_ID"] = "100"
     assert run("verify").returncode != 0
+    assert run("publication-gate").returncode != 0
+    env["RESULTS"] = json.dumps(
+        {
+            name: {"result": "success"}
+            for name in (
+                "version",
+                "gate",
+                "publication-preflight",
+                "publish-python",
+                "publish-images",
+                "publish-chart",
+                "publish-indexes",
+                "published-smoke",
+                "complete-release",
+            )
+        }
+    )
+    assert run("publication-gate").returncode == 0
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "version",
+        "gate",
+        "publication-preflight",
+        "publish-python",
+        "publish-images",
+        "publish-chart",
+        "publish-indexes",
+        "published-smoke",
+        "complete-release",
+    ],
+)
+@pytest.mark.parametrize("outcome", ["failure", "skipped", "cancelled", "missing"])
+def test_publication_cannot_succeed_with_incomplete_jobs(routing, name, outcome):
+    results = {job: {"result": "success"} for job in routing.PUBLICATION_JOBS}
+    routing.require_publication(results)
+    if outcome == "missing":
+        results.pop(name)
+    else:
+        results[name]["result"] = outcome
+    with pytest.raises(RuntimeError, match="Publication is incomplete"):
+        routing.require_publication(results)
+
+
+@pytest.mark.parametrize(
+    "event_name,ref,changed,value,expected",
+    [
+        ("push", "refs/heads/main", True, False, True),
+        ("push", "refs/heads/main", False, False, False),
+        ("push", "refs/heads/dev", True, False, False),
+        ("pull_request", "refs/pull/21/merge", True, True, False),
+        ("workflow_dispatch", "refs/heads/main", False, False, False),
+        ("workflow_dispatch", "refs/heads/main", False, "false", False),
+        ("workflow_dispatch", "refs/heads/main", False, True, True),
+        ("workflow_dispatch", "refs/heads/main", False, "true", True),
+    ],
+)
+def test_only_main_version_bumps_or_explicit_main_recovery_publish(
+    routing, event_name, ref, changed, value, expected
+):
+    assert (
+        routing.publication_requested({"inputs": {"publish": value}}, event_name, ref, changed)
+        is expected
+    )
+
+
+@pytest.mark.parametrize("ref", ["refs/heads/dev", "refs/tags/v1.4.0"])
+def test_manual_publication_rejects_other_refs(routing, ref):
+    with pytest.raises(ValueError, match="only allowed on main"):
+        routing.publication_requested(
+            {"inputs": {"publish": True}}, "workflow_dispatch", ref, False
+        )
+
+
+@pytest.mark.parametrize("available", [True, False])
+def test_manual_recovery_reuses_only_a_verified_identical_candidate(
+    routing, candidate, monkeypatch, tmp_path, available
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pyproject.toml").write_text('[project]\nversion = "1.4.0"\n')
+    monkeypatch.setattr(routing, "changes", lambda *args: [])
+    monkeypatch.setattr(routing, "git", lambda *args: "b" * 40)
+    lookups = []
+
+    def select(repository, tree, current_run, **kwargs):
+        lookups.append((repository, tree, current_run))
+        return candidate if available else None
+
+    monkeypatch.setattr(routing, "select_candidate", select)
+    result = routing.plan(
+        {"inputs": {"publish": "true"}},
+        "workflow_dispatch",
+        "refs/heads/main",
+        "d" * 40,
+        99,
+        "test/repo",
+    )
+    assert lookups == [("test/repo", "b" * 40, 99)]
+    assert result["publish"] == "true" and result["changed"] == "false"
+    assert result["mode"] == ("reuse" if available else "full")
+    assert result["candidate_commit"] == ("a" * 40 if available else "d" * 40)
 
 
 def test_candidate_search_continues_to_the_next_page(routing, candidate, monkeypatch):

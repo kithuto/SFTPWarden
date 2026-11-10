@@ -24,7 +24,8 @@ exercises local user, provider and recovery workflows through that installation.
 
 CI runs these gates when a full candidate needs validation. Documentation-only
 changes run Sphinx instead. Promotion from `dev` to `main` can reuse a completed,
-successful dev push with an identical Git tree, including tests and workflows.
+successful dev push or manual validation with an identical Git tree, including
+tests and workflows.
 It verifies the full-validation receipt, source run, original artifact hashes
 and version, then scans the same images again with current vulnerability data.
 Missing or expired evidence requires full validation; a matching failed or

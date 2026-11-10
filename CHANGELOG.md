@@ -76,6 +76,9 @@ these scheduled deliveries.
 
 ### Fixed
 
+- Allow approved release candidates to reach publication when unused build/test
+  routes are skipped. Require every publication stage to finish successfully and
+  add explicit recovery on main for a version whose publication never started.
 - Preserve all container security findings in JSON and SARIF reports while
   enforcing the existing HIGH/CRITICAL threshold separately. Report conversion
   errors and missing scan results fail the security job.

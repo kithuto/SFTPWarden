@@ -198,10 +198,11 @@ versioned artifact.
 Documentation-only diffs run Sphinx without the Python or infrastructure test
 matrix. Code, dependency, test and workflow changes require full validation.
 For a `dev` → `main` PR or the subsequent main push, CI can reuse a successful
-dev push candidate whose complete Git tree matches. It checks the validation
+dev push or manual validation candidate whose complete Git tree matches. It checks
+the validation
 receipt and artifact hashes, then refreshes the security scans without rebuilding
 the images. Missing or expired evidence requires full validation; a matching
-failed candidate blocks promotion. Manual release-workflow runs force full
+failed candidate blocks promotion. Manual validation runs force full
 validation. Require `Release aggregate` in branch protection, since individual
 jobs intentionally skip when another validation route applies.
 
@@ -214,6 +215,14 @@ If production publication fails partway through, rerun the failed jobs from that
 same workflow run so they reuse its verified artifacts. Starting a new run may
 rebuild candidates if trusted dev artifacts are unavailable, and may correctly
 reject bytes that differ from files already published under that version.
+
+If the version reached `main` without publication, use the Release candidate
+workflow's manual `Publish or recover the current version (main only)` option
+on `main`. It reuses an identical validated dev candidate or performs full
+validation when no such evidence remains. Security and artifact conflict checks
+still apply. Ordinary manual runs do not publish. A requested release must pass
+the separate `Publication aggregate`; skipped publication is not a successful
+release. See the root contribution guide for recovery details.
 
 Review dependency and container scans, SBOM results and required platform gates.
 Missing infrastructure or skipped checks are unverified scope, not passing

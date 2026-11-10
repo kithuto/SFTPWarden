@@ -1,9 +1,13 @@
 <p align="center">
-  <img
-    src="https://raw.githubusercontent.com/kithuto/SFTPWarden/main/docs/_static/logo-sftpwarden.png"
-    alt="SFTPWarden - Container-native SFTP management"
-    width="760"
-  >
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/_static/logo-sftpwarden-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/_static/logo-sftpwarden-light.svg">
+    <img
+      src="https://raw.githubusercontent.com/kithuto/SFTPWarden/main/docs/_static/logo-sftpwarden.png"
+      alt="SFTPWarden - Container-native SFTP management"
+      width="760"
+    >
+  </picture>
 </p>
 
 <p align="center">

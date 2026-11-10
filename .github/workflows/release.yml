@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [dev, main]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish or recover the current version (main only)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -27,6 +32,7 @@ jobs:
       actions: read
     outputs:
       changed: ${{ steps.version.outputs.changed }}
+      publish: ${{ steps.version.outputs.publish }}
       version: ${{ steps.version.outputs.version }}
       mode: ${{ steps.version.outputs.mode }}
       tree: ${{ steps.version.outputs.tree }}
@@ -300,7 +306,7 @@ jobs:
     env:
       CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
     needs: [version, gate]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.version.outputs.changed == 'true'
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.gate.result == 'success' && needs.version.outputs.publish == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -320,6 +326,7 @@ jobs:
     env:
       CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
     needs: [version, publication-preflight]
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.publication-preflight.result == 'success' && needs.version.outputs.publish == 'true' }}
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -354,6 +361,7 @@ jobs:
     env:
       CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
     needs: [version, publication-preflight]
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.publication-preflight.result == 'success' && needs.version.outputs.publish == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -390,6 +398,7 @@ jobs:
     env:
       CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
     needs: [version, publication-preflight]
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.publication-preflight.result == 'success' && needs.version.outputs.publish == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -412,7 +421,7 @@ jobs:
 
   publish-indexes:
     needs: [version, publish-images]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.version.outputs.changed == 'true'
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.publish-images.result == 'success' && needs.version.outputs.publish == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -437,6 +446,7 @@ jobs:
     env:
       CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
     needs: [version, publish-python, publish-chart, publish-indexes]
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.publish-python.result == 'success' && needs.publish-chart.result == 'success' && needs.publish-indexes.result == 'success' && needs.version.outputs.publish == 'true' }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -475,6 +485,7 @@ jobs:
     env:
       CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
     needs: [version, published-smoke]
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.published-smoke.result == 'success' && needs.version.outputs.publish == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -517,3 +528,15 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
           GITHUB_TOKEN: ${{ github.token }}
         run: python tools/github_candidate.py dist --repository "$GITHUB_REPOSITORY" --version "$VERSION" --commit "$GITHUB_SHA" --complete
+
+  publication-gate:
+    name: Publication aggregate
+    needs: [version, gate, publication-preflight, publish-python, publish-images, publish-chart, publish-indexes, published-smoke, complete-release]
+    if: always() && needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Reject incomplete or skipped publication
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: python tools/ci_candidate.py publication-gate

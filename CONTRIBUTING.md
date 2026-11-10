@@ -124,7 +124,8 @@ selects the work from the complete Git diff:
   hashes and validate those artifacts. The matrix covers Linux, macOS and Windows
   with Python 3.11–3.14, plus the applicable external release gates.
 - A same-repository `dev` → `main` PR, and the subsequent push to `main`, can reuse
-  a successful `dev` push candidate with an identical Git tree. This compares
+  a successful `dev` push or manual validation candidate with an identical Git
+  tree. This compares
   all tracked files, including documentation, tests and workflows. The source
   run must retain its full-validation receipt and all candidate artifacts.
   Checksums and provenance are verified again; Python dependencies and both
@@ -133,7 +134,10 @@ selects the work from the complete Git diff:
 If an identical dev candidate is still running, promotion waits up to 35 minutes
 instead of repeating its tests. A failed/cancelled candidate blocks promotion;
 an absent candidate or missing/expired artifacts require full validation.
-Manual release-workflow runs always force full validation. PR results and fork
+Manual validation runs force full validation. A successful manual run on `dev`
+can establish a reusable candidate after documentation changes supersede an
+in-progress code validation. Its complete receipt and artifacts are still required.
+PR results and fork
 artifacts are never used as trusted promotion evidence. The first run after
 changing this workflow must establish a new fully validated candidate.
 
@@ -164,6 +168,20 @@ If publication fails partway through, rerun only the failed jobs in the same
 workflow run to reuse its verified candidate artifacts. A new run may have to
 rebuild if the trusted dev artifacts are unavailable, and may correctly refuse
 to replace already published bytes.
+
+If a release was never published and its version is already on `main`, open
+Actions → Release candidate → Run workflow, select `main`, and enable
+`Publish or recover the current version (main only)`. This is an explicit
+publication request; the default manual run only validates. Recovery reuses an
+identical fully validated dev candidate when available, or requires full
+validation otherwise, and always refreshes security scans. It does not bypass
+artifact conflict checks or overwrite existing versioned files. For a partially
+published release, prefer rerunning its failed jobs in the original run.
+
+`Release aggregate` approves the candidate. A requested publication also requires
+`Publication aggregate`, which rejects failed, cancelled, missing or skipped
+publication stages. Intentionally skipped build/test routes must not prevent
+approved artifacts from reaching PyPI, GHCR and the GitHub release.
 
 Build docs:
 
